@@ -1,0 +1,21 @@
+<?xml version='1.0' encoding='utf-8'?>
+<node>
+  <interface name="org.openwave.Audio1">
+    <method name="GetState">
+      <arg type="a{sv}" direction="out" />
+    </method>
+    <method name="ListDevices">
+      <arg type="aa{sv}" direction="out" />
+    </method>
+    <method name="SetVolume">
+      <arg type="u" direction="in" />
+    </method>
+    <method name="SetMuted">
+      <arg type="b" direction="in" />
+    </method>
+    <method name="SetDefaultSink">
+      <arg type="u" direction="in" />
+    </method>
+    <signal name="StateChanged" />
+  </interface>
+</node>

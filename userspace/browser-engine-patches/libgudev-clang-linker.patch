@@ -1,0 +1,8 @@
+--- a/gudev/meson.build
++++ b/gudev/meson.build
+@@ -35,4 +35,4 @@
+ libgudev_link_args = [
+-  '-export-dynamic',
++  '-Wl,--export-dynamic',
+   '-Wl,--version-script,@0@/libgudev-1.0.sym'.format(top_srcdir),
+ ]

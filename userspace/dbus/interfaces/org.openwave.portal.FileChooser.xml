@@ -1,0 +1,50 @@
+<?xml version='1.0' encoding='utf-8'?>
+<node>
+  <interface name="org.openwave.portal.FileChooser">
+    <method name="OpenFile">
+      <arg type="a{sv}" direction="in" />
+      <arg type="o" direction="out" />
+    </method>
+    <method name="OpenFiles">
+      <arg type="a{sv}" direction="in" />
+      <arg type="o" direction="out" />
+    </method>
+    <method name="SaveFile">
+      <arg type="a{sv}" direction="in" />
+      <arg type="o" direction="out" />
+    </method>
+    <method name="SelectDirectory">
+      <arg type="a{sv}" direction="in" />
+      <arg type="o" direction="out" />
+    </method>
+    <method name="CancelRequest">
+      <arg type="o" direction="in" />
+    </method>
+    <method name="GetStatus">
+      <arg type="o" direction="in" />
+      <arg type="u" direction="out" />
+      <arg type="s" direction="out" />
+    </method>
+    <method name="TakeResult">
+      <arg type="o" direction="in" />
+      <arg type="u" direction="out" />
+      <arg type="as" direction="out" />
+      <arg type="ah" direction="out" />
+    </method>
+    <method name="RegisterBackend" />
+    <method name="NextRequest">
+      <arg type="o" direction="out" />
+      <arg type="s" direction="out" />
+      <arg type="a{sv}" direction="out" />
+    </method>
+    <method name="CompleteRequest">
+      <arg type="o" direction="in" />
+      <arg type="u" direction="in" />
+      <arg type="as" direction="in" />
+    </method>
+    <signal name="Response">
+      <arg type="o" />
+      <arg type="u" />
+    </signal>
+  </interface>
+</node>

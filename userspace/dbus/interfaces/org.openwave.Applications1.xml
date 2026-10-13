@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<node>
+  <interface name="org.openwave.Applications1">
+    <method name="ListApplications"><arg name="applications" type="aa{sv}" direction="out"/></method>
+    <method name="GetApplicationInfo"><arg name="appId" type="s" direction="in"/><arg name="info" type="a{sv}" direction="out"/></method>
+    <method name="Launch"><arg name="appId" type="s" direction="in"/><arg name="arguments" type="as" direction="in"/><arg name="pid" type="u" direction="out"/></method>
+    <method name="Activate"><arg name="appId" type="s" direction="in"/></method>
+    <method name="Terminate"><arg name="appId" type="s" direction="in"/></method>
+    <method name="GetRunningApplications"><arg name="applications" type="aa{sv}" direction="out"/></method>
+    <method name="RegisterShell"/>
+    <method name="SetSessionReady"><arg name="ready" type="b" direction="in"/><arg name="ready" type="b" direction="out"/></method>
+    <method name="CommitLaunch"><arg name="ticket" type="s" direction="in"/><arg name="pid" type="u" direction="out"/></method>
+    <method name="CancelLaunch"><arg name="ticket" type="s" direction="in"/></method>
+    <signal name="ApplicationStarted"><arg name="appId" type="s"/><arg name="pid" type="u"/></signal>
+    <signal name="ApplicationStopped"><arg name="appId" type="s"/><arg name="status" type="i"/></signal>
+    <signal name="ApplicationCrashed"><arg name="appId" type="s"/><arg name="status" type="i"/></signal>
+    <signal name="ApplicationStateChanged"><arg name="appId" type="s"/><arg name="state" type="s"/><arg name="pid" type="u"/><arg name="error" type="s"/></signal>
+    <signal name="ActivationRequested"><arg name="appId" type="s"/><arg name="pid" type="u"/></signal>
+    <signal name="LaunchRequested"><arg name="ticket" type="s"/><arg name="appId" type="s"/><arg name="arguments" type="as"/></signal>
+    <signal name="OperationFailed"><arg name="appId" type="s"/><arg name="error" type="s"/></signal>
+    <signal name="RegistryChanged"/>
+  </interface>
+</node>

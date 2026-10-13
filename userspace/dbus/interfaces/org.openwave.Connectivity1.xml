@@ -1,0 +1,80 @@
+<?xml version='1.0' encoding='utf-8'?>
+<node>
+  <interface name="org.openwave.Connectivity1">
+    <method name="GetState">
+      <arg type="a{sv}" direction="out" />
+    </method>
+    <method name="ListWifiNetworks">
+      <arg type="aa{sv}" direction="out" />
+    </method>
+    <method name="GetSavedWifiInfo">
+      <arg type="s" direction="in" />
+      <arg type="a{sv}" direction="out" />
+    </method>
+    <method name="SetSavedWifiIpConfig">
+      <arg type="s" direction="in" />
+      <arg type="b" direction="in" />
+      <arg type="s" direction="in" />
+      <arg type="u" direction="in" />
+      <arg type="s" direction="in" />
+      <arg type="b" direction="in" />
+      <arg type="as" direction="in" />
+      <arg type="b" direction="out" />
+    </method>
+    <method name="SetDeviceName">
+      <arg type="s" direction="in" />
+      <arg type="s" direction="out" />
+    </method>
+    <method name="SetWifiEnabled">
+      <arg type="b" direction="in" />
+    </method>
+    <method name="RequestWifiScan" />
+    <method name="ConnectWifi">
+      <arg type="s" direction="in" />
+      <arg type="s" direction="in" />
+    </method>
+    <method name="AddWifiNetwork">
+      <arg type="s" direction="in" />
+      <arg type="b" direction="in" />
+      <arg type="s" direction="in" />
+    </method>
+    <method name="DisconnectWifi" />
+    <method name="ForgetWifi">
+      <arg type="s" direction="in" />
+    </method>
+    <method name="ListBluetoothDevices">
+      <arg type="aa{sv}" direction="out" />
+    </method>
+    <method name="SetBluetoothEnabled">
+      <arg type="b" direction="in" />
+    </method>
+    <method name="StartBluetoothDiscovery" />
+    <method name="StopBluetoothDiscovery" />
+    <method name="PairDevice">
+      <arg type="o" direction="in" />
+    </method>
+    <method name="CancelPairing">
+      <arg type="o" direction="in" />
+    </method>
+    <method name="TrustDevice">
+      <arg type="o" direction="in" />
+      <arg type="b" direction="in" />
+    </method>
+    <method name="ConnectDevice">
+      <arg type="o" direction="in" />
+    </method>
+    <method name="DisconnectDevice">
+      <arg type="o" direction="in" />
+    </method>
+    <method name="RemoveDevice">
+      <arg type="o" direction="in" />
+    </method>
+    <method name="SetDeviceAlias">
+      <arg type="o" direction="in" />
+      <arg type="s" direction="in" />
+    </method>
+    <signal name="StateChanged" />
+    <signal name="WifiNetworksChanged" />
+    <signal name="BluetoothDevicesChanged" />
+  </interface>
+</node>

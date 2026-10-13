@@ -1,0 +1,32 @@
+diff --git a/spa/plugins/alsa/acp/compat.h b/spa/plugins/alsa/acp/compat.h
+index 7660e1c..f7f9f7a 100644
+--- a/spa/plugins/alsa/acp/compat.h
++++ b/spa/plugins/alsa/acp/compat.h
+@@ -426,11 +426,11 @@ static PA_PRINTF_FUNC(1,0) inline char *pa_vsprintf_malloc(const char *fmt, va_l
+ 
+ static inline char *pa_path_get_filename(const char *p)
+ {
+-    char *fn;
++    const char *fn;
+     if (!p)
+         return NULL;
+     if ((fn = strrchr(p, PA_PATH_SEP_CHAR)))
+-        return fn+1;
++        return (char *) (fn+1);
+     return (char*) p;
+ }
+ 
+diff --git a/spa/plugins/support/logger.c b/spa/plugins/support/logger.c
+index c6e6ca4..684406c 100644
+--- a/spa/plugins/support/logger.c
++++ b/spa/plugins/support/logger.c
+@@ -73,7 +73,8 @@ impl_log_logtv(void *object,
+ 	char timestamp[18] = {0};
+ 	char topicstr[32] = {0};
+ 	char filename[64] = {0};
+-	char location[1000 + RESERVED_LENGTH], *p, *s;
++	char location[1000 + RESERVED_LENGTH], *p;
++	const char *s;
+ 	static const char * const levels[] = { "-", "E", "W", "I", "D", "T", "*T*" };
+ 	const char *prefix = "", *suffix = "";
+ 	int size, len;

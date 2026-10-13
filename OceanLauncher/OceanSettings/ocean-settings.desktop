@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Settings
+Comment=Configure your OpenWave device
+Exec=/usr/bin/ocean-settings
+Icon=ocean-settings
+Terminal=false
+Categories=Settings;
+X-OpenWave-AppId=settings

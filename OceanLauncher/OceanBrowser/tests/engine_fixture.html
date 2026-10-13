@@ -1,0 +1,103 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenWave engine verification</title>
+<style>
+body { font: 18px sans-serif; background: #eef; color: #123 }
+img { width: 100px; height: 60px; object-fit: contain }
+figure { display: inline-block; width: 125px; margin: 8px; vertical-align: top }
+video { width: 300px }
+pre { white-space: pre-wrap }
+</style>
+<h1>Image and media verification</h1>
+<figure><img src="test.png"><figcaption>PNG</figcaption></figure>
+<figure><img src="test.jpg"><figcaption>JPEG</figcaption></figure>
+<figure><img src="test.webp"><figcaption>WebP</figcaption></figure>
+<figure><img src="test.gif"><figcaption>GIF</figcaption></figure>
+<figure><img src="test.avif"><figcaption>AVIF</figcaption></figure>
+<figure><img src="animated.avif"><figcaption>Animated AVIF</figcaption></figure>
+<figure><img src="mobile.jpg"><figcaption>AVIF behind JPEG URL</figcaption></figure>
+<figure><img src="mobile.png"><figcaption>AVIF behind PNG URL</figcaption></figure>
+<video id="msevideo" controls muted autoplay playsinline></video>
+<video id="video" controls muted autoplay playsinline></video>
+<pre id="result"></pre>
+<script>
+window.engineProbeResult = { images: {}, video: 'waiting', rtc: 'waiting', mse: 'waiting' };
+const r = window.engineProbeResult;
+const test = new URLSearchParams(location.search).get('test') || 'all';
+const enabled = name => test === 'all' || test === name;
+for (const img of document.images) {
+    const done = () => r.images[img.getAttribute('src')] = img.naturalWidth > 0;
+    img.onload = done;
+    img.onerror = done;
+    if (img.complete) done();
+}
+// Canvas intentionally draws an animated image's first frame in WebKit.
+// Check animation using rendered-window captures instead of drawImage hashes.
+video.onplaying = () => { r.video = 'playing' };
+video.onerror = () => { r.video = 'error ' + video.error.code };
+if (enabled('video')) video.src = 'test.mp4';
+else { video.remove(); r.video = 'disabled'; }
+r.mseSupported = typeof MediaSource === 'function'
+    && MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01E"');
+r.webAudio = typeof AudioContext;
+r.webCodecs = typeof VideoDecoder;
+r.mediaStream = typeof MediaStream;
+r.mediaRecorder = typeof MediaRecorder;
+if (typeof VideoDecoder === 'function') {
+    VideoDecoder.isConfigSupported({ codec: 'avc1.42E01E', codedWidth: 320, codedHeight: 180 })
+        .then(config => r.webCodecsH264 = config.supported)
+        .catch(error => r.webCodecsH264 = String(error));
+}
+(async () => {
+    if (!enabled('mse')) { msevideo.remove(); r.mse = 'disabled'; return; }
+    try {
+        const ms = new MediaSource();
+        msevideo.src = URL.createObjectURL(ms);
+        ms.addEventListener('sourceopen', async () => {
+            try {
+                const data = await (await fetch('mse.webm')).arrayBuffer();
+                const buffer = ms.addSourceBuffer('video/webm; codecs="vp9, opus"');
+                buffer.addEventListener('updateend', () => ms.endOfStream(), { once: true });
+                buffer.appendBuffer(data);
+            } catch (e) { r.mse = String(e) }
+        }, { once: true });
+        msevideo.onplaying = () => { r.mse = 'playing' };
+        msevideo.onerror = () => { r.mse = 'error ' + msevideo.error.code };
+    } catch (e) { r.mse = String(e) }
+})();
+(async () => {
+    if (!enabled('rtc')) { r.rtc = 'disabled'; return; }
+    let a, b;
+    try {
+        a = new RTCPeerConnection();
+        b = new RTCPeerConnection();
+        const candidatesA = [], candidatesB = [];
+        a.onicecandidate = e => {
+            if (!e.candidate) return;
+            if (b.remoteDescription) b.addIceCandidate(e.candidate).catch(e => r.rtc = String(e));
+            else candidatesA.push(e.candidate);
+        };
+        b.onicecandidate = e => {
+            if (!e.candidate) return;
+            if (a.remoteDescription) a.addIceCandidate(e.candidate).catch(e => r.rtc = String(e));
+            else candidatesB.push(e.candidate);
+        };
+        b.ondatachannel = e => e.channel.onmessage = ev => {
+            r.rtc = ev.data === 'OpenWave' ? 'connected' : 'bad data';
+            a.close(); b.close();
+        };
+        const channel = a.createDataChannel('test');
+        channel.onopen = () => channel.send('OpenWave');
+        await a.setLocalDescription(await a.createOffer());
+        await b.setRemoteDescription(a.localDescription);
+        await Promise.all(candidatesA.map(c => b.addIceCandidate(c)));
+        await b.setLocalDescription(await b.createAnswer());
+        await a.setRemoteDescription(b.localDescription);
+        await Promise.all(candidatesB.map(c => a.addIceCandidate(c)));
+    } catch (e) {
+        r.rtc = String(e);
+        a?.close(); b?.close();
+    }
+})();
+setInterval(() => result.textContent = JSON.stringify(r, null, 2), 500);
+</script>

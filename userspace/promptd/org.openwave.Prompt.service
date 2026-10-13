@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=org.openwave.Prompt
+Exec=/usr/libexec/promptd

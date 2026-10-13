@@ -1,0 +1,575 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT="${OPENWAVE_ROOT:-$(pwd)}"
+KERNEL=""
+IMAGE=""
+QEMU="${QEMU_BIN:-qemu-system-x86_64}"
+MEMORY="${OPENWAVE_QEMU_MEMORY:-2048}"
+CPUS="${OPENWAVE_QEMU_CPUS:-4}"
+RESOLUTION="${OPENWAVE_QEMU_RESOLUTION:-544x960}"
+DISPLAY_BACKEND="${OPENWAVE_QEMU_DISPLAY:-}"
+DISPLAY_MODE=""
+EXTRA_APPEND="${OPENWAVE_QEMU_APPEND:-}"
+USB_WIFI="${OPENWAVE_QEMU_USB_WIFI:-auto}"
+USB_BLUETOOTH="${OPENWAVE_QEMU_USB_BLUETOOTH:-auto}"
+AUDIO_BACKEND="${OPENWAVE_QEMU_AUDIO_BACKEND:-auto}"
+VNC_HOST="${OPENWAVE_QEMU_VNC_HOST:-auto}"
+VNC_PORT="${OPENWAVE_QEMU_VNC_PORT:-5900}"
+MODE="${1:-run}"
+
+usage() {
+    cat <<'EOF'
+OpenWave QEMU Runner
+
+Usage:
+  ./run-openwave install
+  ./run-openwave check
+  ./run-openwave run
+  ./run-openwave [options] run
+
+Options:
+  --root PATH       OpenWave repository root
+  --kernel PATH     Kernel bzImage path
+  --image PATH      OpenWave root filesystem image
+  --memory MB       Guest RAM in MiB (default: 2048)
+  --cpus N          Guest vCPU count (default: 4)
+  --resolution WxH  Guest framebuffer pixels (default: 544x960)
+                    Dimensions 320..4096; width must be a multiple of 8
+  --qemu PATH       qemu-system-x86_64 binary
+  --window          Open a local QEMU window; disable VNC
+  --qemu-window     Alias for --window
+  --vnc             Serve the display through VNC (default)
+  --display SPEC    Override the selected mode's QEMU display backend
+  --append TEXT     Extra Linux kernel command-line arguments
+  --usb-wifi VID:PID  Pass a host USB Wi-Fi adapter to OpenWave
+                      Default: detect the Samsung 04e8:2018 adapter; use none to disable
+  --usb-bluetooth VID:PID  Pass a host USB Bluetooth adapter to OpenWave
+                           Default: detect the CSR 0a12:0001 dongle; use none to disable
+  --audio-backend NAME  Host sound backend: auto, pipewire, pa, alsa, none
+  --vnc-host IPv4    VNC bind address (default: host's primary IPv4 address)
+                    Use auto to detect it, or none to disable VNC
+  --vnc-port PORT    VNC TCP port (default: 5900; range: 5900..65535)
+  -h, --help        Show this help
+
+Environment:
+  OPENWAVE_ROOT
+  OPENWAVE_QEMU_MEMORY
+  OPENWAVE_QEMU_CPUS
+  OPENWAVE_QEMU_RESOLUTION
+  OPENWAVE_QEMU_DISPLAY
+  OPENWAVE_QEMU_APPEND
+  OPENWAVE_QEMU_USB_WIFI
+  OPENWAVE_QEMU_USB_BLUETOOTH
+  OPENWAVE_QEMU_AUDIO_BACKEND
+  OPENWAVE_QEMU_VNC_HOST
+  OPENWAVE_QEMU_VNC_PORT
+  QEMU_BIN
+EOF
+}
+
+if [[ "$MODE" == "-h" || "$MODE" == "--help" ]]; then
+    usage
+    exit 0
+fi
+
+if [[ "$MODE" != "install" && "$MODE" != "check" && "$MODE" != "run" ]]; then
+    MODE="run"
+fi
+
+args=("$@")
+if [[ ${#args[@]} -gt 0 && ( "${args[0]}" == "install" || "${args[0]}" == "check" || "${args[0]}" == "run" ) ]]; then
+    args=("${args[@]:1}")
+elif [[ ${#args[@]} -gt 0 ]]; then
+    last_index=$((${#args[@]} - 1))
+    case "${args[$last_index]}" in
+        install|check|run)
+            MODE="${args[$last_index]}"
+            unset 'args[$last_index]'
+            ;;
+    esac
+fi
+
+i=0
+while [[ $i -lt ${#args[@]} ]]; do
+    case "${args[$i]}" in
+        --root|--kernel|--image|--memory|--cpus|--resolution|--qemu|--display|--append|--usb-wifi|--usb-bluetooth|--audio-backend|--vnc-host|--vnc-port)
+            if ((i + 1 >= ${#args[@]})); then
+                echo "Missing value for ${args[$i]}" >&2
+                exit 2
+            fi
+            ;;
+    esac
+    case "${args[$i]}" in
+        --window|--qemu-window|--vnc)
+            selected_mode=window
+            if [[ "${args[$i]}" == --vnc ]]; then selected_mode=vnc; fi
+            if [[ -n "$DISPLAY_MODE" && "$DISPLAY_MODE" != "$selected_mode" ]]; then
+                echo "Choose either --window or --vnc." >&2
+                exit 2
+            fi
+            DISPLAY_MODE="$selected_mode"
+            ;;
+        --root)
+            ((i+=1))
+            ROOT="${args[$i]}"
+            ;;
+        --kernel)
+            ((i+=1))
+            KERNEL="${args[$i]}"
+            ;;
+        --image)
+            ((i+=1))
+            IMAGE="${args[$i]}"
+            ;;
+        --memory)
+            ((i+=1))
+            MEMORY="${args[$i]}"
+            ;;
+        --cpus)
+            ((i+=1))
+            CPUS="${args[$i]}"
+            ;;
+        --resolution)
+            ((i+=1))
+            RESOLUTION="${args[$i]:-}"
+            ;;
+        --qemu)
+            ((i+=1))
+            QEMU="${args[$i]}"
+            ;;
+        --display)
+            ((i+=1))
+            DISPLAY_BACKEND="${args[$i]}"
+            ;;
+        --append)
+            ((i+=1))
+            EXTRA_APPEND="${args[$i]}"
+            ;;
+        --usb-wifi)
+            ((i+=1))
+            USB_WIFI="${args[$i]:-}"
+            ;;
+        --usb-bluetooth)
+            ((i+=1))
+            USB_BLUETOOTH="${args[$i]:-}"
+            ;;
+        --audio-backend)
+            ((i+=1))
+            AUDIO_BACKEND="${args[$i]:-}"
+            ;;
+        --vnc-host)
+            ((i+=1))
+            VNC_HOST="${args[$i]:-}"
+            ;;
+        --vnc-port)
+            ((i+=1))
+            VNC_PORT="${args[$i]:-}"
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: ${args[$i]}" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+    ((i+=1))
+done
+
+if [[ "$DISPLAY_MODE" == window ]]; then
+    VNC_HOST=none
+elif [[ "$DISPLAY_MODE" == vnc && "$VNC_HOST" == none ]]; then
+    VNC_HOST=auto
+fi
+
+if [[ ! "$RESOLUTION" =~ ^([1-9][0-9]{2,3})x([1-9][0-9]{2,3})$ ]]; then
+    echo "Invalid resolution: $RESOLUTION (expected WIDTHxHEIGHT)" >&2
+    exit 2
+fi
+WIDTH="${BASH_REMATCH[1]}"
+HEIGHT="${BASH_REMATCH[2]}"
+if ((WIDTH < 320 || WIDTH > 4096 || HEIGHT < 320 || HEIGHT > 4096)); then
+    echo "Resolution dimensions must be between 320 and 4096 pixels." >&2
+    exit 2
+fi
+if ((WIDTH % 8 != 0)); then
+    echo "Resolution width must be a multiple of 8 for the DRM mode timing." >&2
+    exit 2
+fi
+case "$AUDIO_BACKEND" in
+    auto|pipewire|pa|alsa|none) ;;
+    *) echo "Invalid audio backend: $AUDIO_BACKEND" >&2; exit 2 ;;
+esac
+if [[ ! "$VNC_PORT" =~ ^[1-9][0-9]{3,4}$ ]] || ((VNC_PORT < 5900 || VNC_PORT > 65535)); then
+    echo "Invalid VNC port: $VNC_PORT (expected 5900..65535)" >&2
+    exit 2
+fi
+if [[ "$VNC_HOST" != auto && "$VNC_HOST" != none ]]; then
+    if [[ ! "$VNC_HOST" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        echo "Invalid VNC host: $VNC_HOST (expected IPv4, auto, or none)" >&2
+        exit 2
+    fi
+    IFS=. read -r -a vnc_octets <<<"$VNC_HOST"
+    for octet in "${vnc_octets[@]}"; do
+        if ((10#$octet > 255)); then
+            echo "Invalid VNC IPv4 address: $VNC_HOST" >&2
+            exit 2
+        fi
+    done
+fi
+
+ROOT="$(readlink -f "$ROOT")"
+KERNEL="${KERNEL:-$ROOT/out/linux/arch/x86/boot/bzImage}"
+IMAGE="${IMAGE:-$ROOT/OpenWave.img}"
+
+check_usb_device() {
+    local kind="$1" identifier="$2"
+    [[ -n "$identifier" ]] || return 0
+    if [[ ! "$identifier" =~ ^([[:xdigit:]]{4}):([[:xdigit:]]{4})$ ]]; then
+        echo "Invalid USB $kind ID: $identifier (expected VID:PID)" >&2
+        exit 2
+    fi
+    local vendor="${BASH_REMATCH[1],,}" product="${BASH_REMATCH[2],,}"
+    local device found="" bus number node
+    for device in /sys/bus/usb/devices/*; do
+        [[ -f "$device/idVendor" && -f "$device/idProduct" ]] || continue
+        if [[ "$(<"$device/idVendor")" == "$vendor" &&
+              "$(<"$device/idProduct")" == "$product" ]]; then
+            bus="$(<"$device/busnum")"
+            number="$(<"$device/devnum")"
+            printf -v node '/dev/bus/usb/%03d/%03d' "$bus" "$number"
+            found="$node"
+            break
+        fi
+    done
+    if [[ -z "$found" ]]; then
+        echo "USB $kind adapter $identifier was not found on the host." >&2
+        exit 1
+    fi
+    if [[ ! -w "$found" ]]; then
+        echo "No write access to $found for USB passthrough." >&2
+        echo "Grant temporary access: sudo setfacl -m u:$(id -un):rw $found" >&2
+        exit 1
+    fi
+}
+
+if [[ "$USB_WIFI" == auto ]]; then
+    USB_WIFI=""
+    for device in /sys/bus/usb/devices/*; do
+        [[ -f "$device/idVendor" && -f "$device/idProduct" ]] || continue
+        if [[ "$(<"$device/idVendor")" == 04e8 &&
+              "$(<"$device/idProduct")" == 2018 ]]; then
+            USB_WIFI=04e8:2018
+            break
+        fi
+    done
+elif [[ "$USB_WIFI" == none ]]; then
+    USB_WIFI=""
+fi
+
+if [[ "$USB_BLUETOOTH" == auto ]]; then
+    USB_BLUETOOTH=""
+    for device in /sys/bus/usb/devices/*; do
+        [[ -f "$device/idVendor" && -f "$device/idProduct" ]] || continue
+        if [[ "$(<"$device/idVendor")" == 0a12 &&
+              "$(<"$device/idProduct")" == 0001 ]]; then
+            USB_BLUETOOTH=0a12:0001
+            break
+        fi
+    done
+elif [[ "$USB_BLUETOOTH" == none ]]; then
+    USB_BLUETOOTH=""
+fi
+
+install_qemu() {
+    if command -v apt-get >/dev/null 2>&1; then
+        echo "Installing QEMU and VirGL host support..."
+        sudo apt-get update
+        sudo apt-get install -y             qemu-system-x86             qemu-system-gui             qemu-utils             libvirglrenderer1
+        echo
+        echo "QEMU installation complete."
+        return
+    fi
+
+    echo "Automatic installation is implemented for Debian/Ubuntu hosts only." >&2
+    echo "Install qemu-system-x86_64 with OpenGL/VirGL support using your distribution package manager." >&2
+    exit 1
+}
+
+require_file() {
+    local path="$1"
+    local description="$2"
+
+    if [[ ! -f "$path" ]]; then
+        echo "Missing $description:" >&2
+        echo "  $path" >&2
+        exit 1
+    fi
+}
+
+detect_gpu_device() {
+    local help
+    help="$("$QEMU" -device help 2>/dev/null || true)"
+
+    if grep -q '"virtio-vga-gl"' <<<"$help"; then
+        echo "virtio-vga-gl"
+        return
+    fi
+
+    if grep -q '"virtio-gpu-gl-pci"' <<<"$help"; then
+        echo "virtio-gpu-gl-pci"
+        return
+    fi
+
+    echo ""
+}
+
+detect_display_backend() {
+    if [[ -n "$DISPLAY_BACKEND" ]]; then
+        echo "$DISPLAY_BACKEND"
+        return
+    fi
+
+    local help
+    help="$("$QEMU" -display help 2>/dev/null || true)"
+
+    # The EGL backend reads the accelerated guest framebuffer back for VNC.
+    # GTK/SDL's GL contexts cannot be mirrored by QEMU's VNC backend.
+    if [[ "$(detect_vnc_host)" != none ]]; then
+        if grep -qE '(^|[[:space:]])egl-headless([[:space:]]|$)' <<<"$help"; then
+            echo "egl-headless"
+        fi
+        return
+    fi
+
+    if grep -qE '(^|[[:space:]])gtk([[:space:]]|$)' <<<"$help"; then
+        echo "gtk,gl=on,zoom-to-fit=off"
+        return
+    fi
+
+    if grep -qE '(^|[[:space:]])sdl([[:space:]]|$)' <<<"$help"; then
+        echo "sdl,gl=on"
+        return
+    fi
+
+    echo ""
+}
+
+detect_acceleration() {
+    if [[ -r /dev/kvm && -w /dev/kvm ]] &&
+       "$QEMU" -accel help 2>/dev/null | grep -q '^kvm$'; then
+        echo "kvm"
+    else
+        echo "tcg"
+    fi
+}
+
+detect_audio_backend() {
+    if [[ "$AUDIO_BACKEND" != auto ]]; then
+        echo "$AUDIO_BACKEND"
+    elif [[ -n "${XDG_RUNTIME_DIR:-}" && -S "$XDG_RUNTIME_DIR/pipewire-0" ]]; then
+        echo pipewire
+    elif [[ -n "${XDG_RUNTIME_DIR:-}" && -S "$XDG_RUNTIME_DIR/pulse/native" ]]; then
+        echo pa
+    else
+        echo none
+    fi
+}
+
+detect_vnc_host() {
+    if [[ "$VNC_HOST" != auto ]]; then
+        echo "$VNC_HOST"
+        return
+    fi
+    # This queries the local routing table; it sends no packets and does not
+    # depend on connectivity inside OpenWave. VNC is a host-side display server.
+    local route_fields=() index
+    if command -v ip >/dev/null 2>&1; then
+        read -r -a route_fields < <(ip -4 route get 1.1.1.1 2>/dev/null || true) || true
+        for ((index=0; index+1<${#route_fields[@]}; index++)); do
+            if [[ "${route_fields[$index]}" == src ]]; then
+                echo "${route_fields[$((index+1))]}"
+                return
+            fi
+        done
+    fi
+    echo "127.0.0.1"
+}
+
+preflight() {
+    if ! command -v "$QEMU" >/dev/null 2>&1; then
+        echo "QEMU not found: $QEMU" >&2
+        echo "Run:" >&2
+        echo "  $0 install" >&2
+        exit 1
+    fi
+
+    require_file "$KERNEL" "Linux kernel"
+    require_file "$IMAGE" "OpenWave disk image"
+    check_usb_device "Wi-Fi" "$USB_WIFI"
+    check_usb_device "Bluetooth" "$USB_BLUETOOTH"
+
+    local gpu
+    gpu="$(detect_gpu_device)"
+
+    if [[ -z "$gpu" ]]; then
+        echo "This QEMU build does not expose a VirGL-capable virtio GPU device." >&2
+        echo "Expected virtio-vga-gl or virtio-gpu-gl-pci." >&2
+        echo "Install the GUI/VirGL-enabled QEMU packages and retry." >&2
+        exit 1
+    fi
+
+    local display
+    display="$(detect_display_backend)"
+
+    if [[ -z "$display" ]]; then
+        echo "No compatible QEMU display backend was found." >&2
+        echo "VNC with VirGL requires egl-headless; a local window requires GTK or SDL." >&2
+        exit 1
+    fi
+
+    if [[ "$(detect_vnc_host)" != none && "$display" != egl-headless* ]]; then
+        echo "VNC cannot mirror a GTK/SDL OpenGL context. Use --display egl-headless" >&2
+        echo "or --window for the local OpenGL window." >&2
+        exit 2
+    fi
+
+    if [[ "$DISPLAY_MODE" == window && "$display" != gtk* && "$display" != sdl* ]]; then
+        echo "--window requires a GTK or SDL display backend." >&2
+        exit 2
+    fi
+
+    if [[ "$display" != egl-headless* && -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+        echo "Warning: no DISPLAY or WAYLAND_DISPLAY is set." >&2
+        echo "The graphical QEMU window may not be able to open." >&2
+    fi
+
+    if command -v qemu-img >/dev/null 2>&1; then
+        qemu-img info "$IMAGE" >/dev/null
+    fi
+
+    echo "OpenWave QEMU preflight"
+    echo "  Root:        $ROOT"
+    echo "  Kernel:      $KERNEL"
+    echo "  Image:       $IMAGE"
+    echo "  QEMU:        $(command -v "$QEMU")"
+    echo "  GPU:         $gpu"
+    echo "  Display:     $display"
+    echo "  Framebuffer: $RESOLUTION pixels (native guest rendering)"
+    echo "  Accel:       $(detect_acceleration)"
+    echo "  RAM:         ${MEMORY} MiB"
+    echo "  CPUs:        $CPUS"
+    echo "  Audio:       virtio-sound ($(detect_audio_backend) host backend)"
+    echo "  Ethernet:    disabled (internet requires guest Wi-Fi)"
+    local vnc_host
+    vnc_host="$(detect_vnc_host)"
+    if [[ "$vnc_host" == none ]]; then
+        echo "  VNC:         disabled"
+    else
+        echo "  VNC:         $vnc_host:$VNC_PORT"
+    fi
+    if [[ -n "$USB_WIFI" ]]; then
+        echo "  USB Wi-Fi:   $USB_WIFI"
+    fi
+    if [[ -n "$USB_BLUETOOTH" ]]; then
+        echo "  USB Bluetooth: $USB_BLUETOOTH"
+    fi
+}
+
+run_openwave() {
+    preflight
+
+    local gpu display accel audio
+    gpu="$(detect_gpu_device)"
+    display="$(detect_display_backend)"
+    accel="$(detect_acceleration)"
+    audio="$(detect_audio_backend)"
+
+    local accel_args=()
+    local vnc_args=()
+    local usb_device_args=()
+    local vnc_host
+    vnc_host="$(detect_vnc_host)"
+    if [[ "$vnc_host" != none ]]; then
+        vnc_args=(-vnc "$vnc_host:$((VNC_PORT - 5900))")
+    fi
+    if [[ -n "$USB_WIFI" ]]; then
+        local vendor="${USB_WIFI%:*}" product="${USB_WIFI#*:}"
+        usb_device_args+=(-device "usb-host,bus=openwave-usb.0,vendorid=0x$vendor,productid=0x$product")
+    fi
+    if [[ -n "$USB_BLUETOOTH" ]]; then
+        local vendor="${USB_BLUETOOTH%:*}" product="${USB_BLUETOOTH#*:}"
+        usb_device_args+=(-device "usb-host,bus=openwave-usb.0,vendorid=0x$vendor,productid=0x$product")
+    fi
+    if [[ "$accel" == "kvm" ]]; then
+        accel_args=(
+            -accel kvm
+            -cpu host
+        )
+    else
+        accel_args=(
+            -accel tcg,thread=multi
+            -cpu max
+        )
+    fi
+
+    local kernel_append
+    kernel_append="root=/dev/vda rw rootfstype=ext4 init=/init console=tty0 console=ttyS0,115200 loglevel=7 OPENWAVE_QEMU_POINTER=1"
+    # GTK can advertise its initial 720x400 window through EDID, overriding
+    # xres/yres. Force the Linux connector mode and give Qt the same dimensions.
+    kernel_append+=" video=Virtual-1:${RESOLUTION}@60e OPENWAVE_DISPLAY_MODE=$RESOLUTION"
+
+    if [[ -n "$EXTRA_APPEND" ]]; then
+        kernel_append+=" $EXTRA_APPEND"
+    fi
+
+    echo
+    echo "Starting OpenWave..."
+    if [[ "$vnc_host" == none ]]; then
+        echo "Graphical output: QEMU window"
+    else
+        echo "Graphical output: VNC at $vnc_host:$VNC_PORT (VirGL through EGL)"
+    fi
+    echo "Kernel/OpenWave logs: this terminal"
+    echo "Press Ctrl+C in this terminal to stop QEMU."
+    echo
+
+    exec "$QEMU" \
+        -name "OpenWave" \
+        -machine q35 \
+        "${accel_args[@]}" \
+        -smp "$CPUS" \
+        -m "$MEMORY" \
+        -kernel "$KERNEL" \
+        -append "$kernel_append" \
+        -drive if=none,id=openwave-root,file="$IMAGE",format=raw \
+        -device virtio-blk-pci,drive=openwave-root \
+        -nic none \
+        -audiodev "$audio,id=openwave-audio" \
+        -device virtio-sound-pci,audiodev=openwave-audio \
+        -device "$gpu,xres=$WIDTH,yres=$HEIGHT" \
+        -display "$display" \
+        "${vnc_args[@]}" \
+        -device virtio-keyboard-pci \
+        -device qemu-xhci,id=openwave-usb \
+        -device usb-tablet,bus=openwave-usb.0 \
+        "${usb_device_args[@]}" \
+        -serial stdio \
+        -monitor none \
+        -no-reboot
+}
+
+case "$MODE" in
+    install)
+        install_qemu
+        ;;
+    check)
+        preflight
+        ;;
+    run)
+        run_openwave
+        ;;
+esac

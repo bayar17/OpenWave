@@ -1,0 +1,1637 @@
+diff --git a/clang/lib/Basic/Targets.cpp b/clang/lib/Basic/Targets.cpp
+index 8c01cfca8ccb4871abdc70b5ddb002990ae67e43..9a67c8568c007d82a9987bcee3d54c0bc20dd94a 100644
+--- a/clang/lib/Basic/Targets.cpp
++++ b/clang/lib/Basic/Targets.cpp
+@@ -631,21 +631,29 @@ std::unique_ptr<TargetInfo> AllocateTarget(const llvm::Triple &Triple,
+     }
+ 
+   case llvm::Triple::x86_64:
+-    if (Triple.isOSDarwin() || Triple.isOSBinFormatMachO())
+-      return std::make_unique<DarwinX86_64TargetInfo>(Triple, Opts);
++  if (Triple.isOSDarwin() || Triple.isOSBinFormatMachO())
++    return std::make_unique<DarwinX86_64TargetInfo>(Triple, Opts);
+ 
+-    switch (os) {
+-    case llvm::Triple::Linux: {
+-      switch (Triple.getEnvironment()) {
+-      default:
+-        return std::make_unique<LinuxTargetInfo<X86_64TargetInfo>>(Triple,
+-                                                                   Opts);
+-      case llvm::Triple::Android:
+-        return std::make_unique<AndroidX86_64TargetInfo>(Triple, Opts);
+-      case llvm::Triple::OpenHOS:
+-        return std::make_unique<OHOSX86_64TargetInfo>(Triple, Opts);
+-      }
++  switch (os) {
++  case llvm::Triple::Linux: {
++    switch (Triple.getEnvironment()) {
++    default:
++      return std::make_unique<LinuxTargetInfo<X86_64TargetInfo>>(
++          Triple, Opts);
++
++    case llvm::Triple::Android:
++      return std::make_unique<AndroidX86_64TargetInfo>(
++          Triple, Opts);
++
++    case llvm::Triple::OpenHOS:
++      return std::make_unique<OHOSX86_64TargetInfo>(
++          Triple, Opts);
+     }
++  }
++
++    case llvm::Triple::OpenWave:
++      return std::make_unique<OpenWaveTargetInfo<X86_64TargetInfo>>(Triple,  
++                                                                      Opts);
+     case llvm::Triple::DragonFly:
+       return std::make_unique<DragonFlyBSDTargetInfo<X86_64TargetInfo>>(Triple,
+                                                                         Opts);
+diff --git a/clang/lib/Basic/Targets/OSTargets.h b/clang/lib/Basic/Targets/OSTargets.h
+index 7c4666606d89f6a24efd3bacc666ed54a183a1fc..d6364cb3cf4314d3bf5eb00b33c25be6c4a2c5c1 100644
+--- a/clang/lib/Basic/Targets/OSTargets.h
++++ b/clang/lib/Basic/Targets/OSTargets.h
+@@ -1,68 +1,55 @@
+ //===--- OSTargets.h - Declare OS target feature support --------*- C++ -*-===//
+ //
+ // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+-// See https://llvm.org/LICENSE.txt for license information.
++// See https\://llvm.org/LICENSE.txt for license information.
+ // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+ //
+ //===----------------------------------------------------------------------===//
+ //
+ // This file declares OS specific TargetInfo types.
+ //===----------------------------------------------------------------------===//
+-
+ #ifndef LLVM_CLANG_LIB_BASIC_TARGETS_OSTARGETS_H
+ #define LLVM_CLANG_LIB_BASIC_TARGETS_OSTARGETS_H
+-
+ #include "Targets.h"
+-
+ namespace clang {
+ namespace targets {
+-
+ template <typename TgtInfo>
+ class LLVM_LIBRARY_VISIBILITY OSTargetInfo : public TgtInfo {
+ protected:
+-  virtual void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++virtual void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                             MacroBuilder &Builder) const = 0;
+-
+ public:
+   OSTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : TgtInfo(Triple, Opts) {}
+-
+-  void getTargetDefines(const LangOptions &Opts,
++void getTargetDefines(const LangOptions &Opts,
+                         MacroBuilder &Builder) const override {
+     TgtInfo::getTargetDefines(Opts, Builder);
+     getOSDefines(Opts, TgtInfo::getTriple(), Builder);
+   }
+ };
+-
+ void getAppleMachODefines(MacroBuilder &Builder, const LangOptions &Opts,
+-                          const llvm::Triple &Triple);
+-
++const llvm::Triple &Triple);
+ void getDarwinDefines(MacroBuilder &Builder, const LangOptions &Opts,
+-                      const llvm::Triple &Triple, StringRef &PlatformName,
++const llvm::Triple &Triple, StringRef &PlatformName,
+                       VersionTuple &PlatformMinVersion);
+-
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY AppleMachOTargetInfo
+     : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     getAppleMachODefines(Builder, Opts, Triple);
+   }
+-
+ public:
+   AppleMachOTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {}
+-
+-  const char *getStaticInitSectionSpecifier() const override {
++const char *getStaticInitSectionSpecifier() const override {
+     return "__TEXT,__StaticInit,regular,pure_instructions";
+   }
+-
+   /// Apple Mach-O does not support protected visibility.  Its "default" is very
+   /// similar to ELF's "protected";  Apple Mach-O requires a "weak" attribute on
+   /// declarations that can be dynamically replaced.
+-  bool hasProtectedVisibility() const override { return false; }
+-
++bool hasProtectedVisibility() const override { return false; }
+   /// Apple Mach-O can autohide a vague-linkage vtable so that each image gets
+   /// its own copy, so such a vtable may have more than one address in a
+   /// program. A strong (key-function) vtable still has a unique address.
+@@ -70,24 +57,21 @@ public:
+     return VTableUniquenessKind::UniqueIfStrongLinkage;
+   }
+ };
+-
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY DarwinTargetInfo
+     : public AppleMachOTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     getDarwinDefines(Builder, Opts, Triple, this->PlatformName,
+                      this->PlatformMinVersion);
+   }
+-
+ public:
+   DarwinTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : AppleMachOTargetInfo<Target>(Triple, Opts) {
+     // By default, no TLS, and we list permitted architecture/OS
+     // combinations.
+     this->TLSSupported = false;
+-
+     if (Triple.isMacOSX())
+       this->TLSSupported = !Triple.isMacOSXVersionLT(10, 7);
+     else if (Triple.isiOS()) {
+@@ -110,22 +94,18 @@ public:
+       // No TLS on DriverKit.
+     } else if (Triple.isXROS())
+       this->TLSSupported = true;
+-
+     this->MCountName = "\01mcount";
+   }
+-
+-  const char *getStaticInitSectionSpecifier() const override {
++const char *getStaticInitSectionSpecifier() const override {
+     // FIXME: We should return 0 when building kexts.
+     return AppleMachOTargetInfo<Target>::getStaticInitSectionSpecifier();
+   }
+-
+-  unsigned getExnObjectAlignment() const override {
++unsigned getExnObjectAlignment() const override {
+     // Older versions of libc++abi guarantee an alignment of only 8-bytes for
+     // exception objects because of a bug in __cxa_exception that was
+     // eventually fixed in r319123.
+     llvm::VersionTuple MinVersion;
+-    const llvm::Triple &T = this->getTriple();
+-
++const llvm::Triple &T = this->getTriple();
+     // Compute the earliest OS versions that have the fix to libc++abi.
+     switch (T.getOS()) {
+     case llvm::Triple::Darwin:
+@@ -146,32 +126,28 @@ public:
+       // Conservatively return 8 bytes if OS is unknown.
+       return 64;
+     }
+-
+     if (T.getOSVersion() < MinVersion)
+       return 64;
+     return OSTargetInfo<Target>::getExnObjectAlignment();
+   }
+-
+   TargetInfo::IntType getLeastIntTypeByWidth(unsigned BitWidth,
+-                                             bool IsSigned) const final {
+-    // Darwin uses `long long` for `int_least64_t` and `int_fast64_t`.
++bool IsSigned) const final {
++    // Darwin uses \`long long\` for \`int_least64_t\` and \`int_fast64_t\`.
+     return BitWidth == 64
+                ? (IsSigned ? TargetInfo::SignedLongLong
+                            : TargetInfo::UnsignedLongLong)
+                : TargetInfo::getLeastIntTypeByWidth(BitWidth, IsSigned);
+   }
+-
+-  bool areDefaultedSMFStillPOD(const LangOptions &) const override {
++bool areDefaultedSMFStillPOD(const LangOptions &) const override {
+     return false;
+   }
+ };
+-
+ // DragonFlyBSD Target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY DragonFlyBSDTargetInfo
+     : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     // DragonFly defines; list based off of gcc output
+     Builder.defineMacro("__DragonFly__");
+@@ -181,11 +157,9 @@ protected:
+     DefineStd(Builder, "unix", Opts);
+     if (this->HasFloat128)
+       Builder.defineMacro("__FLOAT128__");
+-
+     if (Opts.C11)
+       Builder.defineMacro("__STDC_NO_THREADS__");
+   }
+-
+ public:
+   DragonFlyBSDTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+@@ -199,33 +173,28 @@ public:
+     }
+   }
+ };
+-
+ #ifndef FREEBSD_CC_VERSION
+ #define FREEBSD_CC_VERSION 0U
+ #endif
+-
+ // FreeBSD Target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY FreeBSDTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     // FreeBSD defines; list based off of gcc output
+-
+-    unsigned Release = Triple.getOSMajorVersion();
++unsigned Release = Triple.getOSMajorVersion();
+     if (Release == 0U)
+       Release = 8U;
+-    unsigned CCVersion = FREEBSD_CC_VERSION;
++unsigned CCVersion = FREEBSD_CC_VERSION;
+     if (CCVersion == 0U)
+       CCVersion = Release * 100000U + 1U;
+-
+     Builder.defineMacro("__FreeBSD__", Twine(Release));
+     Builder.defineMacro("__FreeBSD_cc_version", Twine(CCVersion));
+     Builder.defineMacro("__KPRINTF_ATTRIBUTE__");
+     DefineStd(Builder, "unix", Opts);
+     if (this->HasFloat128)
+       Builder.defineMacro("__FLOAT128__");
+-
+     // On FreeBSD, wchar_t contains the number of the code point as
+     // used by the character set of the locale. These character sets are
+     // not necessarily a superset of ASCII.
+@@ -237,7 +206,6 @@ protected:
+     // character literals have the same encoding as char and wchar_t.
+     Builder.defineMacro("__STDC_MB_MIGHT_NEQ_WC__", "1");
+   }
+-
+ public:
+   FreeBSDTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+@@ -266,15 +234,13 @@ public:
+     }
+   }
+ };
+-
+ // GNU/kFreeBSD Target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY KFreeBSDTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     // GNU/kFreeBSD defines; list based off of gcc output
+-
+     DefineStd(Builder, "unix", Opts);
+     Builder.defineMacro("__FreeBSD_kernel__");
+     Builder.defineMacro("__GLIBC__");
+@@ -283,16 +249,14 @@ protected:
+     if (Opts.CPlusPlus)
+       Builder.defineMacro("_GNU_SOURCE");
+   }
+-
+ public:
+   using OSTargetInfo<Target>::OSTargetInfo;
+ };
+-
+ // Haiku Target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY HaikuTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     // Haiku defines; list based off of gcc output
+     Builder.defineMacro("__HAIKU__");
+@@ -300,7 +264,6 @@ protected:
+     if (this->HasFloat128)
+       Builder.defineMacro("__FLOAT128__");
+   }
+-
+ public:
+   HaikuTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+@@ -318,12 +281,11 @@ public:
+     }
+   }
+ };
+-
+ // Hurd target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY HurdTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     // Hurd defines; list based off of gcc output.
+     DefineStd(Builder, "unix", Opts);
+@@ -351,12 +313,11 @@ public:
+     }
+   }
+ };
+-
+ // Linux target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY LinuxTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     // Linux defines; list based off of gcc output
+     DefineStd(Builder, "unix", Opts);
+@@ -365,7 +326,7 @@ protected:
+       Builder.defineMacro("__ANDROID__", "1");
+       this->PlatformName = "android";
+       this->PlatformMinVersion = Triple.getEnvironmentVersion();
+-      const unsigned Maj = this->PlatformMinVersion.getMajor();
++const unsigned Maj = this->PlatformMinVersion.getMajor();
+       if (Maj) {
+         Builder.defineMacro("__ANDROID_MIN_SDK_VERSION__", Twine(Maj));
+         // This historical but ambiguous name for the minSdkVersion macro. Keep
+@@ -386,12 +347,10 @@ protected:
+       Builder.defineMacro("_TIME_BITS", "64");
+     }
+   }
+-
+ public:
+   LinuxTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+     this->WIntType = TargetInfo::UnsignedInt;
+-
+     switch (Triple.getArch()) {
+     default:
+       break;
+@@ -411,23 +370,38 @@ public:
+       break;
+     }
+   }
+-
+-  const char *getStaticInitSectionSpecifier() const override {
++const char *getStaticInitSectionSpecifier() const override {
+     return ".text.startup";
+   }
+-
+   // This allows template specializations, see
+   // LinuxTargetInfo<AArch64leTargetInfo>::setABI
+-  bool setABI(const std::string &Name) override {
++bool setABI(const std::string &Name) override {
+     return OSTargetInfo<Target>::setABI(Name);
+   }
+ };
+-
++// OpenWave target
++template <typename Target>
++class LLVM_LIBRARY_VISIBILITY OpenWaveTargetInfo
++    : public LinuxTargetInfo<Target> {
++protected:
++void getOSDefines(const LangOptions &Opts,
++const llvm::Triple &Triple,
++                    MacroBuilder &Builder) const override {
++    LinuxTargetInfo<Target>::getOSDefines(
++        Opts, Triple, Builder);
++    Builder.defineMacro("__OPENWAVE__", "1");
++    this->PlatformName = "openwave";
++  }
++public:
++  OpenWaveTargetInfo(const llvm::Triple &Triple,
++const TargetOptions &Opts)
++      : LinuxTargetInfo<Target>(Triple, Opts) {}
++};
+ // Managarm Target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY ManagarmTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     DefineStd(Builder, "unix", Opts);
+     Builder.defineMacro("__managarm__");
+@@ -438,7 +412,6 @@ protected:
+     if (this->HasFloat128)
+       Builder.defineMacro("__FLOAT128__");
+   }
+-
+ public:
+   ManagarmTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+@@ -452,12 +425,11 @@ public:
+     }
+   }
+ };
+-
+ // NetBSD Target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY NetBSDTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     // NetBSD defines; list based off of gcc output
+     Builder.defineMacro("__NetBSD__");
+@@ -467,7 +439,6 @@ protected:
+     if (this->HasFloat128)
+       Builder.defineMacro("__FLOAT128__");
+   }
+-
+ public:
+   NetBSDTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+@@ -482,26 +453,22 @@ public:
+     }
+   }
+ };
+-
+ // OpenBSD Target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY OpenBSDTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     // OpenBSD defines; list based off of gcc output
+-
+     Builder.defineMacro("__OpenBSD__");
+     DefineStd(Builder, "unix", Opts);
+     if (Opts.POSIXThreads)
+       Builder.defineMacro("_REENTRANT");
+     if (this->HasFloat128)
+       Builder.defineMacro("__FLOAT128__");
+-
+     if (Opts.C11)
+       Builder.defineMacro("__STDC_NO_THREADS__");
+   }
+-
+ public:
+   OpenBSDTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+@@ -530,12 +497,11 @@ public:
+     }
+   }
+ };
+-
+ // PS3 PPU Target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY PS3PPUTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     // PS3 PPU defines.
+     Builder.defineMacro("__PPU__");
+@@ -544,7 +510,6 @@ protected:
+     Builder.defineMacro("_ARCH_PPC64");
+     Builder.defineMacro("__powerpc64__");
+   }
+-
+ public:
+   PS3PPUTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+@@ -556,12 +521,11 @@ public:
+     this->resetDataLayout();
+   }
+ };
+-
+ // Common base class for PS4/PS5 targets.
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY PSOSTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     Builder.defineMacro("__FreeBSD__", "9");
+     Builder.defineMacro("__FreeBSD_cc_version", "900001");
+@@ -571,80 +535,65 @@ protected:
+     Builder.defineMacro("__STDC_NO_COMPLEX__");
+     Builder.defineMacro("__STDC_NO_THREADS__");
+   }
+-
+ public:
+   PSOSTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+     this->WCharType = TargetInfo::UnsignedShort;
+-
+     // On PS4/PS5, TLS variable cannot be aligned to more than 32 bytes (256
+     // bits).
+     this->MaxTLSAlign = 256;
+-
+     // On PS4/PS5, do not honor explicit bit field alignment,
+     // as in "__attribute__((aligned(2))) int b : 1;".
+     this->UseExplicitBitFieldAlignment = false;
+-
+     this->MCountName = ".mcount";
+     this->NewAlign = 256;
+     this->SuitableAlign = 256;
+   }
+-
+   TargetInfo::CallingConvCheckResult
+   checkCallingConvention(CallingConv CC) const override {
+     return (CC == CC_C) ? TargetInfo::CCCR_OK : TargetInfo::CCCR_Error;
+   }
+-
+-  bool areDefaultedSMFStillPOD(const LangOptions &) const override {
++bool areDefaultedSMFStillPOD(const LangOptions &) const override {
+     return false;
+   }
+ };
+-
+ // PS4 Target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY PS4OSTargetInfo : public PSOSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     // Start with base class defines.
+     PSOSTargetInfo<Target>::getOSDefines(Opts, Triple, Builder);
+-
+     Builder.defineMacro("__ORBIS__");
+   }
+-
+ public:
+   using PSOSTargetInfo<Target>::PSOSTargetInfo;
+ };
+-
+ // PS5 Target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY PS5OSTargetInfo : public PSOSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     // Start with base class defines.
+     PSOSTargetInfo<Target>::getOSDefines(Opts, Triple, Builder);
+-
+     Builder.defineMacro("__PROSPERO__");
+   }
+-
+ public:
+   using PSOSTargetInfo<Target>::PSOSTargetInfo;
+ };
+-
+ // RTEMS Target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY RTEMSTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     // RTEMS defines; list based off of gcc output
+-
+     Builder.defineMacro("__rtems__");
+     if (Opts.CPlusPlus)
+       Builder.defineMacro("_GNU_SOURCE");
+   }
+-
+ public:
+   RTEMSTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+@@ -666,12 +615,11 @@ public:
+     }
+   }
+ };
+-
+ // Solaris target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY SolarisTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     DefineStd(Builder, "sun", Opts);
+     DefineStd(Builder, "unix", Opts);
+@@ -690,7 +638,6 @@ protected:
+     if (this->HasFloat128)
+       Builder.defineMacro("__FLOAT128__");
+   }
+-
+ public:
+   SolarisTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+@@ -709,32 +656,26 @@ public:
+     }
+   }
+ };
+-
+ // AIX Target
+ template <typename Target>
+ class AIXTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     DefineStd(Builder, "unix", Opts);
+     Builder.defineMacro("_IBMR2");
+     Builder.defineMacro("_POWER");
+     Builder.defineMacro("__THW_BIG_ENDIAN__");
+-
+     Builder.defineMacro("_AIX");
+     Builder.defineMacro("__TOS_AIX__");
+     Builder.defineMacro("__HOS_AIX__");
+-
+     if (Opts.C11) {
+       Builder.defineMacro("__STDC_NO_ATOMICS__");
+       Builder.defineMacro("__STDC_NO_THREADS__");
+     }
+-
+     if (Opts.EnableAIXExtendedAltivecABI)
+       Builder.defineMacro("__EXTABI__");
+-
+     VersionTuple OsVersion = Triple.getOSVersion();
+-
+     // Define AIX OS-Version Macros.
+     // Includes logic for legacy versions of AIX; no specific intent to support.
+     if (OsVersion >= VersionTuple(3, 2))
+@@ -759,31 +700,25 @@ protected:
+       Builder.defineMacro("_AIX72");
+     if (OsVersion >= VersionTuple(7, 3))
+       Builder.defineMacro("_AIX73");
+-
+     // FIXME: Do not define _LONG_LONG when -fno-long-long is specified.
+     Builder.defineMacro("_LONG_LONG");
+-
+     if (Opts.POSIXThreads) {
+       Builder.defineMacro("_THREAD_SAFE");
+     }
+-
+     if (this->PointerWidth == 64) {
+       Builder.defineMacro("__64BIT__");
+     }
+-
+     // Define _WCHAR_T when it is a fundamental type
+     // (i.e., for C++ without -fno-wchar).
+     if (Opts.CPlusPlus && Opts.WChar) {
+       Builder.defineMacro("_WCHAR_T");
+     }
+   }
+-
+ public:
+   AIXTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+     this->MCountName = "__mcount";
+     this->TheCXXABI.set(TargetCXXABI::XL);
+-
+     if (this->PointerWidth == 64) {
+       this->WCharType = this->UnsignedInt;
+     } else {
+@@ -791,24 +726,20 @@ public:
+     }
+     this->UseZeroLengthBitfieldAlignment = true;
+   }
+-
+   // AIX sets FLT_EVAL_METHOD to be 1.
+   LangOptions::FPEvalMethodKind getFPEvalMethod() const override {
+     return LangOptions::FPEvalMethodKind::FEM_Double;
+   }
+-
+-  bool defaultsToAIXPowerAlignment() const override { return true; }
+-
+-  bool areDefaultedSMFStillPOD(const LangOptions &) const override {
++bool defaultsToAIXPowerAlignment() const override { return true; }
++bool areDefaultedSMFStillPOD(const LangOptions &) const override {
+     return false;
+   }
+ };
+-
+ // z/OS target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY ZOSTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     // FIXME: _LONG_LONG should not be defined under -std=c89.
+     Builder.defineMacro("_LONG_LONG");
+@@ -824,19 +755,15 @@ protected:
+     Builder.defineMacro("__TOS_390__");
+     Builder.defineMacro("__TOS_MVS__");
+     Builder.defineMacro("__XPLINK__");
+-
+     if (this->PointerWidth == 64)
+       Builder.defineMacro("__64BIT__");
+-
+     if (Opts.CPlusPlus && Opts.WChar) {
+       // Macro __wchar_t is defined so that the wchar_t data
+       // type is not declared as a typedef in system headers.
+       Builder.defineMacro("__wchar_t");
+     }
+-
+     this->PlatformName = llvm::Triple::getOSTypeName(Triple.getOS());
+   }
+-
+ public:
+   ZOSTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+@@ -848,21 +775,18 @@ public:
+     this->ZeroLengthBitfieldBoundary = 32;
+     this->TheCXXABI.set(TargetCXXABI::XL);
+   }
+-
+-  bool areDefaultedSMFStillPOD(const LangOptions &) const override {
++bool areDefaultedSMFStillPOD(const LangOptions &) const override {
+     return false;
+   }
+ };
+-
+ // UEFI target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY UEFITargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     Builder.defineMacro("__UEFI__");
+   }
+-
+ public:
+   UEFITargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+@@ -871,19 +795,16 @@ public:
+     this->UseMicrosoftManglingForC = true;
+   }
+ };
+-
+ void addWindowsDefines(const llvm::Triple &Triple, const LangOptions &Opts,
+                        MacroBuilder &Builder);
+-
+ // Windows target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY WindowsTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     addWindowsDefines(Triple, Opts, Builder);
+   }
+-
+ public:
+   WindowsTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+@@ -892,21 +813,18 @@ public:
+     this->UseMicrosoftManglingForC = true;
+   }
+ };
+-
+ void getFuchsiaDefines(MacroBuilder &Builder, const LangOptions &Opts,
+-                       const llvm::Triple &Triple);
+-
++const llvm::Triple &Triple);
+ // Fuchsia Target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY FuchsiaTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     getFuchsiaDefines(Builder, Opts, Triple);
+     this->PlatformName = "fuchsia";
+     this->PlatformMinVersion = VersionTuple(Opts.FuchsiaAPILevel);
+   }
+-
+ public:
+   FuchsiaTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+@@ -915,13 +833,12 @@ public:
+     this->TheCXXABI.set(TargetCXXABI::Fuchsia);
+   }
+ };
+-
+ // WebAssembly target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY WebAssemblyOSTargetInfo
+     : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     // A common platform macro.
+     if (Opts.POSIXThreads)
+@@ -932,67 +849,59 @@ protected:
+     // Indicate that we have __float128.
+     Builder.defineMacro("__FLOAT128__");
+   }
+-
+ public:
+-  explicit WebAssemblyOSTargetInfo(const llvm::Triple &Triple,
+-                                   const TargetOptions &Opts)
++explicit WebAssemblyOSTargetInfo(const llvm::Triple &Triple,
++const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+     this->MCountName = "__mcount";
+     this->TheCXXABI.set(TargetCXXABI::WebAssembly);
+     this->HasFloat128 = true;
+   }
+ };
+-
+ // WASIp1 target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY WASIP1TargetInfo
+     : public WebAssemblyOSTargetInfo<Target> {
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const final {
+     WebAssemblyOSTargetInfo<Target>::getOSDefines(Opts, Triple, Builder);
+     Builder.defineMacro("__wasi__");
+     Builder.defineMacro("__wasip1__");
+   }
+-
+ public:
+   using WebAssemblyOSTargetInfo<Target>::WebAssemblyOSTargetInfo;
+ };
+-
+ // WASIp2 target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY WASIP2TargetInfo
+     : public WebAssemblyOSTargetInfo<Target> {
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const final {
+     WebAssemblyOSTargetInfo<Target>::getOSDefines(Opts, Triple, Builder);
+     Builder.defineMacro("__wasi__");
+     Builder.defineMacro("__wasip2__");
+   }
+-
+ public:
+   using WebAssemblyOSTargetInfo<Target>::WebAssemblyOSTargetInfo;
+ };
+-
+ // WASIp3 target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY WASIP3TargetInfo
+     : public WebAssemblyOSTargetInfo<Target> {
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const final {
+     WebAssemblyOSTargetInfo<Target>::getOSDefines(Opts, Triple, Builder);
+     Builder.defineMacro("__wasi__");
+     Builder.defineMacro("__wasip3__");
+   }
+-
+ public:
+   using WebAssemblyOSTargetInfo<Target>::WebAssemblyOSTargetInfo;
+ };
+-
+ // WALI target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY WALITargetInfo
+     : public WebAssemblyOSTargetInfo<Target> {
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const final {
+     WebAssemblyOSTargetInfo<Target>::getOSDefines(Opts, Triple, Builder);
+     // Linux defines; list based off of gcc output
+@@ -1000,16 +909,14 @@ class LLVM_LIBRARY_VISIBILITY WALITargetInfo
+     DefineStd(Builder, "linux", Opts);
+     Builder.defineMacro("__wali__");
+   }
+-
+ public:
+   using WebAssemblyOSTargetInfo<Target>::WebAssemblyOSTargetInfo;
+ };
+-
+ // Emscripten target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY EmscriptenTargetInfo
+     : public WebAssemblyOSTargetInfo<Target> {
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const final {
+     WebAssemblyOSTargetInfo<Target>::getOSDefines(Opts, Triple, Builder);
+     DefineStd(Builder, "unix", Opts);
+@@ -1017,10 +924,9 @@ class LLVM_LIBRARY_VISIBILITY EmscriptenTargetInfo
+     if (Opts.POSIXThreads)
+       Builder.defineMacro("__EMSCRIPTEN_PTHREADS__");
+   }
+-
+ public:
+-  explicit EmscriptenTargetInfo(const llvm::Triple &Triple,
+-                                const TargetOptions &Opts)
++explicit EmscriptenTargetInfo(const llvm::Triple &Triple,
++const TargetOptions &Opts)
+       : WebAssemblyOSTargetInfo<Target>(Triple, Opts) {
+     // Keeping the alignment of long double to 8 bytes even though its size is
+     // 16 bytes allows emscripten to have an 8-byte-aligned max_align_t which
+@@ -1031,21 +937,18 @@ public:
+     this->Float128Align = 64;
+   }
+ };
+-
+ // OHOS target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY OHOSTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     // Linux defines; list based off of gcc output
+     DefineStd(Builder, "unix", Opts);
+-
+     // Generic OHOS target defines
+     if (Triple.isOHOSFamily()) {
+       Builder.defineMacro("__OHOS_FAMILY__", "1");
+-
+-      auto Version = Triple.getEnvironmentVersion();
++auto Version = Triple.getEnvironmentVersion();
+       this->PlatformName = "ohos";
+       this->PlatformMinVersion = Version;
+       Builder.defineMacro("__OHOS_Major__", Twine(Version.getMajor()));
+@@ -1054,16 +957,13 @@ protected:
+       if (auto Subminor = Version.getSubminor())
+         Builder.defineMacro("__OHOS_Micro__", Twine(*Subminor));
+     }
+-
+     if (Triple.isOpenHOS())
+       Builder.defineMacro("__OHOS__");
+-
+     if (Triple.isOSLinux()) {
+       DefineStd(Builder, "linux", Opts);
+     } else if (Triple.isOSLiteOS()) {
+       Builder.defineMacro("__LITEOS__");
+     }
+-
+     if (Opts.POSIXThreads)
+       Builder.defineMacro("_REENTRANT");
+     if (Opts.CPlusPlus)
+@@ -1071,12 +971,10 @@ protected:
+     if (this->HasFloat128)
+       Builder.defineMacro("__FLOAT128__");
+   }
+-
+ public:
+   OHOSTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+     this->WIntType = TargetInfo::UnsignedInt;
+-
+     switch (Triple.getArch()) {
+     default:
+       break;
+@@ -1086,59 +984,51 @@ public:
+       break;
+     }
+   }
+-
+-  const char *getStaticInitSectionSpecifier() const override {
++const char *getStaticInitSectionSpecifier() const override {
+     return ".text.startup";
+   }
+ };
+-
+ // QURT Target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY QURTTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     Builder.defineMacro("__qurt__");
+     if (Opts.CPlusPlus)
+       Builder.defineMacro("_GNU_SOURCE");
+   }
+-
+ public:
+   using OSTargetInfo<Target>::OSTargetInfo;
+ };
+-
+ // H2 Target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY H2TargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     Builder.defineMacro("__h2__");
+     if (Opts.CPlusPlus)
+       Builder.defineMacro("_GNU_SOURCE");
+   }
+-
+ public:
+   using OSTargetInfo<Target>::OSTargetInfo;
+ };
+-
+ // SerenityOS target
+ template <typename Target>
+ class LLVM_LIBRARY_VISIBILITY SerenityTargetInfo : public OSTargetInfo<Target> {
+ protected:
+-  void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
++void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
+                     MacroBuilder &Builder) const override {
+     Builder.defineMacro("__serenity__");
+     DefineStd(Builder, "unix", Opts);
+   }
+-
+ public:
+   SerenityTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+       : OSTargetInfo<Target>(Triple, Opts) {
+     this->WIntType = TargetInfo::UnsignedInt;
+   }
+ };
+-
+ } // namespace targets
+ } // namespace clang
+-#endif // LLVM_CLANG_LIB_BASIC_TARGETS_OSTARGETS_H
++#endif // LLVM_CLANG_LIB_BASIC_TARGETS_OSTARGETS_H
+\ No newline at end of file
+diff --git a/clang/lib/Driver/CMakeLists.txt b/clang/lib/Driver/CMakeLists.txt
+index 506536cdc04f5f5057730f0ab3976ea94cbea950..ca525ca317e5bcceb4f392dd56811ac1cdf085b8 100644
+--- a/clang/lib/Driver/CMakeLists.txt
++++ b/clang/lib/Driver/CMakeLists.txt
+@@ -84,6 +84,7 @@ add_clang_library(clangDriver
+   ToolChains/NetBSD.cpp
+   ToolChains/OHOS.cpp
+   ToolChains/OpenBSD.cpp
++  ToolChains/OpenWave.cpp
+   ToolChains/PS4CPU.cpp
+   ToolChains/Serenity.cpp
+   ToolChains/Solaris.cpp
+diff --git a/clang/lib/Driver/Driver.cpp b/clang/lib/Driver/Driver.cpp
+index e606cdc4c1cf89cedb0a5ed42b34112d87580e1e..3da0e529692e41b5e7637cac69b1e52a52758b4e 100644
+--- a/clang/lib/Driver/Driver.cpp
++++ b/clang/lib/Driver/Driver.cpp
+@@ -39,6 +39,7 @@
+ #include "ToolChains/NetBSD.h"
+ #include "ToolChains/OHOS.h"
+ #include "ToolChains/OpenBSD.h"
++#include "ToolChains/OpenWave.h"
+ #include "ToolChains/PPCFreeBSD.h"
+ #include "ToolChains/PPCLinux.h"
+ #include "ToolChains/PS4CPU.h"
+@@ -7161,6 +7162,9 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
+     case llvm::Triple::Fuchsia:
+       TC = std::make_unique<toolchains::Fuchsia>(*this, Target, Args);
+       break;
++    case llvm::Triple::OpenWave:
++      TC = std::make_unique<toolchains::OpenWave>(*this, Target, Args);
++      break;
+     case llvm::Triple::Managarm:
+       TC = std::make_unique<toolchains::Managarm>(*this, Target, Args);
+       break;
+diff --git a/llvm/include/llvm/TargetParser/Triple.h b/llvm/include/llvm/TargetParser/Triple.h
+index d819c4975b13e5190611b78c8e37cb95e5ebde19..532f57deb77b04e19f385560fa29eef049c5c875 100644
+--- a/llvm/include/llvm/TargetParser/Triple.h
++++ b/llvm/include/llvm/TargetParser/Triple.h
+@@ -347,6 +347,7 @@ public:
+     Firmware,
+     QURT,
+     H2,
++    OpenWave,
+     LastOSType = H2
+   };
+   enum EnvironmentType {
+diff --git a/llvm/lib/Target/X86/X86ISelLoweringCall.cpp b/llvm/lib/Target/X86/X86ISelLoweringCall.cpp
+index 8f14198cf268b3c211fc478bfa9060dfb4819b6f..84e8cd4dc14f9e34a5faa8bb708b097881d4b579 100644
+--- a/llvm/lib/Target/X86/X86ISelLoweringCall.cpp
++++ b/llvm/lib/Target/X86/X86ISelLoweringCall.cpp
+@@ -546,7 +546,8 @@ unsigned X86TargetLowering::getAddressSpace() const {
+ 
+ static bool hasStackGuardSlotTLS(const Triple &TargetTriple) {
+   return TargetTriple.isOSGlibc() || TargetTriple.isMusl() ||
+-         TargetTriple.isOSFuchsia() || TargetTriple.isAndroid();
++         TargetTriple.isOSFuchsia() || TargetTriple.isAndroid() ||
++         TargetTriple.getOS() == Triple::OpenWave;
+ }
+ 
+ static Constant* SegmentOffset(IRBuilderBase &IRB,
+diff --git a/llvm/lib/TargetParser/Triple.cpp b/llvm/lib/TargetParser/Triple.cpp
+index 356782c1f6ad49fa75ea774c96865ea401cec0b8..dded20052cdd4b464cc77bba0d45d65e16ab5e78 100644
+--- a/llvm/lib/TargetParser/Triple.cpp
++++ b/llvm/lib/TargetParser/Triple.cpp
+@@ -435,6 +435,8 @@ StringRef Triple::getOSTypeName(OSType Kind) {
+   switch (Kind) {
+   case UnknownOS:
+     return "unknown";
++  case OpenWave:
++    return "openwave";
+ #define TRIPLE_OS(Enum, Name)                                                  \
+   case Enum:                                                                   \
+     return Name;
+@@ -746,6 +748,7 @@ static Triple::VendorType parseVendor(StringRef VendorName) {
+ 
+ static Triple::OSType parseOS(StringRef OSName) {
+   return StringSwitch<Triple::OSType>(OSName)
++  .StartsWith("openwave", Triple::OpenWave)
+ #define TRIPLE_OS(Enum, Name) .StartsWith(Name, Triple::Enum)
+ #define TRIPLE_OS_ALIAS(Enum, AliasName) .StartsWith(AliasName, Triple::Enum)
+ #include "llvm/TargetParser/TripleName.def"
+diff --git a/llvm/test/CodeGen/X86/stack-protector-target.ll b/llvm/test/CodeGen/X86/stack-protector-target.ll
+index 4ba0302cf6fc30656f65f74cb681eaa5130b3efd..5ff5885a7f2a5d086a27a8c9272794fc51b1628a 100644
+--- a/llvm/test/CodeGen/X86/stack-protector-target.ll
++++ b/llvm/test/CodeGen/X86/stack-protector-target.ll
+@@ -1,6 +1,7 @@
+ ; Test target-specific stack cookie location.
+ ; RUN: llc -mtriple=i386-linux < %s -o - | FileCheck --check-prefix=I386-TLS %s
+ ; RUN: llc -mtriple=x86_64-linux < %s -o - | FileCheck --check-prefix=X64-TLS %s
++; RUN: llc -mtriple=x86_64-unknown-openwave < %s -o - | FileCheck --check-prefix=X64-TLS %s
+ 
+ ; RUN: llc -mtriple=i386-linux-android < %s -o - | FileCheck --check-prefix=I386-TLS %s
+ ; RUN: llc -mtriple=x86_64-linux-android < %s -o - | FileCheck --check-prefix=X64-TLS %s
+diff --git a/llvm/unittests/TargetParser/TripleTest.cpp b/llvm/unittests/TargetParser/TripleTest.cpp
+index cfe3bc6abf72fd1ad0ec13f6fb89d88d4ff6971c..91e67673e67f9477af43405df7c9c3e477339114 100644
+--- a/llvm/unittests/TargetParser/TripleTest.cpp
++++ b/llvm/unittests/TargetParser/TripleTest.cpp
+@@ -3760,4 +3760,14 @@ TEST(DataLayoutTest, CheriRISCV32) {
+               testing::HasSubstr("A200-P200-G200"));
+ }
+ 
++TEST(TripleTest, OpenWave) {
++  Triple T("x86_64-unknown-openwave");
++
++  EXPECT_EQ(Triple::x86_64, T.getArch());
++  EXPECT_EQ(Triple::UnknownVendor, T.getVendor());
++  EXPECT_EQ(Triple::OpenWave, T.getOS());
++  EXPECT_TRUE(T.isOSOpenWave());
++  EXPECT_EQ("openwave", Triple::getOSTypeName(T.getOS()));
++}
++
+ } // end anonymous namespace
+diff --git a/clang/lib/Driver/ToolChains/OpenWave.cpp b/clang/lib/Driver/ToolChains/OpenWave.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..8e66747f7c64938bf1dc7c95ae816c6a20e26d49
+--- /dev/null
++++ b/clang/lib/Driver/ToolChains/OpenWave.cpp
+@@ -0,0 +1,380 @@
++#include "OpenWave.h"
++#include "clang/Driver/CommonArgs.h"
++
++#include "clang/Driver/Compilation.h"
++#include "clang/Driver/Driver.h"
++#include "clang/Driver/Job.h"
++#include "clang/Options/Options.h"
++
++#include "llvm/ADT/SmallString.h"
++#include "llvm/Option/ArgList.h"
++#include "llvm/Support/Path.h"
++#include "llvm/Support/VirtualFileSystem.h"
++
++using namespace clang;
++using namespace clang::driver;
++using namespace clang::driver::tools;
++using namespace clang::driver::toolchains;
++using namespace llvm::opt;
++
++namespace {
++
++static std::string computeOpenWaveSysRoot(const ToolChain &TC) {
++  const Driver &D = TC.getDriver();
++
++  if (!D.SysRoot.empty())
++    return D.SysRoot;
++
++  SmallString<256> P(D.Dir);
++
++  llvm::sys::path::append(
++      P,
++      "..",
++      "..",
++      "..",
++      "sysroot");
++
++  llvm::sys::path::append(
++      P,
++      TC.getArchName());
++
++  if (TC.getVFS().exists(P))
++    return std::string(P);
++
++  return {};
++}
++
++}
++
++void tools::openwave::Linker::ConstructJob(
++    Compilation &C,
++    const JobAction &JA,
++    const InputInfo &Output,
++    const InputInfoList &Inputs,
++    const ArgList &Args,
++    const char *LinkingOutput) const {
++
++  const ToolChain &TC = getToolChain();
++  const Driver &D = TC.getDriver();
++
++  ArgStringList CmdArgs;
++
++  Args.ClaimAllArgs(options::OPT_g_Group);
++  Args.ClaimAllArgs(options::OPT_emit_llvm);
++  Args.ClaimAllArgs(options::OPT_w);
++  Args.ClaimAllArgs(options::OPT_static_pie);
++  Args.ClaimAllArgs(options::OPT_pie);
++  Args.ClaimAllArgs(options::OPT_no_pie);
++
++  const std::string SysRoot =
++      computeOpenWaveSysRoot(TC);
++
++  if (!SysRoot.empty()) {
++    CmdArgs.push_back(
++        Args.MakeArgString(
++            "--sysroot=" + SysRoot));
++  }
++
++  const bool IsShared =
++      Args.hasArg(options::OPT_shared);
++
++  const bool IsStaticPIE =
++      Args.hasArg(options::OPT_static_pie);
++
++  const bool IsStatic =
++      Args.hasArg(options::OPT_static) && !IsStaticPIE;
++
++  const bool IsRelocatable =
++      Args.hasArg(options::OPT_r);
++
++  if (IsShared) {
++    CmdArgs.push_back("-shared");
++  } else if (IsStaticPIE) {
++    CmdArgs.push_back("-static");
++    CmdArgs.push_back("-pie");
++    CmdArgs.push_back("--no-dynamic-linker");
++    CmdArgs.push_back("-z");
++    CmdArgs.push_back("text");
++  } else if (IsStatic) {
++    CmdArgs.push_back("-static");
++  } else if (IsRelocatable) {
++    CmdArgs.push_back("-r");
++  } else {
++    CmdArgs.push_back("-pie");
++  }
++
++  if (!IsRelocatable) {
++    CmdArgs.push_back("--build-id");
++    CmdArgs.push_back("--hash-style=gnu");
++    CmdArgs.push_back("--eh-frame-hdr");
++
++    CmdArgs.push_back("-z");
++    CmdArgs.push_back("relro");
++
++    CmdArgs.push_back("-z");
++    CmdArgs.push_back("now");
++  }
++
++  if (!IsStatic &&
++      !IsStaticPIE &&
++      !IsShared &&
++      !IsRelocatable) {
++    CmdArgs.push_back("-dynamic-linker");
++    CmdArgs.push_back(
++        "/lib64/ld-linux-x86-64.so.2");
++  }
++
++  if (Args.hasArg(options::OPT_rdynamic))
++    CmdArgs.push_back("-export-dynamic");
++
++  if (Args.hasArg(options::OPT_s))
++    CmdArgs.push_back("-s");
++
++  CmdArgs.push_back("-o");
++  CmdArgs.push_back(Output.getFilename());
++
++  if (!Args.hasArg(options::OPT_nostdlib,
++                   options::OPT_nostartfiles,
++                   options::OPT_r)) {
++
++    if (!IsShared) {
++      const char *CRT1;
++
++      if (IsStaticPIE)
++        CRT1 = "rcrt1.o";
++      else if (IsStatic)
++        CRT1 = "crt1.o";
++      else
++        CRT1 = "Scrt1.o";
++
++      CmdArgs.push_back(
++          Args.MakeArgString(
++              TC.GetFilePath(CRT1)));
++    }
++
++    CmdArgs.push_back(
++        Args.MakeArgString(
++            TC.GetFilePath("crti.o")));
++
++    CmdArgs.push_back(
++        TC.getCompilerRTArgString(
++            Args,
++            "crtbegin",
++            ToolChain::FT_Object));
++  }
++
++  Args.addAllArgs(
++      CmdArgs,
++      {
++          options::OPT_L,
++          options::OPT_u,
++      });
++
++  TC.AddFilePathLibArgs(
++      Args,
++      CmdArgs);
++
++  AddLinkerInputs(
++      TC,
++      Inputs,
++      Args,
++      CmdArgs,
++      JA);
++
++  if (!Args.hasArg(options::OPT_nostdlib,
++                   options::OPT_nodefaultlibs,
++                   options::OPT_r)) {
++
++    if (D.CCCIsCXX() &&
++        TC.ShouldLinkCXXStdlib(Args)) {
++
++      TC.AddCXXStdlibLibArgs(
++          Args,
++          CmdArgs);
++
++      CmdArgs.push_back("-lm");
++    }
++
++    AddRunTimeLibs(
++        TC,
++        D,
++        CmdArgs,
++        Args);
++
++    if (!Args.hasArg(options::OPT_nolibc))
++      CmdArgs.push_back("-lc");
++  }
++
++  if (!Args.hasArg(options::OPT_nostdlib,
++                   options::OPT_nostartfiles,
++                   options::OPT_r)) {
++
++    CmdArgs.push_back(
++        TC.getCompilerRTArgString(
++            Args,
++            "crtend",
++            ToolChain::FT_Object));
++
++    CmdArgs.push_back(
++        Args.MakeArgString(
++            TC.GetFilePath("crtn.o")));
++  }
++
++  const char *Exec =
++      Args.MakeArgString(
++          TC.GetLinkerPath());
++
++  C.addCommand(
++      std::make_unique<Command>(
++          JA,
++          *this,
++          ResponseFileSupport::AtFileCurCP(),
++          Exec,
++          CmdArgs,
++          Inputs,
++          Output));
++}
++
++OpenWave::OpenWave(
++    const Driver &D,
++    const llvm::Triple &Triple,
++    const ArgList &Args)
++    : ToolChain(D, Triple, Args) {
++
++  SelectedMultilibs.push_back(Multilib());
++  getProgramPaths().push_back(D.Dir);
++
++  const std::string SysRoot =
++      computeOpenWaveSysRoot(*this);
++
++  if (!SysRoot.empty()) {
++    getFilePaths().push_back(
++        SysRoot + "/usr/lib64");
++
++    getFilePaths().push_back(
++        SysRoot + "/lib64");
++
++    getFilePaths().push_back(
++        SysRoot + "/usr/lib");
++
++    getFilePaths().push_back(
++        SysRoot + "/lib");
++  }
++}
++
++std::string OpenWave::computeSysRoot() const {
++  return computeOpenWaveSysRoot(*this);
++}
++
++void OpenWave::AddClangSystemIncludeArgs(
++    const ArgList &DriverArgs,
++    ArgStringList &CC1Args) const {
++
++  const Driver &D = getDriver();
++
++  if (DriverArgs.hasArg(
++          options::OPT_nostdinc))
++    return;
++
++  if (!DriverArgs.hasArg(
++          options::OPT_nobuiltininc)) {
++
++    SmallString<256> P(
++        D.ResourceDir);
++
++    llvm::sys::path::append(
++        P,
++        "include");
++
++    addSystemInclude(
++        DriverArgs,
++        CC1Args,
++        P);
++  }
++
++  if (DriverArgs.hasArg(
++          options::OPT_nostdlibinc))
++    return;
++
++  const std::string SysRoot =
++      computeSysRoot();
++
++  if (!SysRoot.empty()) {
++    SmallString<256> P(
++        SysRoot);
++
++    llvm::sys::path::append(
++        P,
++        "usr",
++        "include");
++
++    addExternCSystemInclude(
++        DriverArgs,
++        CC1Args,
++        P);
++  }
++}
++
++void OpenWave::AddClangCXXStdlibIncludeArgs(
++    const ArgList &DriverArgs,
++    ArgStringList &CC1Args) const {
++
++  if (DriverArgs.hasArg(
++          options::OPT_nostdinc,
++          options::OPT_nostdlibinc,
++          options::OPT_nostdincxx))
++    return;
++
++  const std::string SysRoot =
++      computeSysRoot();
++
++  if (SysRoot.empty())
++    return;
++
++  switch (GetCXXStdlibType(DriverArgs)) {
++
++  case ToolChain::CST_Libcxx: {
++    SmallString<256> P(
++        SysRoot);
++
++    llvm::sys::path::append(
++        P,
++        "usr",
++        "include",
++        "c++",
++        "v1");
++
++    addSystemInclude(
++        DriverArgs,
++        CC1Args,
++        P);
++
++    break;
++  }
++
++  case ToolChain::CST_Libstdcxx:
++    llvm_unreachable(
++        "libstdc++ is not supported by OpenWave");
++  }
++}
++
++void OpenWave::AddCXXStdlibLibArgs(
++    const ArgList &Args,
++    ArgStringList &CmdArgs) const {
++
++  switch (GetCXXStdlibType(Args)) {
++
++  case ToolChain::CST_Libcxx:
++    CmdArgs.push_back("-lc++");
++    CmdArgs.push_back("-lc++abi");
++    break;
++
++  case ToolChain::CST_Libstdcxx:
++    llvm_unreachable(
++        "libstdc++ is not supported by OpenWave");
++  }
++}
++
++Tool *OpenWave::buildLinker() const {
++  return new tools::openwave::Linker(*this);
++}
+\ No newline at end of file
+diff --git a/clang/lib/Driver/ToolChains/OpenWave.h b/clang/lib/Driver/ToolChains/OpenWave.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..9b200b3881ced02bc431824399b7ad4c16b911dc
+--- /dev/null
++++ b/clang/lib/Driver/ToolChains/OpenWave.h
+@@ -0,0 +1,95 @@
++#ifndef LLVM_CLANG_LIB_DRIVER_TOOLCHAINS_OPENWAVE_H
++#define LLVM_CLANG_LIB_DRIVER_TOOLCHAINS_OPENWAVE_H
++
++#include "clang/Driver/Tool.h"
++#include "clang/Driver/ToolChain.h"
++
++namespace clang {
++namespace driver {
++
++namespace tools {
++namespace openwave {
++
++class LLVM_LIBRARY_VISIBILITY Linker final : public Tool {
++public:
++  Linker(const ToolChain &TC)
++      : Tool("openwave::Linker", "ld.lld", TC) {}
++
++  bool hasIntegratedCPP() const override { return false; }
++  bool isLinkJob() const override { return true; }
++
++  void ConstructJob(
++      Compilation &C,
++      const JobAction &JA,
++      const InputInfo &Output,
++      const InputInfoList &Inputs,
++      const llvm::opt::ArgList &Args,
++      const char *LinkingOutput) const override;
++};
++
++} // namespace openwave
++} // namespace tools
++
++namespace toolchains {
++
++class LLVM_LIBRARY_VISIBILITY OpenWave : public ToolChain {
++public:
++  OpenWave(const Driver &D,
++           const llvm::Triple &Triple,
++           const llvm::opt::ArgList &Args);
++
++  bool HasNativeLLVMSupport() const override {
++    return true;
++  }
++
++  bool isPICDefault() const override {
++    return false;
++  }
++
++  bool isPIEDefault(const llvm::opt::ArgList &Args) const override {
++    return true;
++  }
++
++  bool isPICDefaultForced() const override {
++    return false;
++  }
++
++  RuntimeLibType GetDefaultRuntimeLibType() const override {
++    return ToolChain::RLT_CompilerRT;
++  }
++
++  CXXStdlibType GetDefaultCXXStdlibType() const override {
++    return ToolChain::CST_Libcxx;
++  }
++
++  UnwindLibType GetDefaultUnwindLibType() const override {
++    return ToolChain::UNW_CompilerRT;
++  }
++
++  const char *getDefaultLinker() const override {
++    return "ld.lld";
++  }
++
++  std::string computeSysRoot() const override;
++
++  void AddClangSystemIncludeArgs(
++      const llvm::opt::ArgList &DriverArgs,
++      llvm::opt::ArgStringList &CC1Args) const override;
++
++  void AddClangCXXStdlibIncludeArgs(
++      const llvm::opt::ArgList &DriverArgs,
++      llvm::opt::ArgStringList &CC1Args) const override;
++
++  void AddCXXStdlibLibArgs(
++      const llvm::opt::ArgList &Args,
++      llvm::opt::ArgStringList &CmdArgs) const override;
++
++protected:
++  Tool *buildLinker() const override;
++};
++
++} // namespace toolchains
++} // namespace driver
++} // namespace clang
++
++#endif 
+\ No newline at end of file

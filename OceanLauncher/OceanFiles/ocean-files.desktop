@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Files
+Comment=Browse your OpenWave files
+Exec=/usr/bin/ocean-files
+Icon=ocean-files
+Terminal=false
+Categories=Utility;FileManager;
+X-OpenWave-AppId=files
+X-OpenWave-AcceptsPaths=true

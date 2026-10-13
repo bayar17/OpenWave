@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg width="100%" height="100%" viewBox="0 0 700 700" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:affinity="https://www.affinity.studio/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2;">
+    <g transform="matrix(1,0,0,1,-150,-150)">
+        <g id="Browser">
+            <g transform="matrix(1.4,0,0,1.476793,-550,-588.396624)">
+                <ellipse cx="750" cy="737" rx="250" ry="237" style="fill:rgb(13,202,242);"/>
+            </g>
+            <g transform="matrix(0.35625,0,0,0.35625,500,509)">
+                <g transform="matrix(1,0,0,1,-800,-800)">
+                    <g id="SVGRepo_iconCarrier" transform="matrix(106.666667,0,0,106.666667,0,0)">
+                        <path d="M7.5,0C3.358,0 0,3.358 0,7.5C0,11.642 3.358,15 7.5,15C11.642,15 15,11.642 15,7.5C15,3.358 11.642,0 7.5,0ZM1.197,5.904C1.068,6.415 1,6.949 1,7.5C1,10.574 3.133,13.149 6,13.826L6,13.207L5,12.207L5,10.707L4,9.707L4,8.5C4,8.224 4.224,8 4.5,8L8.5,8C9.328,8 10,8.672 10,9.5L10,10.012C10.511,10.085 10.915,10.489 10.988,11L12.978,11C13.625,9.99 14,8.789 14,7.5C14,4.796 12.349,2.478 10,1.498L10,2.5C10,3.328 9.328,4 8.5,4L7.5,4C7.224,4 7,4.224 7,4.5C7,5.328 6.328,6 5.5,6L5,6L5,6.707L4.561,7.146C3.975,7.732 3.025,7.732 2.439,7.146L1.197,5.904Z" style="fill:white;"/>
+                    </g>
+                </g>
+            </g>
+        </g>
+    </g>
+</svg>

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Browser
+Exec=/usr/bin/ocean-browser
+Icon=ocean-browser
+Categories=Network;WebBrowser;
+Terminal=false
+X-OpenWave-AppId=browser
