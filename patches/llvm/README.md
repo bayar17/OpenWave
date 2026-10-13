@@ -19,17 +19,20 @@ included. The toolchain selects LLD, compiler-rt, libc++, libc++abi and the
 Use a **clean LLVM checkout** at the recorded commit. The current local
 `llvm-project/` already contains these changes.
 
-The repository now registers `llvm-project/` as an upstream submodule at that
-commit. For a fresh OpenWave checkout, run:
+The repository registers `llvm-project/` as an upstream submodule at that
+commit. Build commands and SDK export initialize it and apply this patch
+automatically. Preparation can also be run without an installed SDK:
 
 ```bash
-git submodule update --init llvm-project
-git -C llvm-project apply --check ../patches/llvm/openwave-llvm.patch
-git -C llvm-project apply --whitespace=nowarn ../patches/llvm/openwave-llvm.patch
+./build-openwave llvm-patch
 ```
 
 The gitlink records the upstream base; OpenWave changes remain in this patch.
-Do not reapply it to the existing modified development checkout.
+The helper detects an already-applied patch with a reverse application check.
+It checks the complete patch before applying and stops on conflicts or partial
+application without resetting, cleaning, or overwriting local work. Image packing,
+time-zone staging, and help do not require LLVM preparation. This step prepares
+sources only; it does not rebuild the compiler. For manual application elsewhere:
 
 ```bash
 git -C /path/to/clean-llvm-project checkout --detach 85ac560262434c9ccfc0c183ec22d4138ed647fb
@@ -41,7 +44,7 @@ git -C /path/to/clean-llvm-project apply --whitespace=nowarn /mnt/aosp/ThunderOS
 its whitespace. To remove the patch, use `git apply --reverse` with the same
 patch path.
 
-## Verification and existing issue
+## Verification
 
 The patch was checked and applied to pristine copies of all affected files from
 the base commit. Every resulting file matched the local source byte for byte.
@@ -49,9 +52,15 @@ Reverse application restored the original files and removed the new files.
 The local LLVM working-tree status was unchanged.
 
 This verifies patch application, not a fresh LLVM build. No compiler rebuild
-was performed. The existing `TripleTest.cpp` addition calls
-`Triple::isOSOpenWave()`, but that method is absent from the current `Triple.h`.
-That unit-test compilation issue is preserved in this exact snapshot and needs
-a separate source correction before building the affected unit tests.
+was performed. The original export omitted the `Triple::isOSOpenWave()` helper
+used by its Triple test. The patch now includes that helper, and its call was
+checked with the native C++ compiler. The original validation report below
+predates this correction; updated patch checks are in
+`out/llvm-build-check/automatic-patch-report.json`.
+
+Use `./build-openwave llvm` to prepare, build and install the compiler, or
+`./build-openwave all` for LLVM followed by the dependency and userspace builds.
+Existing LLVM CMake options are preserved; fresh configurations match the
+current Release/X86/clang/lld setup with tests disabled by default.
 
 The validation report is in `out/llvm-patch-validation/report.json`.

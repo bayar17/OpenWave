@@ -7,7 +7,7 @@ configuration in `/etc/openwave/kms.json`.
 From the OpenWave source root:
 
 ```sh
-./build-openwave.sh userspace
+./build-openwave userspace
 ```
 
 This cross-compiles init and the launcher using `cross/openwave-x86_64.cmake`,
@@ -27,7 +27,7 @@ is retained as a system fallback.
 To create a new boot image and run it:
 
 ```sh
-./build-openwave.sh userspace --image out/OpenWave-ocean.img
+./build-openwave userspace --image out/OpenWave-ocean.img
 ./run-openwave --image out/OpenWave-ocean.img run
 ```
 

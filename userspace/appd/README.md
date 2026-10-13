@@ -148,7 +148,7 @@ QtTest are confined to the test image. See the final report in
 Run the reproducible suite with a new image path:
 
 ```bash
-./build-openwave.sh test-appd out/OpenWave-appd-test.img
+./build-openwave test-appd out/OpenWave-appd-test.img
 ```
 
 The helper refuses existing images and keeps QA binaries out of rootfs.

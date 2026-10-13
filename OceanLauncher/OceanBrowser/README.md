@@ -6,7 +6,7 @@ libavif/dav1d and video, Media Source, WebAudio, WebCodecs, MediaRecorder,
 MediaStream, and WebRTC via GStreamer. The target plugin set includes MP4,
 WebM, HLS/DASH, H.264/AAC, VP8/VP9, AV1, Opus, and Vorbis support.
 
-From the repository root, `./build-openwave.sh browser-engine` builds the pinned
+From the repository root, `./build-openwave browser-engine` builds the pinned
 codec/media dependencies, rebuilds the engine, and installs into `rootfs`.
 Use `deps`, `media`, or `engine` to resume those stages individually.
 `OPENWAVE_BUILD_JOBS` controls parallelism (default 3). NASM and GLib generator
@@ -92,7 +92,7 @@ isolated QEMU image; it covers dragging, taps, nested scrolling, wheel input,
 modified and synthesized pointer drags, cancellation and actual touch events:
 
 ```bash
-./build-openwave.sh test-browser-input out/OpenWave-input-test.img
+./build-openwave test-browser-input out/OpenWave-input-test.img
 ```
 
 Show all tabs collapses the menu into its bottom-right opening corner, captures

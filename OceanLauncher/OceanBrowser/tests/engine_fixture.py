@@ -1,6 +1,6 @@
 """Prepare and serve native WPE fixtures on the host (requires Pillow and GStreamer tools).
 
-After build-openwave.sh browser-engine deps, run this script, then launch
+After build-openwave browser-engine deps, run this script, then launch
 browser-engine-probe http://10.0.2.2:8899/index.html 500 inside the QA VM.
 Fixture results are available as window.engineProbeResult in the probe log.
 """

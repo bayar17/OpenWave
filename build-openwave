@@ -6,8 +6,11 @@ usage() {
     cat <<'HELP'
 Usage: ./build-openwave COMMAND [OPTIONS]
 
+  all [--image PATH]             Patch/build LLVM, dependencies, kernel and userspace
+  llvm                          Patch/build/install the native Clang/LLVM compiler
   userspace [--image PATH]       Build system apps/services and assemble rootfs
   sdk                           Build and install the public API client libraries
+  llvm-patch                    Initialize LLVM sources and apply the OpenWave patch
   browser-engine [all|deps|media|engine]
                                 Download/build browser codecs and/or build WPE
   audio                         Download/build ALSA, PipeWire, WirePlumber and audio kernel
@@ -24,9 +27,74 @@ Launch images with run-openwave. SDK export remains scripts/export-openwave-sdk.
 HELP
 }
 
+prepare_llvm() {
+    local source="$ROOT/llvm-project" patch="$ROOT/patches/llvm/openwave-llvm.patch"
+    if [[ ! -f "$patch" ]]; then
+        echo "Missing OpenWave LLVM patch: $patch" >&2
+        return 1
+    fi
+    if [[ ! -e "$source/.git" ]]; then
+        git -C "$ROOT" submodule update --init --depth 1 -- llvm-project
+    fi
+    if git -C "$source" apply --reverse --check "$patch" 2>/dev/null; then
+        echo "OpenWave LLVM patch already applied."
+        return 0
+    fi
+    if ! git -C "$source" apply --check "$patch"; then
+        echo "OpenWave LLVM patch conflicts with this checkout; stopping without changing its files." >&2
+        return 1
+    fi
+    git -C "$source" apply --whitespace=nowarn "$patch"
+    echo "Applied OpenWave LLVM patch."
+}
+
+build_llvm_patch() (
+    prepare_llvm
+)
+
+build_llvm() (
+    prepare_llvm
+    SDK="${OPENWAVE_SDK:-$ROOT/toolchain}"
+    BUILD="${OPENWAVE_LLVM_BUILD:-$ROOT/out/llvm-build}"
+    configure=(-S "$ROOT/llvm-project/llvm" -B "$BUILD" -G Ninja
+               -DCMAKE_INSTALL_PREFIX="$SDK")
+    if [[ ! -f "$BUILD/CMakeCache.txt" ]]; then
+        configure+=(-DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS='clang;lld'
+                    -DLLVM_TARGETS_TO_BUILD="${OPENWAVE_LLVM_TARGETS:-X86}"
+                    -DLLVM_PARALLEL_LINK_JOBS=1
+                    -DLLVM_INCLUDE_TESTS=OFF -DLLVM_BUILD_TESTS=OFF
+                    -DCMAKE_C_COMPILER="${OPENWAVE_HOST_CC:-/usr/bin/cc}"
+                    -DCMAKE_CXX_COMPILER="${OPENWAVE_HOST_CXX:-/usr/bin/c++}")
+    fi
+    native=(env -u CC -u CXX -u AR -u AS -u LD -u NM -u RANLIB -u STRIP
+            -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u CPATH
+            -u C_INCLUDE_PATH -u CPLUS_INCLUDE_PATH
+            -u CMAKE_TOOLCHAIN_FILE -u CMAKE_PREFIX_PATH -u PKG_CONFIG_PATH
+            -u PKG_CONFIG_SYSROOT_DIR -u PKG_CONFIG_LIBDIR -u LLVM)
+    "${native[@]}" cmake "${configure[@]}"
+    "${native[@]}" cmake --build "$BUILD" --parallel "${OPENWAVE_BUILD_JOBS:-4}"
+    "${native[@]}" cmake --install "$BUILD"
+)
+
+build_all() (
+    if (($#)) && [[ -e "$2" ]]; then
+        echo "Refusing to overwrite existing image: $2" >&2
+        exit 1
+    fi
+    source "$ROOT/env.sh" --build
+    build_llvm
+    build_browser_engine deps
+    OPENWAVE_BUILD_ALL=1 build_audio
+    build_bluetooth_audio
+    build_mdns
+    build_browser_engine engine
+    build_userspace "$@"
+)
+
 build_audio() (
 
 source "$ROOT/env.sh" --build
+prepare_llvm
 TARGET="$OPENWAVE_SYSROOT"
 JOBS="${OPENWAVE_BUILD_JOBS:-4}"
 mkdir -p "$ROOT/out" "$ROOT/third_party"
@@ -108,7 +176,9 @@ meson_setup "$OPENWAVE_DEPENDENCY_BUILD/wireplumber" "$ROOT/third_party/wireplum
 ninja -C "$OPENWAVE_DEPENDENCY_BUILD/wireplumber" -j "$JOBS"
 DESTDIR="$TARGET" ninja -C "$OPENWAVE_DEPENDENCY_BUILD/wireplumber" install
 
-"$ROOT/build-openwave.sh" userspace
+if [[ "${OPENWAVE_BUILD_ALL:-0}" != 1 ]]; then
+    "$ROOT/build-openwave" userspace
+fi
 
 "$ROOT/linux/scripts/config" --file "$ROOT/out/linux/.config" -e SND_VIRTIO
 PATH="$OPENWAVE_SDK/bin:$PATH" make -C "$ROOT/linux" \
@@ -124,6 +194,7 @@ python3 "$ROOT/scripts/assemble-openwave-rootfs.py"
 build_bluetooth_audio() (
 
 source "$ROOT/env.sh" --build
+prepare_llvm
 TOOLCHAIN="$OPENWAVE_SDK/bin"
 SYSROOT="$OPENWAVE_SYSROOT"
 SBC_SOURCE="$ROOT/third_party/sbc-2.2"
@@ -222,6 +293,7 @@ python3 "$ROOT/scripts/assemble-openwave-rootfs.py"
 build_browser_engine() (
 # Cross-build browser codecs and WPE; never writes an active disk image.
 source "$ROOT/env.sh" --build
+prepare_llvm
 TARGET="$OPENWAVE_SYSROOT"
 JOBS="${OPENWAVE_BUILD_JOBS:-3}"
 case "${1:-all}" in
@@ -385,6 +457,7 @@ python3 "$ROOT/scripts/assemble-openwave-rootfs.py"
 build_mdns() (
 
 source "$ROOT/env.sh" --build
+prepare_llvm
 TARGET="$OPENWAVE_SYSROOT"
 BUILD="$OPENWAVE_DEPENDENCY_BUILD"
 mkdir -p "$BUILD" "$ROOT/third_party"
@@ -489,6 +562,7 @@ python3 "$ROOT/scripts/assemble-openwave-rootfs.py"
 
 build_sdk() (
 source "$ROOT/env.sh" --build
+prepare_llvm
 BUILD="$ROOT/out/sdk-$OPENWAVE_TARGET_TRIPLE"
 openwave_cmake_configure -S "$ROOT/userspace/sdk" -B "$BUILD" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN" \
@@ -546,7 +620,7 @@ usage() {
     cat <<'HELP'
 Build and install OpenWave init, Ocean Launcher, Ocean Settings, and Ocean Files into rootfs through a runtime staging directory.
 
-Usage: ./build-openwave.sh userspace [--image PATH]
+Usage: ./build-openwave userspace [--image PATH]
 
 --image PATH  Also create a new 2 GiB ext4 boot image from rootfs.
               Refuses to overwrite an existing image.
@@ -574,6 +648,8 @@ if [[ -n "$IMAGE" && -e "$IMAGE" ]]; then
     exit 1
 fi
 
+prepare_llvm
+
 openwave_cmake_configure -S "$ROOT/third_party/mpg123-1.33.7/ports/cmake" -B "$MPG123_BUILD" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN" \
@@ -588,7 +664,7 @@ openwave_cmake_configure -S "$ROOT/third_party/mpg123-1.33.7/ports/cmake" -B "$M
 cmake --build "$MPG123_BUILD" --parallel "${OPENWAVE_BUILD_JOBS:-4}"
 DESTDIR="$OPENWAVE_SYSROOT" cmake --install "$MPG123_BUILD"
 
-"$ROOT/build-openwave.sh" sdk
+"$ROOT/build-openwave" sdk
 
 openwave_cmake_configure -S "$ROOT/userspace" -B "$BUILD" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
@@ -605,17 +681,17 @@ if [[ -f "$ROOT/Marisa Stole Her Precious Thing.mp3" ]]; then
         "$OPENWAVE_RUNTIME_STAGE/Data/Users/root/Musics/Marisa Stole her Precious Thing.mp3"
 fi
 
-"$ROOT/build-openwave.sh" tzdata
+"$ROOT/build-openwave" tzdata
 python3 "$ROOT/scripts/assemble-openwave-rootfs.py"
 
 if [[ -n "$IMAGE" ]]; then
-    "$ROOT/build-openwave.sh" image "$OPENWAVE_ROOTFS" "$IMAGE"
+    "$ROOT/build-openwave" image "$OPENWAVE_ROOTFS" "$IMAGE"
 fi
 )
 
 build_image() (
 # fakeroot is only a metadata tool here, never the deployable staging directory.
-RUNTIME="$(realpath -- "${1:?Usage: ./build-openwave.sh image ROOTFS NEW_IMAGE}")"
+RUNTIME="$(realpath -- "${1:?Usage: ./build-openwave image ROOTFS NEW_IMAGE}")"
 IMAGE="${2:?Specify a new image path}"
 [[ -f "$RUNTIME/init" && -f "$RUNTIME/usr/bin/ocean-launcher" ]]
 if [[ -e "$IMAGE" ]]; then
@@ -640,18 +716,18 @@ build_test_appd() (
 TASK_ROOT="$ROOT"
 cd "$TASK_ROOT"
 source "$ROOT/env.sh" --build
-QA_IMAGE="${1:?Usage: ./build-openwave.sh test-appd NEW_TEST_IMAGE}"
+QA_IMAGE="${1:?Usage: ./build-openwave test-appd NEW_TEST_IMAGE}"
 [[ ! -e "$QA_IMAGE" ]] || { echo "Refusing to overwrite $QA_IMAGE" >&2; exit 1; }
 QA_OUTPUT="$TASK_ROOT/out/appd-validation"
 mkdir -p "$QA_OUTPUT"
-./build-openwave.sh userspace > "$QA_OUTPUT/build.log" 2>&1
+./build-openwave userspace > "$QA_OUTPUT/build.log" 2>&1
 for project in appd/tests application-client/tests; do
     build="$QA_OUTPUT/$(basename "$(dirname "$project")")-tests"
     openwave_cmake_configure -S "userspace/$project" -B "$build" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN"
     cmake --build "$build" --parallel "${OPENWAVE_BUILD_JOBS:-4}"
 done
-./build-openwave.sh image "$OPENWAVE_ROOTFS" "$QA_IMAGE"
+./build-openwave image "$OPENWAVE_ROOTFS" "$QA_IMAGE"
 QA_COMMANDS="$(mktemp "$QA_OUTPUT/install.XXXXXX")"
 trap 'rm -f -- "$QA_COMMANDS"' EXIT
 cat > "$QA_COMMANDS" <<EOF
@@ -677,15 +753,15 @@ build_test_browser_input() (
 TASK_ROOT="$ROOT"
 cd "$TASK_ROOT"
 source "$ROOT/env.sh" --build
-QA_IMAGE="${1:?Usage: ./build-openwave.sh test-browser-input NEW_TEST_IMAGE}"
+QA_IMAGE="${1:?Usage: ./build-openwave test-browser-input NEW_TEST_IMAGE}"
 [[ ! -e "$QA_IMAGE" ]] || { echo "Refusing to overwrite $QA_IMAGE" >&2; exit 1; }
 QA_OUTPUT="$TASK_ROOT/out/browser-touch-validation"
 mkdir -p "$QA_OUTPUT"
-./build-openwave.sh userspace > "$QA_OUTPUT/build.log" 2>&1
+./build-openwave userspace > "$QA_OUTPUT/build.log" 2>&1
 openwave_cmake_configure -S OceanLauncher/OceanBrowser/tests -B "$QA_OUTPUT/tests" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN"
 cmake --build "$QA_OUTPUT/tests" --target browser-input-tests browser-input-init --parallel "${OPENWAVE_BUILD_JOBS:-4}"
-./build-openwave.sh image "$OPENWAVE_ROOTFS" "$QA_IMAGE"
+./build-openwave image "$OPENWAVE_ROOTFS" "$QA_IMAGE"
 cat > "$QA_OUTPUT/input-test.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
@@ -722,14 +798,14 @@ if [[ "$COMMAND" == help || "$COMMAND" == --help || "$COMMAND" == -h || "${1:-}"
     exit 0
 fi
 case "$COMMAND" in
-    audio|bluetooth-audio|mdns|sdk|tzdata)
+    audio|bluetooth-audio|mdns|sdk|tzdata|llvm-patch|llvm)
         if (($# != 0)); then usage >&2; exit 2; fi
         ;;
     browser-engine)
         if (($# > 1)); then usage >&2; exit 2; fi
         case "${1:-all}" in all|deps|media|engine) ;; *) usage >&2; exit 2 ;; esac
         ;;
-    userspace)
+    userspace|all)
         if (($# != 0)) && [[ $# != 2 || "$1" != --image || -z "$2" ]]; then usage >&2; exit 2; fi
         ;;
     image)

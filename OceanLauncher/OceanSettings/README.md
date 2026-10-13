@@ -9,7 +9,7 @@ local project settings are preserved.
 Build and install all OpenWave userspace from the ThunderOS root:
 
 ```sh
-./build-openwave.sh userspace
+./build-openwave userspace
 ```
 
 This stages `/usr/bin/ocean-settings`,
