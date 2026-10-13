@@ -23,16 +23,16 @@ changes in `patches/llvm/`; see its README for validation and known limitations.
 Project shell build, staging, image, and QEMU test commands share one entry point:
 
 ```bash
-./build-openwave.sh --help
-./build-openwave.sh sdk
-./build-openwave.sh userspace
-./build-openwave.sh userspace --image out/OpenWave-new.img
+./build-openwave --help
+./build-openwave sdk
+./build-openwave userspace
+./build-openwave userspace --image out/OpenWave-new.img
 ```
 
 To pack an already assembled rootfs without rebuilding:
 
 ```bash
-./build-openwave.sh image rootfs out/OpenWave-new.img
+./build-openwave image rootfs out/OpenWave.img
 ```
 
 Image creation refuses to overwrite existing images. The `audio`,
@@ -68,10 +68,10 @@ commit or archive checksum, build them, and install into the target SDK:
 
 | Command | Downloaded and built components |
 | --- | --- |
-| `./build-openwave.sh audio` | ALSA, PipeWire, WirePlumber |
-| `./build-openwave.sh mdns` | libdaemon, Avahi |
-| `./build-openwave.sh browser-engine deps` | Host NASM; target dav1d, libavif, libvpx, GStreamer and its enabled subprojects |
-| `./build-openwave.sh browser-engine media` | GStreamer and its enabled media subprojects |
+| `./build-openwave audio` | ALSA, PipeWire, WirePlumber |
+| `./build-openwave mdns` | libdaemon, Avahi |
+| `./build-openwave browser-engine deps` | Host NASM; target dav1d, libavif, libvpx, GStreamer and its enabled subprojects |
+| `./build-openwave browser-engine media` | GStreamer and its enabled media subprojects |
 
 These commands require a populated OpenWave SDK and the host build tools used
 by their packages. They do not bootstrap every dependency from an empty clone.
