@@ -13,6 +13,8 @@ ApplicationWindow {
     property var connectivityBackend: null
     property var timeBackend: null
     property var promptClient: null
+    property var permissionClient: null
+    property var applicationsBackend: null
     readonly property real contentScale: Math.min(width / 768, height / 1366)
     signal exitRequested(bool home)
     onExitRequested: home => { if (settingsBackend) settingsBackend.closeApp(home) }
@@ -54,6 +56,8 @@ ApplicationWindow {
             connectivityBackend: root.connectivityBackend
             timeBackend: root.timeBackend
             promptClient: root.promptClient
+            permissionClient: root.permissionClient
+            applicationsBackend: root.applicationsBackend
             wallpaper: wallpaperImage
             renderScale: root.contentScale
             topInset: 70

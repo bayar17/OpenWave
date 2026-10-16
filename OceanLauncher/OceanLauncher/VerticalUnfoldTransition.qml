@@ -31,8 +31,6 @@ QtObject {
         closing.start()
     }
     onReduceMotionChanged: {
-        // Switch to opacity-only motion, including when the preference changes
-        // during an animation. Continue from the current alpha without flashing.
         if (opening && opening.running) { opening.stop(); opening.start() }
         else if (closing && closing.running) { closing.stop(); closing.start() }
     }

@@ -1,5 +1,6 @@
 <node>
   <interface name="org.openwave.Prompt1">
+    <method name="RequestFor"><arg name="caller" type="s" direction="in"/><arg name="type" type="s" direction="in"/><arg name="options" type="a{sv}" direction="in"/><arg name="id" type="s" direction="out"/></method>
     <method name="Request"><arg name="type" type="s" direction="in"/><arg name="options" type="a{sv}" direction="in"/><arg name="id" type="s" direction="out"/></method>
     <method name="Cancel"><arg name="id" type="s" direction="in"/></method>
     <method name="GetResult"><arg name="id" type="s" direction="in"/><arg name="finished" type="b" direction="out"/><arg name="result" type="s" direction="out"/><arg name="text" type="s" direction="out"/></method>

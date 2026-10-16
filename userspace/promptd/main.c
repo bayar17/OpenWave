@@ -1,4 +1,5 @@
 #include <OpenWave/OpenWaveXml.h>
+#include <OpenWave/OpenWaveIdentity.h>
 #include <gio/gio.h>
 #include <glib-unix.h>
 #include <signal.h>
@@ -19,7 +20,7 @@ typedef struct {
     char *id, *sender, *type, *application, *result, *text;
     GVariant *options;
     GRegex *validation;
-    guint pid, minimum, maximum;
+    guint pid, owner_pid, minimum, maximum;
     gint64 deadline, finished_at;
 } Request;
 typedef struct { gint64 since; guint count; } Rate;
@@ -344,7 +345,7 @@ static gboolean validate_options(const char *type, GVariant *options)
         && (!g_str_equal(type, "form") || validate_form(options))
         && (!g_str_equal(type, "selection") || validate_selection(options));
 }
-static void request(Service *s, const char *sender, GVariant *parameters, GDBusMethodInvocation *call)
+static void request(Service *s, const char *sender, GVariant *parameters, GDBusMethodInvocation *call, const char *subject)
 {
     const char *type;
     GVariant *options;
@@ -385,11 +386,31 @@ static void request(Service *s, const char *sender, GVariant *parameters, GDBusM
     }
     guint uid = 0, pid = 0;
     char *exe = NULL;
-    if (!credentials(s, sender, &uid, &pid) || uid != getuid() || !(exe = executable(pid))) {
-        fail(call, "Unauthorized", "Could not verify the requesting process in this session.");
-        if (regex) g_regex_unref(regex);
-        g_variant_unref(options); return;
-    }
+    GVariant *identity = NULL;
+    GDBusConnection *system = NULL;
+#ifndef PROMPTD_TESTING
+    system = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, NULL);
+    if (system && subject) {
+        if (!credentials(s, sender, &uid, &pid)
+            || !openwave_supervised_process(uid, pid, "/run/openwave/permissiond.pid")) goto unauthorized;
+        identity = openwave_resolve_caller(system, subject, NULL);
+        if (!identity || !g_variant_lookup(identity, "pid", "u", &pid)) goto unauthorized;
+        exe = executable(pid);
+    } else if (system && credentials(s, sender, &uid, &pid)) {
+        char *owner = openwave_service_owner(system, "org.openwave.Applications", "/run/openwave/appd.pid", NULL);
+        GVariant *reply = owner ? g_dbus_connection_call_sync(system, owner, "/org/openwave/Applications", "org.openwave.Applications1",
+            "ResolveProcess", g_variant_new("(uu)", uid, pid), G_VARIANT_TYPE("(a{sv})"), 0, 1000, NULL, NULL) : NULL;
+        g_free(owner);
+        if (reply) { identity = g_variant_get_child_value(reply, 0); g_variant_unref(reply); }
+        exe = executable(pid);
+        if (!identity && uid != 0) goto unauthorized;
+    } else goto unauthorized;
+    if (system) { g_object_unref(system); system = NULL; }
+#else
+    (void) subject;
+    if (!credentials(s, sender, &uid, &pid) || uid != getuid() || !(exe = executable(pid))) goto unauthorized;
+#endif
+    if (!exe) goto unauthorized;
     guint pending = 0, owned = 0;
     for (GList *n = s->requests->head; n; n = n->next) {
         Request *r = n->data;
@@ -402,26 +423,44 @@ static void request(Service *s, const char *sender, GVariant *parameters, GDBusM
     if (now - rate->since > 60 * G_USEC_PER_SEC) { rate->since = now; rate->count = 0; }
     if (pending >= MAX_PENDING || owned >= PER_PROCESS || rate->count >= PER_MINUTE) {
         fail(call, "Busy", "Too many outstanding or frequent prompts.");
+        if (identity) g_variant_unref(identity);
         g_free(exe); if (regex) g_regex_unref(regex);
         g_variant_unref(options); return;
     }
     rate->count++;
     Request *r = g_new0(Request, 1);
     r->id = g_uuid_string_random(); r->sender = g_strdup(sender); r->type = g_strdup(type);
-    r->options = options; r->pid = pid; r->application = application_id(exe);
+    r->options = options; r->pid = pid; r->owner_pid = pid;
+    if (identity) g_variant_lookup(identity, "leaderPid", "u", &r->owner_pid);
+    const char *appid = NULL;
+    if (identity) g_variant_lookup(identity, "appId", "&s", &appid);
+    r->application = appid ? g_strdup(appid) : application_id(exe);
+    if (identity) g_variant_unref(identity);
     r->minimum = minimum; r->maximum = maximum; r->validation = regex;
     r->deadline = now + (gint64) timeout * 1000;
     g_free(exe);
     g_queue_push_tail(s->requests, r);
     g_dbus_method_invocation_return_value(call, g_variant_new("(s)", r->id));
     queue_changed(s);
+    return;
+unauthorized:
+    if (system) g_object_unref(system);
+    if (identity) g_variant_unref(identity);
+    fail(call, "Unauthorized", "The requester has no authenticated application identity.");
+    g_free(exe); if (regex) g_regex_unref(regex); g_variant_unref(options);
 }
 static void method_call(GDBusConnection *bus, const char *sender, const char *object,
     const char *interface, const char *method, GVariant *parameters, GDBusMethodInvocation *call, gpointer data)
 {
     (void) bus; (void) object; (void) interface;
     Service *s = data;
-    if (g_str_equal(method, "Request")) { request(s, sender, parameters, call); return; }
+    if (g_str_equal(method, "Request")) { request(s, sender, parameters, call, NULL); return; }
+    if (g_str_equal(method, "RequestFor")) {
+        const char *subject, *type; GVariant *options;
+        g_variant_get(parameters, "(&s&s@a{sv})", &subject, &type, &options);
+        GVariant *request_parameters = g_variant_ref_sink(g_variant_new("(s@a{sv})", type, options));
+        request(s, sender, request_parameters, call, subject); g_variant_unref(request_parameters); return;
+    }
     if (g_str_equal(method, "RegisterRenderer")) {
         if (!trusted_renderer(s, sender)) { fail(call, "Unauthorized", "Only the supervised OpenWave Shell may render prompts."); return; }
         if (s->renderer && !g_str_equal(sender, s->renderer)) { fail(call, "Busy", "A renderer is already registered."); return; }
@@ -447,7 +486,7 @@ static void method_call(GDBusConnection *bus, const char *sender, const char *ob
                 g_variant_unref(value);
             }
             g_variant_builder_add(&fields, "{sv}", "applicationId", g_variant_new_string(next->application));
-            g_variant_builder_add(&fields, "{sv}", "ownerPid", g_variant_new_uint32(next->pid));
+            g_variant_builder_add(&fields, "{sv}", "ownerPid", g_variant_new_uint32(next->owner_pid));
             g_variant_builder_add(&fields, "{sv}", "minLength", g_variant_new_uint32(next->minimum));
             g_variant_builder_add(&fields, "{sv}", "maxLength", g_variant_new_uint32(next->maximum));
         }
@@ -542,7 +581,7 @@ int main(int argc, char **argv)
 {
     Service s = { .requests = g_queue_new(),
         .rates = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, g_free),
-        .renderer_executable = "/usr/bin/ocean-launcher",
+        .renderer_executable = "/System/Applications/com.openwave.shell/bin/ocean-launcher",
         .renderer_pidfile = "/run/openwave/ocean.pid" };
 #ifdef PROMPTD_TESTING
     if (argc == 3) { s.renderer_executable = argv[1]; s.renderer_pidfile = argv[2]; }

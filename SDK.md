@@ -74,6 +74,19 @@ SDK sysroot, then run the runtime assembler. They use new build caches under
 `out/sdk-dependencies/<target-triple>`; the existing engine and codec binaries
 were exported intact, without an unnecessary WPE or compiler rebuild.
 
+`./build-openwave selinux` downloads the checksum-pinned
+[SELinux 3.11 libraries](https://github.com/SELinuxProject/selinux/wiki/Releases),
+builds libsepol (including CIL) and libselinux using the exported Clang/sysroot,
+and assembles rootfs. This step also runs automatically in `all`. It requires
+host `flex` and target PCRE2. Headers (`usr/include/selinux` and `usr/include/sepol`),
+static/shared libraries and pkg-config files go into the target SDK sysroot;
+only `usr/lib64/libselinux.so.1`, `usr/lib64/libsepol.so.2`, their runtime
+dependencies and licenses are deployed. Python/Ruby bindings and upstream target
+policy utilities are not built. Native clients can use target pkg-config packages `libselinux`
+and `libsepol` after sourcing `env.sh`. The build also stages OpenWave's policy;
+the userspace build integrates early policy loading/labeling and app confinement.
+See [SELinux configuration and its current boundaries](docs/SELINUX.md).
+
 The assembler copies installed runtime binaries, configuration, fonts, licenses,
 locale/time-zone data (including ICU’s external `.dat` resource) and app resources. It selects the deployed Qt QML modules
 and plugins, follows ELF shared-library dependencies, includes dynamically loaded
@@ -144,6 +157,13 @@ Public service implementations remain in `userspace/` and the Shell. Apps link
 working interfaces; it adds no placeholder services or promises of unrestricted
 application launch or file access.
 
+`OpenWave::Fonts` adds the central Source Sans Pro installation and the
+`OpenWave.Fonts` Qt Quick module. Initialize `OpenWave::FontManager` after
+creating `QGuiApplication`, then use `Fonts.family` or `Fonts.font()` in QML.
+See [the font API guide](userspace/fonts/README.md) for the catalog, standard Qt
+font properties, and SDK import paths. The SDK exports type metadata and a
+shared plugin; rootfs receives the plugin, shared library, fonts and license.
+
 `OpenWave::Xml` exposes a C/C++ XML loader backed by the existing target libxml2.
 Daemon D-Bus contracts live in `userspace/dbus/interfaces/` and are installed
 under `/usr/share/dbus-1/interfaces/`; they are loaded during daemon startup.
@@ -181,3 +201,40 @@ lifecycle operations. The existing `OpenWaveApplications::launch()` API routes
 through the versioned system-bus service; Ocean retains visual handoffs and
 Wayland surfaces, while appd owns processes. See
 [appd architecture and security limitations](userspace/appd/README.md).
+
+### Permissions
+
+Use `find_package(OpenWaveSDK REQUIRED COMPONENTS Permissions)` and link
+`OpenWave::Permissions`. `<OpenWave/PermissionClient.h>` provides the asynchronous
+`OpenWave::PermissionClient` Qt model/API for permission requests, status, scoped
+listing, and change notifications. Settings administrative methods are rejected
+for other application identities. Supported identifiers are `files.read`,
+`files.write`, and `files.directory`; other resources are restricted.
+The read-only `records` property exposes the current model's dictionaries to
+QML and notifies through `recordsChanged`. Records include `requestedAt` (Unix
+milliseconds, zero if no request was recorded) and `supported`. Status queries
+and administrator policy changes never fabricate request history. Cross-app
+records remain restricted to authenticated Settings.
+
+Permission status alone does not grant filesystem access. Use
+`OpenWavePortals::openFile`, `saveFile`, or `selectDirectory` for brokered grants.
+Directory grants expose `directoryToken`; `createFile(directoryToken, filename)`
+creates a non-overwriting file in that selected folder. An empty directory token
+uses the current user's Downloads folder. Writes use `PortalGrant::writeAll` or
+the granted descriptor, not the display path.
+
+Applications must be installed and launched through appd. Settings and Files are
+trusted system components; regular applications use isolated UIDs and inherited
+Landlock restrictions. Build the corresponding kernel with
+`./build-openwave kernel`. See [permissiond](userspace/permissiond/README.md) for
+policy lifetimes, enforcement, revocation, and validation commands.
+
+## Native bundles
+
+See [the bundle contract](docs/APPLICATION-BUNDLES.md) for manifest validation, SDK CMake installation, runtime search paths, full application IDs, and private Config/Cache/Data resolvers.
+
+Application Services combines the existing native application, permission,
+portal and prompt clients under `OpenWave::ApplicationServices` and
+`<OpenWave/ApplicationServices.h>`. The daemons remain separate. See
+[Application Services](userspace/application-services/README.md) for private
+lifecycle IPC, capability availability, launch-bound grants and enforcement.

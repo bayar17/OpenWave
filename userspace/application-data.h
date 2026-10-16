@@ -1,6 +1,10 @@
 #pragma once
 
+#include "application-id.h"
 #include <QDir>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QRegularExpression>
@@ -9,9 +13,23 @@
 #include <pwd.h>
 #include <unistd.h>
 
-// Resolve the installed application's identity rather than its display name.
+inline QString openwaveApplicationBundlePath()
+{
+    const QDir binary(QCoreApplication::applicationDirPath());
+    const QString root = QDir::cleanPath(binary.filePath(QStringLiteral("..")));
+    return QFileInfo::exists(root + QStringLiteral("/manifest.json")) ? root : QString();
+}
+
 inline QString openwaveApplicationId()
 {
+    const QString bundle = openwaveApplicationBundlePath();
+    if (!bundle.isEmpty()) {
+        QFile manifest(bundle + QStringLiteral("/manifest.json"));
+        if (!manifest.open(QIODevice::ReadOnly) || manifest.size() > 65536) return {};
+        const auto object = QJsonDocument::fromJson(manifest.readAll()).object();
+        return object.value(QStringLiteral("schemaVersion")).toInt() == 1
+            ? object.value(QStringLiteral("id")).toString() : QString();
+    }
     QString desktop = QGuiApplication::desktopFileName();
     if (!desktop.endsWith(QStringLiteral(".desktop"))) desktop += QStringLiteral(".desktop");
     QString path = QStandardPaths::locate(QStandardPaths::ApplicationsLocation, desktop);
@@ -20,14 +38,16 @@ inline QString openwaveApplicationId()
 #endif
     if (path.isEmpty()) return {};
     QSettings entry(path, QSettings::IniFormat);
-    return entry.value(QStringLiteral("Desktop Entry/X-OpenWave-AppId")).toString();
+    return openwaveCanonicalApplicationId(entry.value(QStringLiteral("Desktop Entry/X-OpenWave-AppId")).toString());
 }
 
 inline QString openwaveUserDataPath(const QString &usersPath = QStringLiteral("/Data/Users"),
                                    QString userName = {})
 {
     if (userName.isEmpty()) {
-        if (const passwd *user = getpwuid(geteuid())) userName = QString::fromLocal8Bit(user->pw_name);
+        userName = qEnvironmentVariable("OPENWAVE_SESSION_USER");
+        if (userName.isEmpty())
+            if (const passwd *user = getpwuid(geteuid())) userName = QString::fromLocal8Bit(user->pw_name);
     }
     static const QRegularExpression segment(QStringLiteral("^[a-zA-Z0-9_.-]{1,128}$"));
     if (!segment.match(userName).hasMatch() || userName == "." || userName == "..") return {};
@@ -44,3 +64,10 @@ inline QString openwaveApplicationDataPath(const QString &applicationId,
         || applicationId == "." || applicationId == "..") return {};
     return QDir(user).filePath(QStringLiteral(".DataLocation/Applications/") + applicationId);
 }
+
+inline QString openwaveApplicationConfigPath(const QString &id)
+{ const auto root = openwaveApplicationDataPath(id); return root.isEmpty() ? QString() : QDir(root).filePath(QStringLiteral("Config")); }
+inline QString openwaveApplicationCachePath(const QString &id)
+{ const auto root = openwaveApplicationDataPath(id); return root.isEmpty() ? QString() : QDir(root).filePath(QStringLiteral("Cache")); }
+inline QString openwaveApplicationStoragePath(const QString &id)
+{ const auto root = openwaveApplicationDataPath(id); return root.isEmpty() ? QString() : QDir(root).filePath(QStringLiteral("Data")); }

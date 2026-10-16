@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <node>
   <interface name="org.openwave.Applications1">
+    <method name="GetSessionIdentity"><arg name="userId" type="u" direction="out"/><arg name="session" type="s" direction="out"/></method>
+    <method name="GetOwnIdentity"><arg name="identity" type="a{sv}" direction="out"/></method>
+    <method name="ResolveCaller"><arg name="connection" type="s" direction="in"/><arg name="identity" type="a{sv}" direction="out"/></method>
+    <method name="ResolveProcess"><arg name="uid" type="u" direction="in"/><arg name="pid" type="u" direction="in"/><arg name="identity" type="a{sv}" direction="out"/></method>
+    <method name="RevokeAccess"><arg name="appId" type="s" direction="in"/></method>
     <method name="ListApplications"><arg name="applications" type="aa{sv}" direction="out"/></method>
     <method name="GetApplicationInfo"><arg name="appId" type="s" direction="in"/><arg name="info" type="a{sv}" direction="out"/></method>
     <method name="Launch"><arg name="appId" type="s" direction="in"/><arg name="arguments" type="as" direction="in"/><arg name="pid" type="u" direction="out"/></method>

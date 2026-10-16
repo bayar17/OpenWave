@@ -326,8 +326,6 @@ void ConnectivityBackend::apply(const Result &result, Operation operation, const
         m_bluetoothActionPath.clear();
         m_bluetoothActionState.clear();
     }
-    // NetworkManager may briefly return an empty AP cache during a scan or
-    // roam. Keep the last discovered list until Wi-Fi is actually switched off.
     if ((operation == Operation::Forget && result.actionSucceeded) || !result.networks.isEmpty() || !result.serviceAvailable ||
         !result.wifiDeviceAvailable || !result.wifiEnabled)
         m_networks = result.networks;
@@ -349,8 +347,6 @@ void ConnectivityBackend::apply(const Result &result, Operation operation, const
         if (!result.savedWifiInfo.isEmpty())
             m_savedWifiInfo = result.savedWifiInfo;
     }
-    // A successful Pair acknowledgement is the boundary between the two phases.
-    // Pair failures never trigger Connect; a queued user action takes precedence.
     if (operation == Operation::BluetoothPair && result.actionSucceeded && !m_hasQueuedAction) {
         start(Operation::BluetoothConnect, actionPath);
         return;

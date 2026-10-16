@@ -194,7 +194,7 @@ Item {
                 width: 130
                 height: 130
                 anchors.horizontalCenter: parent.horizontalCenter
-                y: 129
+                y: parent.height * 129 / 445
             }
 
             Text {
@@ -203,8 +203,11 @@ Item {
                 font.family: card.fontFamily
                 font.weight: Font.Light
                 font.pixelSize: 32
+                width: parent.width - 24
+                horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
                 anchors.horizontalCenter: parent.horizontalCenter
-                y: 279
+                y: parent.height * 279 / 445
             }
         }
     }

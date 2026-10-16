@@ -1,4 +1,5 @@
 #include <OpenWave/OpenWaveXml.h>
+#include <OpenWave/OpenWaveIdentity.h>
 #include <gio/gio.h>
 #include <png.h>
 #include <errno.h>
@@ -175,7 +176,26 @@ static void method_call(GDBusConnection *connection, const char *sender,
             "Could not verify the requesting user");
         return;
     }
+    if (!strcmp(service->root, "/") && uid) {
+        if (!strcmp(method, "SetWallpaper")) {
+            g_dbus_method_invocation_return_dbus_error(invocation, BUS_NAME ".Unauthorized", "Only trusted system components may change the wallpaper"); return;
+        }
+        GVariant *identity = openwave_resolve_caller(service->bus, sender, NULL);
+        if (!identity || !g_variant_lookup(identity, "userId", "u", &uid)) {
+            if (identity) g_variant_unref(identity);
+            g_dbus_method_invocation_return_dbus_error(invocation, BUS_NAME ".Unauthorized", "Application identity is unavailable"); return;
+        }
+        g_variant_unref(identity);
+    }
     char *public_dir = user_directory(uid);
+    if (!strcmp(method, "GetImage")) {
+        char *hash = current_hash(service, public_dir), *path = verified_path(service, public_dir, hash), *bytes = NULL;
+        gsize length = 0;
+        if (path) g_file_get_contents(path, &bytes, &length, NULL);
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(@ay)",
+            g_variant_new_fixed_array(G_VARIANT_TYPE_BYTE, bytes, length, 1)));
+        g_free(hash); g_free(path); g_free(bytes); g_free(public_dir); return;
+    }
     if (g_str_equal(method, "GetCurrent")) {
         char *hash = current_hash(service, public_dir);
         char *path = verified_path(service, public_dir, hash);

@@ -1,6 +1,6 @@
 @PACKAGE_INIT@
 include(CMakeFindDependencyMacro)
-find_dependency(Qt6 6.10 COMPONENTS Core Gui Network)
+find_dependency(Qt6 6.10 COMPONENTS Core Gui Network Qml)
 set(_openwave_triple "${CMAKE_CXX_COMPILER_TARGET}")
 if(NOT _openwave_triple)
     set(_openwave_triple "${OPENWAVE_TARGET_TRIPLE}")
@@ -11,7 +11,9 @@ if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/${_openwave_triple}/OpenWaveSDKTargets.
     return()
 endif()
 include("${CMAKE_CURRENT_LIST_DIR}/${_openwave_triple}/OpenWaveSDKTargets.cmake")
-foreach(_component IN ITEMS Prompts FileChooser Applications Wallpaper Time Connectivity SystemControls ApplicationData Xml)
+get_filename_component(OpenWaveSDK_QML_IMPORT_PATH
+    "${CMAKE_CURRENT_LIST_DIR}/../../../sysroot/${_openwave_triple}/usr/qml" ABSOLUTE)
+foreach(_component IN ITEMS Fonts Prompts FileChooser Applications Wallpaper Time Connectivity SystemControls ApplicationData Xml Identity Permissions ApplicationServices)
     set(OpenWaveSDK_${_component}_FOUND TRUE)
 endforeach()
 check_required_components(OpenWaveSDK)

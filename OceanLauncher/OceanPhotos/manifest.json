@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "com.openwave.photos",
+  "name": "Gallery",
+  "version": "0.1.0",
+  "type": "system",
+  "executable": "bin/ocean-photos",
+  "runtime": "openwave-qt",
+  "sandbox": {"enabled": true, "profile": "standard"},
+  "permissions": ["files.read"],
+  "singleInstance": true,
+  "acceptsPaths": false,
+  "icon": "resources/icon.svg"
+}

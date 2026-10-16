@@ -1,5 +1,6 @@
 #include "appd.h"
 #include <OpenWave/OpenWaveXml.h>
+#include <OpenWave/OpenWaveIdentity.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -40,9 +41,47 @@ static void method(GDBusConnection *connection, const char *sender, const char *
 {
     (void)connection; (void)path; (void)interface;
     Manager *m = data; guint uid = 0, pid = 0;
-    if (!appd_credentials(m, sender, &uid, &pid) || (uid != 0 && uid != m->uid)) {
+    if (!appd_credentials(m, sender, &uid, &pid)) {
         failure(call, "Application session credentials are required"); return;
     }
+    Instance *caller = appd_caller(m, uid, pid);
+    gboolean privileged = openwave_supervised_process(uid, pid, "/run/openwave/ocean.pid")
+        || openwave_supervised_process(uid, pid, "/run/openwave/permissiond.pid");
+    if (!strcmp(member, "ResolveCaller") || !strcmp(member, "ResolveProcess") || !strcmp(member, "GetOwnIdentity")) {
+        guint target_uid = uid, target_pid = pid;
+        if (strcmp(member, "GetOwnIdentity")) {
+            if (!privileged && !openwave_supervised_process(uid, pid, "/run/openwave/portal.pid")
+                && !openwave_supervised_process(uid, pid, "/run/openwave/promptd.pid")
+                && !openwave_supervised_process(uid, pid, "/run/openwave/wallpaper.pid")) {
+                failure(call, "Only supervised identity consumers may resolve other applications"); return;
+            }
+            if (!strcmp(member, "ResolveCaller")) {
+                const char *unique; g_variant_get(parameters, "(&s)", &unique);
+                if (unique[0] != ':' || !appd_credentials(m, unique, &target_uid, &target_pid)) {
+                    failure(call, "Caller connection is no longer present"); return;
+                }
+            } else g_variant_get(parameters, "(uu)", &target_uid, &target_pid);
+        }
+        Instance *target = appd_caller(m, target_uid, target_pid);
+        if (!target) { failure(call, "Process is not a live managed application"); return; }
+        g_dbus_method_invocation_return_value(call, g_variant_new("(@a{sv})", appd_identity(m, target, target_pid))); return;
+    }
+    if (!strcmp(member, "GetSessionIdentity")) {
+        if (!openwave_supervised_process(uid, pid, "/run/openwave/permissiond.pid")) {
+            failure(call, "Only permissiond may read the session identity"); return;
+        }
+        g_dbus_method_invocation_return_value(call, g_variant_new("(us)", m->uid, m->session)); return;
+    }
+    if (!strcmp(member, "RevokeAccess")) {
+        if (!openwave_supervised_process(uid, pid, "/run/openwave/permissiond.pid")) {
+            failure(call, "Only permissiond may revoke application access"); return;
+        }
+        const char *id; g_variant_get(parameters, "(&s)", &id);
+        App *app = g_hash_table_lookup(m->apps, id);
+        if (app && !appd_trusted_app(app)) appd_revoke(m, app);
+        g_dbus_method_invocation_return_value(call, NULL); return;
+    }
+    if (!caller && !privileged && uid != 0) { failure(call, "A managed application or privileged system process is required"); return; }
     gboolean renderer = m->renderer && !strcmp(m->renderer, sender) && pid == m->renderer_pid;
     if (!strcmp(member, "RegisterShell")) {
         if (!trusted_renderer(m, uid, pid)) { failure(call, "The supervised Ocean compositor is required"); return; }
@@ -59,6 +98,7 @@ static void method(GDBusConnection *connection, const char *sender, const char *
             ready = lstat(socket, &st) == 0 && S_ISSOCK(st.st_mode) && st.st_uid == m->uid;
             g_free(socket);
         }
+        if (ready) ready = appd_publish_sockets(m);
         m->ready = ready;
         g_dbus_method_invocation_return_value(call, g_variant_new("(b)", ready)); return;
     }
@@ -100,6 +140,9 @@ static void method(GDBusConnection *connection, const char *sender, const char *
     if (!strcmp(member, "GetApplicationInfo")) {
         g_dbus_method_invocation_return_value(call, g_variant_new("(@a{sv})", appd_info(m, app, NULL)));
     } else if (!strcmp(member, "Terminate")) {
+        if (!privileged && uid != 0 && (!caller || caller->app != app) && !(caller && appd_trusted_app(caller->app))) {
+            failure(call, "Applications may only terminate themselves"); g_strfreev(arguments); return;
+        }
         GHashTableIter iter; gpointer value;
         g_hash_table_iter_init(&iter, m->pending);
         while (g_hash_table_iter_next(&iter, NULL, &value)) {
@@ -143,6 +186,10 @@ static void owner_changed(GDBusConnection *bus, const char *sender, const char *
     (void)bus; (void)sender; (void)path; (void)interface; (void)signal;
     Manager *m = data; const char *name, *old, *next;
     g_variant_get(parameters, "(&s&s&s)", &name, &old, &next);
+    if (m->permission_peer && !strcmp(name, m->permission_peer) && *old && !*next) {
+        g_clear_pointer(&m->permission_peer, g_free);
+        g_clear_pointer(&m->permission_correlation, g_free);
+    }
     if (m->renderer && !strcmp(name, m->renderer) && *old && !*next) appd_renderer_lost(m);
 }
 
@@ -178,5 +225,5 @@ gboolean appd_register_bus(Manager *m, GError **error)
     if (!reply) return FALSE;
     guint result; g_variant_get(reply, "(u)", &result); g_variant_unref(reply);
     if (result != 1) { g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_EXISTS, "Another appd already owns the application service"); return FALSE; }
-    return TRUE;
+    return appd_register_services(m, error);
 }

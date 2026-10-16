@@ -43,8 +43,6 @@ Flickable {
         return (width - (items * cellWidth + Math.max(0, items - 1) * columnSpacing)) / 2
     }
 
-    // Hit testing follows the actual centered row, including the last partial
-    // row, and uses content coordinates after a flick or drag autoscroll.
     function insertionIndex(x, y) {
         if (!count) return 0
         const contentY = y + root.contentY - topPadding

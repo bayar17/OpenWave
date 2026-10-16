@@ -19,7 +19,7 @@ private slots:
         {
             const int fd = ::open(QFile::encodeName(directory.path()).constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
             QVERIFY(fd >= 0);
-            PortalGrant grant("untrusted display name", fd, false, true);
+            PortalGrant grant("untrusted display name", fd, false, true, nullptr, "test-directory-token");
             portal->completed({QVariant::fromValue(static_cast<QObject *>(&grant))});
             QCOMPARE(settings.downloadFolder(), directory.path());
         }
@@ -28,7 +28,7 @@ private slots:
         {
             const int fd = ::open(QFile::encodeName(outside.path()).constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
             QVERIFY(fd >= 0);
-            PortalGrant grant("Downloads", fd, false, true);
+            PortalGrant grant("Downloads", fd, false, true, nullptr, "outside-directory-token");
             portal->completed({QVariant::fromValue(static_cast<QObject *>(&grant))});
             QVERIFY(!settings.error().isEmpty());
             QCOMPARE(settings.downloadFolder(), directory.path());
@@ -55,13 +55,13 @@ private slots:
         QVERIFY(!restored.rememberHistory()); QVERIFY(!restored.blockThirdPartyCookies());
         QCOMPARE(restored.searchEngine(), QString("bing"));
         QCOMPARE(restored.downloadFolder(), directory.path() + "/Downloads");
-        const auto permissions = QFileInfo(directory.path() + "/Browser/Settings.json").permissions();
+        const auto permissions = QFileInfo(directory.path() + "/Config/Settings.json").permissions();
         QVERIFY(!(permissions & (QFile::ReadGroup | QFile::ReadOther | QFile::WriteGroup | QFile::WriteOther)));
     }
     void corruptAndUnsafeStorage() {
         QTemporaryDir directory, outside;
-        QVERIFY(QDir().mkpath(directory.path() + "/Browser"));
-        QFile file(directory.path() + "/Browser/Settings.json");
+        QVERIFY(QDir().mkpath(directory.path() + "/Config"));
+        QFile file(directory.path() + "/Config/Settings.json");
         QVERIFY(file.open(QIODevice::WriteOnly)); file.write("not json"); file.close();
         BrowserPreferences damaged(directory.path(), directory.path());
         QVERIFY(!damaged.error().isEmpty()); QVERIFY(damaged.askOnDownload());

@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(GNUInstallDirs)
 
 find_package(Qt6 6.10 REQUIRED COMPONENTS Quick QuickControls2 Svg WaylandCompositor Network)
-find_package(OpenWaveSDK REQUIRED COMPONENTS Applications Wallpaper Time Prompts SystemControls ApplicationData)
+find_package(OpenWaveSDK REQUIRED COMPONENTS Fonts Applications Wallpaper Time Prompts SystemControls ApplicationData)
 qt_standard_project_setup(REQUIRES 6.10)
 
 if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/importedcontent/CMakeLists.txt")
@@ -22,6 +22,7 @@ qt_add_executable(appOceanLauncher main.cpp AppController.cpp AppController.h
 qt_add_qml_module(appOceanLauncher
     URI OceanLauncher
     VERSION 1.0
+    IMPORT_PATH "${OpenWaveSDK_QML_IMPORT_PATH}"
     QML_FILES
         Main.qml
         AppIcon.qml
@@ -35,6 +36,7 @@ qt_add_qml_module(appOceanLauncher
         PortalBackdrop.qml
         PortalTitle.qml
         RecentAppCard.qml
+        RecentAppGrid.qml
         RecentAppTransition.qml
         QuickMenu.qml
         QuickMenuTile.qml
@@ -63,8 +65,6 @@ set_source_files_properties("${PORTAL_ASSET_DIR}/folder-outline.svg" PROPERTIES
     QT_RESOURCE_ALIAS "assets/folder-outline.svg")
 set_source_files_properties("${PORTAL_ASSET_DIR}/file-outline.svg" PROPERTIES
     QT_RESOURCE_ALIAS "assets/file-outline.svg")
-set_source_files_properties("${PORTAL_ASSET_DIR}/fonts/SourceSansPro-ExtraLight.otf" PROPERTIES
-    QT_RESOURCE_ALIAS "assets/fonts/SourceSansPro-ExtraLight.otf")
 set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/assets/portal-image-outline.svg" PROPERTIES
     QT_RESOURCE_ALIAS "assets/image-outline.svg")
 qt_add_resources(appOceanLauncher ocean_portal_assets
@@ -72,12 +72,11 @@ qt_add_resources(appOceanLauncher ocean_portal_assets
     FILES
         "${PORTAL_ASSET_DIR}/folder-outline.svg"
         "${PORTAL_ASSET_DIR}/file-outline.svg"
-        "${PORTAL_ASSET_DIR}/fonts/SourceSansPro-ExtraLight.otf"
         "${CMAKE_CURRENT_LIST_DIR}/assets/portal-image-outline.svg")
 
-# OceanTopbard owns the status and Quick Menu artwork. Embed those resources
-# in the compositor so the bar stays visible over every application surface.
-set(OCEAN_TOPBAR_ASSET_DIR "${CMAKE_CURRENT_LIST_DIR}/../OceanTopbard/assets")
+# The compositor owns the status and Quick Menu artwork. Keep the resource
+# URLs stable so the bar stays visible over every application surface.
+set(OCEAN_TOPBAR_ASSET_DIR "${CMAKE_CURRENT_LIST_DIR}/assets/topbar")
 set(OCEAN_TOPBAR_RESOURCES)
 foreach(icon IN ITEMS wifi bluetooth cellular airplane volume brightness)
     set(asset "${OCEAN_TOPBAR_ASSET_DIR}/QuickMenu/${icon}.svg")
@@ -120,7 +119,7 @@ set_target_properties(appOceanLauncher PROPERTIES
 target_link_libraries(appOceanLauncher
     PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Svg Qt6::WaylandCompositor Qt6::Network
 )
-target_link_libraries(appOceanLauncher PRIVATE OpenWave::Applications OpenWave::Wallpaper OpenWave::Time OpenWave::Prompts OpenWave::SystemControls OpenWave::ApplicationData)
+target_link_libraries(appOceanLauncher PRIVATE OpenWave::Fonts OpenWave::Applications OpenWave::Wallpaper OpenWave::Time OpenWave::Prompts OpenWave::SystemControls OpenWave::ApplicationData)
 if(CMAKE_CROSSCOMPILING)
     target_include_directories(appOceanLauncher PRIVATE
         "${CMAKE_SYSROOT}/usr/include/glib-2.0"
@@ -132,11 +131,6 @@ else()
     target_link_libraries(appOceanLauncher PRIVATE PkgConfig::GIO)
 endif()
 
-install(TARGETS appOceanLauncher
-    BUNDLE DESTINATION .
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
 
 # Qt's embedded FreeType backend also needs a system font directory.
 install(FILES assets/fonts/DejaVuSans.ttf DESTINATION ${CMAKE_INSTALL_LIBDIR}/fonts)
@@ -146,3 +140,11 @@ install(FILES assets/fonts/Inter-Regular.otf assets/fonts/Inter-Light.otf
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/fonts)
 install(FILES assets/fonts/Inter-LICENSE.txt assets/fonts/Inter-Apache-2.0.txt
         DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/ocean-launcher/Inter)
+
+option(OPENWAVE_PERMISSION_TESTS "Enable the test-only permission integration driver" OFF)
+if(OPENWAVE_PERMISSION_TESTS)
+    set_property(SOURCE main.cpp APPEND PROPERTY COMPILE_DEFINITIONS OPENWAVE_PERMISSION_TESTS)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/OpenWaveBundle.cmake")
+openwave_install_bundle(appOceanLauncher com.openwave.shell SYSTEM)

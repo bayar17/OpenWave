@@ -10,15 +10,21 @@ Usage: ./build-openwave COMMAND [OPTIONS]
   llvm                          Patch/build/install the native Clang/LLVM compiler
   userspace [--image PATH]       Build system apps/services and assemble rootfs
   sdk                           Build and install the public API client libraries
+  kernel                        Build the kernel with application isolation enabled
   llvm-patch                    Initialize LLVM sources and apply the OpenWave patch
   browser-engine [all|deps|media|engine]
                                 Download/build browser codecs and/or build WPE
   audio                         Download/build ALSA, PipeWire, WirePlumber and audio kernel
   bluetooth-audio               Build Bluetooth audio dependencies
   mdns                          Download/build Avahi and its dependencies
+  selinux                       Build SELinux libraries and OpenWave policy
+  bubblewrap                    Download/build Bubblewrap and libcap into rootfs
   tzdata                        Install time zone data into runtime staging
   image ROOTFS NEW_IMAGE        Create a new ext4 image; never overwrite one
+  test-permissions NEW_TEST_IMAGE
+                                Build and test permission enforcement in QEMU
   test-appd NEW_TEST_IMAGE       Build and run application daemon tests in QEMU
+  test-selinux NEW_TEST_IMAGE    Build and test SELinux confinement in QEMU
   test-browser-input NEW_TEST_IMAGE
                                 Build and run browser pointer tests in QEMU
 
@@ -87,8 +93,36 @@ build_all() (
     OPENWAVE_BUILD_ALL=1 build_audio
     build_bluetooth_audio
     build_mdns
+    build_selinux
+    build_bubblewrap
     build_browser_engine engine
     build_userspace "$@"
+)
+
+build_kernel() (
+    source "$ROOT/env.sh" --build
+    prepare_llvm
+    local build="${OPENWAVE_KERNEL_BUILD:-$ROOT/out/linux}"
+    local arch image
+    case "$OPENWAVE_TARGET_TRIPLE" in
+        x86_64-*) arch=x86; image=bzImage ;;
+        aarch64-*) arch=arm64; image=Image ;;
+        *) echo "Unsupported kernel target: $OPENWAVE_TARGET_TRIPLE" >&2; exit 1 ;;
+    esac
+    [[ -f "$build/.config" ]] || { echo "Configure $build/.config first" >&2; exit 1; }
+    "$ROOT/linux/scripts/config" --file "$build/.config" -e SECURITY -e SECURITY_LANDLOCK \
+        -e SECURITY_SELINUX -e SECURITY_SELINUX_DEVELOP -e EXT4_FS_SECURITY -e AUDIT \
+        --set-str EXTRA_FIRMWARE_DIR "$OPENWAVE_SYSROOT/lib/firmware"
+    local lsm
+    lsm="$("$ROOT/linux/scripts/config" --file "$build/.config" --state LSM)"
+    lsm="${lsm#\"}"; lsm="${lsm%\"}"
+    if [[ "$lsm" == undef || "$lsm" == n ]]; then lsm=landlock; fi
+    case ",$lsm," in
+        *,selinux,*) ;;
+        *) "$ROOT/linux/scripts/config" --file "$build/.config" --set-str LSM "${lsm:+$lsm,}selinux" ;;
+    esac
+    PATH="$OPENWAVE_SDK/bin:$PATH" make -C "$ROOT/linux" O="$build" ARCH="$arch" LLVM=1 olddefconfig
+    PATH="$OPENWAVE_SDK/bin:$PATH" make -C "$ROOT/linux" O="$build" ARCH="$arch" LLVM=1 -j "${OPENWAVE_BUILD_JOBS:-4}" "$image"
 )
 
 build_audio() (
@@ -122,6 +156,16 @@ PATCH="$ROOT/userspace/audio-patches/pipewire-1.4.9-clang-const.patch"
 if ! git -C "$ROOT/third_party/pipewire" apply --reverse --check "$PATCH" 2>/dev/null; then
     git -C "$ROOT/third_party/pipewire" apply --check "$PATCH"
     git -C "$ROOT/third_party/pipewire" apply "$PATCH"
+fi
+
+AUDIO_ACCESS_PATCH="$ROOT/userspace/audio-patches/pipewire-1.4.9-openwave-app-access.patch"
+if ! git -C "$ROOT/third_party/pipewire" apply --reverse --check "$AUDIO_ACCESS_PATCH" 2>/dev/null; then
+    git -C "$ROOT/third_party/pipewire" apply --check "$AUDIO_ACCESS_PATCH"
+    git -C "$ROOT/third_party/pipewire" apply "$AUDIO_ACCESS_PATCH"
+fi
+
+if [[ -x "$ROOT/out/host-tools/bin/gdbus-codegen" ]]; then
+    export PATH="$ROOT/out/host-tools/bin:$PATH"
 fi
 
 export PKG_CONFIG_LIBDIR="$TARGET/usr/lib64/pkgconfig:$TARGET/usr/share/pkgconfig"
@@ -180,7 +224,7 @@ if [[ "${OPENWAVE_BUILD_ALL:-0}" != 1 ]]; then
     "$ROOT/build-openwave" userspace
 fi
 
-"$ROOT/linux/scripts/config" --file "$ROOT/out/linux/.config" -e SND_VIRTIO
+"$ROOT/linux/scripts/config" --file "$ROOT/out/linux/.config" -e SND_VIRTIO -e SECURITY -e SECURITY_LANDLOCK --set-str EXTRA_FIRMWARE_DIR "$TARGET/lib/firmware"
 PATH="$OPENWAVE_SDK/bin:$PATH" make -C "$ROOT/linux" \
     O="$ROOT/out/linux" ARCH=x86 LLVM=1 olddefconfig
 PATH="$OPENWAVE_SDK/bin:$PATH" make -C "$ROOT/linux" \
@@ -211,7 +255,8 @@ done
 for patch in \
     "$ROOT/userspace/audio-patches/pipewire-1.4.9-clang-const.patch" \
     "$ROOT/userspace/audio-patches/pipewire-1.4.9-bluez5-clang-const.patch" \
-    "$ROOT/userspace/audio-patches/pipewire-1.4.9-bluez5-release.patch"; do
+    "$ROOT/userspace/audio-patches/pipewire-1.4.9-bluez5-release.patch" \
+    "$ROOT/userspace/audio-patches/pipewire-1.4.9-openwave-app-access.patch"; do
     if ! git -C "$PIPEWIRE_SOURCE" apply --reverse --check "$patch" 2>/dev/null; then
         git -C "$PIPEWIRE_SOURCE" apply --check "$patch"
         git -C "$PIPEWIRE_SOURCE" apply "$patch"
@@ -250,6 +295,10 @@ mkdir -p "$OPENWAVE_DEPENDENCY_BUILD/sbc-openwave" "$OPENWAVE_DEPENDENCY_BUILD/b
     make DESTDIR="$SYSROOT" install
 )
 
+if [[ -x "$ROOT/out/host-tools/bin/gdbus-codegen" ]]; then
+    export PATH="$ROOT/out/host-tools/bin:$PATH"
+fi
+
 pipewire_options=(
     -Dbluez5=enabled -Dlibusb=disabled
     -Dbluez5-backend-hfp-native=disabled -Dbluez5-backend-hsp-native=disabled
@@ -274,9 +323,6 @@ else
         -Dpw-cat=disabled '-Dsession-managers=[]' "${pipewire_options[@]}"
 fi
 
-if [[ -x "$ROOT/out/host-tools/bin/gdbus-codegen" ]]; then
-    export PATH="$ROOT/out/host-tools/bin:$PATH"
-fi
 if ! command -v gdbus-codegen >/dev/null 2>&1; then
     echo "The host gdbus-codegen build tool is required" >&2
     exit 1
@@ -560,6 +606,128 @@ install -m644 "$ROOT/userspace/config/avahi-daemon.conf" \
 python3 "$ROOT/scripts/assemble-openwave-rootfs.py"
 )
 
+build_selinux() (
+source "$ROOT/env.sh" --build
+prepare_llvm
+local version=3.11 build="$OPENWAVE_DEPENDENCY_BUILD/selinux-3.11"
+local package checksum archive cc ar ranlib cflags
+mkdir -p "$build" "$ROOT/third_party"
+export PKG_CONFIG_SYSROOT_DIR="$OPENWAVE_SYSROOT"
+export PKG_CONFIG_LIBDIR="$OPENWAVE_SYSROOT/usr/lib64/pkgconfig:$OPENWAVE_SYSROOT/usr/lib/pkgconfig:$OPENWAVE_SYSROOT/usr/share/pkgconfig"
+unset PKG_CONFIG_PATH CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH
+pkg-config --exists libpcre2-8 || {
+    echo 'SELinux requires target PCRE2 in the exported SDK.' >&2
+    exit 1
+}
+command -v flex >/dev/null || { echo 'SELinux requires host flex.' >&2; exit 1; }
+# Make recipes execute these commands through a shell; quote SDK paths there.
+printf -v cc '%q --target=%q --sysroot=%q' "$OPENWAVE_SDK/bin/clang" "$OPENWAVE_TARGET_TRIPLE" "$OPENWAVE_SYSROOT"
+printf -v ar '%q' "$OPENWAVE_SDK/bin/llvm-ar"
+printf -v ranlib '%q' "$OPENWAVE_SDK/bin/llvm-ranlib"
+cflags='-O2 -std=gnu17 -fPIC -fstack-protector-strong'
+case "$OPENWAVE_TARGET_TRIPLE" in x86_64-*) cflags+=' -mstack-protector-guard=tls' ;; esac
+local options=("CC=$cc" "AR=$ar" "RANLIB=$ranlib" "CFLAGS=$cflags"
+               'CPPFLAGS=-I../../install/usr/include' 'LDFLAGS=-Wl,-z,relro,-z,now' OS=Linux
+               "ARCH=${OPENWAVE_TARGET_TRIPLE%%-*}" PREFIX=/usr
+               LIBDIR=/usr/lib64 SHLIBDIR=/usr/lib64)
+for package in libsepol libselinux; do
+    case "$package" in
+        libsepol) checksum=79f3d2c88f44b7eb5cf54d9792e03232297e17f97a179163f2750099a00f164d ;;
+        libselinux) checksum=73d419c6e20e874adaa4019372cbd097eecf4d276e13f27ec5e67d35c0bd203c ;;
+    esac
+    archive="$build/$package-$version.tar.gz"
+    if [[ ! -f "$archive" ]]; then
+        curl -L --fail --silent --show-error \
+            "https://github.com/SELinuxProject/selinux/releases/download/$version/$package-$version.tar.gz" \
+            -o "$archive.partial"
+        printf '%s  %s\n' "$checksum" "$archive.partial" | sha256sum -c -
+        mv "$archive.partial" "$archive"
+    fi
+    printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -
+    if [[ ! -d "$ROOT/third_party/$package-$version" ]]; then
+        tar -xf "$archive" -C "$ROOT/third_party"
+    fi
+    if [[ ! -d "$build/$package-$version" ]]; then
+        cp -a "$ROOT/third_party/$package-$version" "$build/"
+    fi
+    # Build just the C libraries, retaining CIL support without language bindings
+    # or policy utilities. Relative DESTDIR also works in paths containing spaces.
+    make -C "$build/$package-$version/src" "${options[@]}" clean
+    if [[ "$package" == libsepol ]]; then
+        make -C "$build/$package-$version/src" "${options[@]}" -j "${OPENWAVE_BUILD_JOBS:-4}"
+        make -C "$build/$package-$version/src" "${options[@]}" DESTDIR=../../install install
+        make -C "$build/$package-$version/include" "${options[@]}" DESTDIR=../../install install
+    else
+        # Its version map includes optional 32-bit compatibility symbols. LLD
+        # needs this upstream-supported flag when those aliases are not built.
+        make -C "$build/$package-$version" "${options[@]}" EXTRA_LD_FLAGS=--undefined-version \
+            SUBDIRS=src -j "${OPENWAVE_BUILD_JOBS:-4}"
+        make -C "$build/$package-$version" "${options[@]}" EXTRA_LD_FLAGS=--undefined-version \
+            SUBDIRS='src include' DESTDIR=../../install install
+    fi
+    install -Dm644 "$build/$package-$version/LICENSE" \
+        "$build/install/usr/share/licenses/$package/LICENSE"
+    if [[ "$package" == libsepol ]]; then
+        sed -n '1,/^ \*\//p' "$build/$package-$version/cil/include/cil/cil.h" \
+            > "$build/install/usr/share/licenses/$package/LICENSE.CIL"
+    fi
+done
+cp -a "$build/install/usr/." "$OPENWAVE_SYSROOT/usr/"
+python3 "$ROOT/scripts/build-openwave-selinux.py" --sdk "$OPENWAVE_SDK" \
+    --target "$OPENWAVE_TARGET_TRIPLE" --stage "$OPENWAVE_RUNTIME_STAGE" \
+    --output "$OPENWAVE_DEPENDENCY_BUILD/selinux-policy"
+python3 "$ROOT/scripts/assemble-openwave-rootfs.py"
+)
+
+build_bubblewrap() (
+source "$ROOT/env.sh" --build
+local build="$OPENWAVE_DEPENDENCY_BUILD/bubblewrap" package checksum url archive cc cflags
+mkdir -p "$build" "$ROOT/third_party"
+for package in libcap-2.78 bubblewrap-0.11.1; do
+    case "$package" in
+        libcap-2.78)
+            checksum=0d621e562fd932ccf67b9660fb018e468a683d7b827541df27813228c996bb11
+            url="https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/$package.tar.xz" ;;
+        bubblewrap-0.11.1)
+            checksum=c1b7455a1283b1295879a46d5f001dfd088c0bb0f238abb5e128b3583a246f71
+            url="https://github.com/containers/bubblewrap/releases/download/v0.11.1/$package.tar.xz" ;;
+    esac
+    archive="$ROOT/third_party/$package.tar.xz"
+    if [[ ! -f "$archive" ]]; then
+        curl -fL --retry 3 "$url" -o "$archive.partial"
+        printf '%s  %s\n' "$checksum" "$archive.partial" | sha256sum -c -
+        mv "$archive.partial" "$archive"
+    fi
+    printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -
+    if [[ ! -d "$ROOT/third_party/$package" ]]; then tar -xf "$archive" -C "$ROOT/third_party"; fi
+done
+if [[ ! -d "$build/libcap-2.78" ]]; then cp -a "$ROOT/third_party/libcap-2.78" "$build/"; fi
+printf -v cc '%q --target=%q --sysroot=%q' "$OPENWAVE_SDK/bin/clang" "$OPENWAVE_TARGET_TRIPLE" "$OPENWAVE_SYSROOT"
+cflags='-O2 -fPIC -fstack-protector-strong'
+case "$OPENWAVE_TARGET_TRIPLE" in x86_64-*) cflags+=' -mstack-protector-guard=tls' ;; esac
+local options=("CC=$cc" "BUILD_CC=${OPENWAVE_HOST_CC:-/usr/bin/cc}"
+    "AR=$OPENWAVE_SDK/bin/llvm-ar" "RANLIB=$OPENWAVE_SDK/bin/llvm-ranlib"
+    "OBJCOPY=$OPENWAVE_SDK/bin/llvm-objcopy" "CFLAGS=$cflags" BUILD_CFLAGS=-O2
+    'LDFLAGS=-Wl,-z,relro,-z,now' GOLANG=no PAM_CAP=no PTHREADS=no USE_GPERF=no
+    prefix=/usr lib=lib64 "FAKEROOT=$OPENWAVE_SYSROOT")
+make -C "$build/libcap-2.78/libcap" "${options[@]}" -j "${OPENWAVE_BUILD_JOBS:-4}"
+make -C "$build/libcap-2.78/libcap" "${options[@]}" install
+local configure=()
+if [[ -f "$build/bwrap/meson-private/coredata.dat" ]]; then configure+=(--reconfigure); fi
+env -u CC -u CXX -u CFLAGS -u CXXFLAGS -u LDFLAGS -u PKG_CONFIG_PATH \
+    meson setup "${configure[@]}" "$build/bwrap" "$ROOT/third_party/bubblewrap-0.11.1" \
+        --cross-file "$OPENWAVE_MESON_TOOLCHAIN" --prefix=/usr --libdir=lib64 --buildtype=release \
+        -Dselinux=enabled -Dtests=false -Dman=disabled -Dbash_completion=disabled -Dzsh_completion=disabled \
+        -Dinstall_rpath=/usr/lib64
+meson compile -C "$build/bwrap" -j "${OPENWAVE_BUILD_JOBS:-4}"
+DESTDIR="$OPENWAVE_SYSROOT" meson install -C "$build/bwrap"
+for package in libcap-2.78 bubblewrap-0.11.1; do
+    install -Dm644 "$ROOT/third_party/$package/License" "$OPENWAVE_SYSROOT/usr/share/licenses/$package/LICENSE" 2>/dev/null \
+        || install -Dm644 "$ROOT/third_party/$package/COPYING" "$OPENWAVE_SYSROOT/usr/share/licenses/$package/LICENSE"
+done
+python3 "$ROOT/scripts/assemble-openwave-rootfs.py"
+)
+
 build_sdk() (
 source "$ROOT/env.sh" --build
 prepare_llvm
@@ -665,6 +833,7 @@ cmake --build "$MPG123_BUILD" --parallel "${OPENWAVE_BUILD_JOBS:-4}"
 DESTDIR="$OPENWAVE_SYSROOT" cmake --install "$MPG123_BUILD"
 
 "$ROOT/build-openwave" sdk
+if [[ ! -x "$OPENWAVE_SYSROOT/usr/bin/bwrap" ]]; then build_bubblewrap; fi
 
 openwave_cmake_configure -S "$ROOT/userspace" -B "$BUILD" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
@@ -693,7 +862,7 @@ build_image() (
 # fakeroot is only a metadata tool here, never the deployable staging directory.
 RUNTIME="$(realpath -- "${1:?Usage: ./build-openwave image ROOTFS NEW_IMAGE}")"
 IMAGE="${2:?Specify a new image path}"
-[[ -f "$RUNTIME/init" && -f "$RUNTIME/usr/bin/ocean-launcher" ]]
+[[ -f "$RUNTIME/init" && -f "$RUNTIME/System/Applications/com.openwave.shell/bin/ocean-launcher" ]]
 if [[ -e "$IMAGE" ]]; then
     echo "Refusing to overwrite existing image: $IMAGE" >&2
     exit 1
@@ -712,6 +881,16 @@ ln -- "$TEMP_IMAGE" "$IMAGE"
 echo "Created runtime image: $IMAGE"
 )
 
+build_test_permissions() (
+    source "$ROOT/env.sh" --build
+    python3 "$ROOT/userspace/permissiond/tests/run-qemu.py" "$1"
+)
+
+build_test_selinux() (
+    source "$ROOT/env.sh" --build
+    python3 "$ROOT/userspace/security/selinux/tests/run-qemu.py" "$1"
+)
+
 build_test_appd() (
 TASK_ROOT="$ROOT"
 cd "$TASK_ROOT"
@@ -728,6 +907,7 @@ for project in appd/tests application-client/tests; do
     cmake --build "$build" --parallel "${OPENWAVE_BUILD_JOBS:-4}"
 done
 ./build-openwave image "$OPENWAVE_ROOTFS" "$QA_IMAGE"
+python3 "$ROOT/userspace/appd/tests/prepare.py" "$OPENWAVE_ROOTFS" "$QA_OUTPUT"
 QA_COMMANDS="$(mktemp "$QA_OUTPUT/install.XXXXXX")"
 trap 'rm -f -- "$QA_COMMANDS"' EXIT
 cat > "$QA_COMMANDS" <<EOF
@@ -736,9 +916,16 @@ rm /init
 write "$QA_OUTPUT/appd-tests/appd-qa-init" /init
 write "$QA_OUTPUT/appd-tests/appd-qa" /usr/libexec/appd-qa
 sif /usr/libexec/appd-qa mode 0100755
+write "$QA_OUTPUT/appd-tests/appd-folder-tests" /usr/libexec/appd-folder-tests
+sif /usr/libexec/appd-folder-tests mode 0100755
 write "$QA_OUTPUT/application-client-tests/application-channel-tests" /usr/libexec/application-channel-tests
 write "$QA_OUTPUT/application-client-tests/application-layout-tests" /usr/libexec/application-layout-tests
 write "$OPENWAVE_SYSROOT/usr/lib/libQt6Test.so.6" /usr/lib/libQt6Test.so.6
+rm /System/Applications/com.openwave.settings/manifest.json
+write "$QA_OUTPUT/settings-manifest.json" /System/Applications/com.openwave.settings/manifest.json
+sif /System/Applications/com.openwave.settings/manifest.json mode 0100644
+write "$QA_OUTPUT/settings-icon.png" /System/Applications/com.openwave.settings/resources/icon.png
+sif /System/Applications/com.openwave.settings/resources/icon.png mode 0100644
 EOF
 debugfs -w -f "$QA_COMMANDS" "$QA_IMAGE"
 ./run-openwave --image "$QA_IMAGE" --usb-wifi none --usb-bluetooth none \
@@ -762,13 +949,8 @@ openwave_cmake_configure -S OceanLauncher/OceanBrowser/tests -B "$QA_OUTPUT/test
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN"
 cmake --build "$QA_OUTPUT/tests" --target browser-input-tests browser-input-init --parallel "${OPENWAVE_BUILD_JOBS:-4}"
 ./build-openwave image "$OPENWAVE_ROOTFS" "$QA_IMAGE"
-cat > "$QA_OUTPUT/input-test.desktop" <<'EOF'
-[Desktop Entry]
-Type=Application
-Name=Browser input tests
-Exec=/usr/libexec/browser-input-tests
-Icon=/usr/share/pixmaps/ocean-browser.svg
-X-OpenWave-AppId=input-test
+cat > "$QA_OUTPUT/input-test.json" <<'EOF'
+{"schemaVersion":1,"id":"org.openwave.qa.browser-input","name":"Browser input tests","version":"1","executable":"bin/browser-input-tests","runtime":"openwave-qt","sandbox":{"enabled":true,"profile":"standard"},"permissions":[]}
 EOF
 QA_COMMANDS="$(mktemp "$QA_OUTPUT/install.XXXXXX")"
 trap 'rm -f -- "$QA_COMMANDS"' EXIT
@@ -777,10 +959,14 @@ write "$OPENWAVE_ROOTFS/init" /init.openwave
 rm /init
 write "$QA_OUTPUT/tests/browser-input-init" /init
 sif /init mode 0100755
-write "$QA_OUTPUT/tests/browser-input-tests" /usr/libexec/browser-input-tests
-sif /usr/libexec/browser-input-tests mode 0100755
-write "$QA_OUTPUT/input-test.desktop" /usr/share/applications/input-test.desktop
-sif /usr/share/applications/input-test.desktop mode 0100644
+mkdir /Applications/org.openwave.qa.browser-input
+sif /Applications/org.openwave.qa.browser-input mode 040755
+mkdir /Applications/org.openwave.qa.browser-input/bin
+sif /Applications/org.openwave.qa.browser-input/bin mode 040755
+write "$QA_OUTPUT/tests/browser-input-tests" /Applications/org.openwave.qa.browser-input/bin/browser-input-tests
+sif /Applications/org.openwave.qa.browser-input/bin/browser-input-tests mode 0100755
+write "$QA_OUTPUT/input-test.json" /Applications/org.openwave.qa.browser-input/manifest.json
+sif /Applications/org.openwave.qa.browser-input/manifest.json mode 0100644
 write "$OPENWAVE_SYSROOT/usr/lib/libQt6Test.so.6" /usr/lib/libQt6Test.so.6
 EOF
 debugfs -w -f "$QA_COMMANDS" "$QA_IMAGE"
@@ -798,7 +984,7 @@ if [[ "$COMMAND" == help || "$COMMAND" == --help || "$COMMAND" == -h || "${1:-}"
     exit 0
 fi
 case "$COMMAND" in
-    audio|bluetooth-audio|mdns|sdk|tzdata|llvm-patch|llvm)
+    audio|bluetooth-audio|mdns|selinux|bubblewrap|sdk|tzdata|llvm-patch|llvm|kernel)
         if (($# != 0)); then usage >&2; exit 2; fi
         ;;
     browser-engine)
@@ -811,7 +997,7 @@ case "$COMMAND" in
     image)
         if (($# != 2)); then usage >&2; exit 2; fi
         ;;
-    test-appd|test-browser-input)
+    test-appd|test-browser-input|test-permissions|test-selinux)
         if (($# != 1)); then usage >&2; exit 2; fi
         ;;
     *) usage >&2; exit 2 ;;

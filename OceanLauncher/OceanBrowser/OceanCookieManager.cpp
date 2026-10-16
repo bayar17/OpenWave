@@ -17,7 +17,7 @@ OceanCookieManager::OceanCookieManager(const QString &path, BrowserPreferences *
         for (auto it = views.cbegin(); it != views.cend(); ++it) attachView(it.key(), it.value());
     });
     qputenv("OCEAN_BROWSER_PROFILE_DIRECTORY", QByteArray());
-    m_profile = path + "/WebEngine";
+    m_profile = path + "/Data/WebEngine";
     QString ancestor = m_profile;
     while (ancestor != "/") {
         if (QFileInfo(ancestor).isSymbolicLink()) { m_error = tr("Cookie storage contains a symbolic link."); break; }
@@ -26,12 +26,10 @@ OceanCookieManager::OceanCookieManager(const QString &path, BrowserPreferences *
     if (m_error.isEmpty() && !QDir().mkpath(m_profile)) m_error = tr("Could not create cookie storage.");
     if (!m_error.isEmpty()) return;
     const QString cookies = m_profile + "/cookies";
-    const QString previous = path + "/cookies";
+    const QString previous = path + "/Data/cookies";
     if (QFileInfo(previous).isSymbolicLink() || QFileInfo(cookies).isSymbolicLink()) {
         m_error = tr("Cookie storage is unsafe."); return;
     }
-    // Move the closed engine-owned store, including its SQLite sidecars, intact.
-    // Never inspect values or manipulate the cookie database schema.
     if (m_error.isEmpty() && !QFileInfo::exists(cookies) && QFileInfo::exists(previous)
         && !QDir().rename(previous, cookies)) m_error = tr("Could not migrate cookie storage.");
     if (m_error.isEmpty() && !QDir().mkpath(cookies)) m_error = tr("Could not create cookie storage.");
@@ -51,8 +49,6 @@ OceanCookieManager::OceanCookieManager(const QString &path, BrowserPreferences *
             }
         }
     }
-    // An unavailable persistent profile falls back to an ephemeral engine
-    // session, rather than silently writing cookies to another directory.
     qputenv("OCEAN_BROWSER_PROFILE_DIRECTORY", ready() ? m_profile.toUtf8() : QByteArray());
 }
 

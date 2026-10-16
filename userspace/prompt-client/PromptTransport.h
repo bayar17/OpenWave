@@ -5,8 +5,6 @@
 #include <QVariantList>
 #include <functional>
 
-// A private session-bus connection, used exclusively by one worker at a time.
-// Neither connecting, credential verification, nor RPC waits run on the GUI thread.
 class PromptTransport : public QObject
 {
 public:

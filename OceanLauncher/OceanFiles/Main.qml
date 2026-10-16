@@ -1,4 +1,5 @@
 import QtQuick
+import OpenWave.Fonts 1.0
 import QtQuick.Controls
 import QtQuick.Window
 import QtQuick.Effects
@@ -38,7 +39,6 @@ ApplicationWindow {
 
     FontLoader { id: regular; source: "assets/fonts/Inter-Regular.otf" }
     FontLoader { id: light; source: "assets/fonts/Inter-Light.otf" }
-    FontLoader { id: menuFont; source: "assets/fonts/SourceSansPro-ExtraLight.otf" }
     FontLoader { source: "assets/fonts/Inter-SemiBold.otf" }
     font.family: regular.name
 
@@ -536,12 +536,12 @@ ApplicationWindow {
                             TextMetrics {
                                 id: labelMetrics
                                 text: operation.label
-                                font.family: menuFont.name; font.weight: Font.ExtraLight; font.pixelSize: 30
+                                font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: 30
                             }
                             Text {
                                 anchors.centerIn: parent
                                 text: operation.label; color: "black"
-                                font.family: menuFont.name; font.weight: Font.ExtraLight
+                                font.family: Fonts.family; font.weight: Font.ExtraLight
                                 font.pixelSize: 30 * operationsRow.fit
                                 opacity: 1 - 0.5 * operation.inactive
                                 layer.enabled: operation.inactive > 0.001
@@ -597,7 +597,7 @@ ApplicationWindow {
             TextMetrics {
                 id: showHiddenMetrics
                 text: qsTr("Show hidden folders")
-                font.family: menuFont.name; font.weight: Font.ExtraLight; font.pixelSize: 43
+                font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: 43
             }
             TextMetrics {
                 id: hideHiddenMetrics
@@ -622,7 +622,7 @@ ApplicationWindow {
                             anchors.centerIn: parent; text: modelData.label
                             color: "white"
                             opacity: modelData.enabled ? 1 : 0.45
-                            font.family: menuFont.name; font.weight: Font.ExtraLight; font.pixelSize: 43
+                            font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: 43
                         }
                         MouseArea {
                             anchors.fill: parent
@@ -641,8 +641,6 @@ ApplicationWindow {
             }
         }
 
-        // Shield app input while promptd queues, displays and returns a naming
-        // request. The shell owns its backdrop, animation and prompt contents.
         MouseArea { anchors.fill: parent; visible: root.naming; preventStealing: true }
         Rectangle {
             visible: root.sorting || (root.filesBackend && root.filesBackend.previewVisible)

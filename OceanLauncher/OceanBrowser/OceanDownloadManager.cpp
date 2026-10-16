@@ -34,13 +34,12 @@ bool safeDirectory(const QString &path) {
     }
     return QDir().mkpath(path) && QFile::setPermissions(path, privateFile | QFile::ExeOwner);
 }
-bool active(const QString &s) { return s == "Pending" || s == "Downloading" || s == "Paused"; }
-QString uniqueName(const QString &name, int suffix) {
-    if (!suffix) return name;
-    const QFileInfo file(name);
-    return file.completeBaseName() + QStringLiteral(" (%1)").arg(suffix)
-        + (file.suffix().isEmpty() ? QString() : "." + file.suffix());
+bool payloadAvailable(const QString &path) {
+    struct stat metadata;
+    if (!stat(QFile::encodeName(path).constData(), &metadata)) return S_ISREG(metadata.st_mode);
+    return errno == EACCES || errno == EPERM;
 }
+bool active(const QString &s) { return s == "Pending" || s == "Downloading" || s == "Paused"; }
 // The native engine exposes WebKitWebView* through its Qt meta-object API.
 WebKitWebView *nativeView(QObject *object) {
     WebKitWebView *result = nullptr;
@@ -92,7 +91,7 @@ public:
     }
     void failed(const QString &detail) { post([detail](auto *o) { o->errorMessage(tr("Download history: %1").arg(detail)); }); }
     void initialize() {
-        const QString directory = m_path + "/Downloads";
+        const QString directory = m_path + "/Data/Downloads";
         if (!safeDirectory(directory)) { failed(tr("Private storage is unavailable.")); return; }
         const QString file = directory + "/Downloads.sqlite";
         const int fd = ::open(QFile::encodeName(file).constData(), O_CREAT|O_EXCL|O_WRONLY|O_NOFOLLOW, 0600);
@@ -236,9 +235,9 @@ QVariant OceanDownloadManager::data(const QModelIndex &index,int role) const {
     case ErrorDetail:return e->error; case CanCancel:return active(e->status)&&!e->finalizing;
     case CanPause: case CanResume:return false;
     case CanRetry:return e->status=="Failed" && e->safeRetry && e->view && m_views.contains(e->view);
-    case FileExists:return e->status=="Completed" && QFileInfo(e->destination).isFile();
+    case FileExists:return e->status=="Completed" && payloadAvailable(e->destination);
     case PrivateDownload:return e->privateTab;
-    case ThumbnailSource:return QUrl::fromLocalFile(e->destination);
+    case ThumbnailSource:return QFileInfo(e->destination).isReadable() ? QUrl::fromLocalFile(e->destination) : QUrl();
     }
     return {};
 }
@@ -332,11 +331,7 @@ void OceanDownloadManager::decide(const Item &e,const QString &suggested) {
     if (e->image && QFileInfo(e->name).suffix().isEmpty()) {
         const auto suffix=QMimeDatabase().mimeTypeForName(e->mime).preferredSuffix(); if (!suffix.isEmpty()) e->name+="."+suffix;
     }
-    if (!e->saveAs) { beginTransfer(e); return; }
     const QString folder = m_preferences->downloadFolder();
-    if (!safeDirectory(folder)) {
-        fail(e,tr("The destination directory is unavailable.")); return;
-    }
     e->portal=new OpenWavePortals(this);
     connect(e->portal,&OpenWavePortals::completed,this,[this,e](const QVariantList &grants) {
         if (!active(e->status)) return;
@@ -354,16 +349,16 @@ void OceanDownloadManager::decide(const Item &e,const QString &suggested) {
     connect(e->portal,&OpenWavePortals::cancelled,this,[this,e]{if(active(e->status))fail(e,tr("Save cancelled."),true);});
     connect(e->portal,&OpenWavePortals::errorOccurred,this,[this,e](const QString &message){fail(e,message);});
     changed(e);
-    e->portal->saveFile({{"mutedTitle",tr("Downloading")},{"primaryTitle",tr("File")},
+    if (e->saveAs) e->portal->saveFile({{"mutedTitle",tr("Downloading")},{"primaryTitle",tr("File")},
         {"initialDirectory",folder},{"suggestedFilename",e->name}});
+    else e->portal->createFile(m_preferences->downloadDirectoryToken(), e->name);
 }
 void OceanDownloadManager::beginTransfer(const Item &e) {
-    const QString directory=e->saveAs?m_path+"/cache/transfers":m_preferences->downloadFolder();
+    const QString directory=m_path+"/Cache/transfers";
     if (!safeDirectory(directory)) { fail(e,tr("The destination directory is unavailable.")); return; }
     const QString staging=directory+"/.ocean-download-"+e->key;
     if (QFileInfo::exists(staging) || !safeDirectory(staging)) { fail(e,tr("Could not create private transfer storage.")); return; }
     e->stage=staging+"/transfer.part";
-    if (!e->saveAs) e->destination=e->stage;
     e->status="Downloading"; changed(e);
     if (e->archive) {
         auto *context=m_views.value(e->view);
@@ -428,17 +423,15 @@ void OceanDownloadManager::finishTransfer(const Item &e) {
     if (!active(e->status)) { cleanup(e); if (e->privateTab && !e->session) removeRecord(e->key); return; }
     if (e->native) e->received=webkit_download_get_received_data_length(e->native);
     if (e->native) { g_signal_handlers_disconnect_by_data(e->native,e.get()); g_object_unref(e->native); e->native=nullptr; }
-    // Some servers close early without the engine emitting a download error.
-    // Never publish a shorter payload than the declared response length.
     if (e->total > 0 && e->received < e->total) {
         fail(e,tr("The transfer ended before the complete file was received."));
         cleanup(e); return;
     }
     e->finalizing=true; changed(e);
     // Keep the destination chosen at transfer start, even if preferences change.
-    const QString stage=e->stage,name=e->name,folder=QFileInfo(QFileInfo(e->stage).absolutePath()).absolutePath();
+    const QString stage=e->stage;
     const int fd=e->descriptor; e->descriptor=-1;
-    m_io.start([owner=QPointer(this),e,stage,name,folder,fd] {
+    m_io.start([owner=QPointer(this),e,stage,fd] {
         QString failure,destination=e->destination;
         if (fd>=0) {
             QFile input(stage);
@@ -457,20 +450,7 @@ void OceanDownloadManager::finishTransfer(const Item &e) {
             if (failure.isEmpty() && fsync(fd)) failure=tr("Could not flush the saved file.");
             if (!failure.isEmpty()) ftruncate(fd,0);
             ::close(fd);
-        } else {
-            QFile input(stage);
-            if (!input.open(QIODevice::ReadOnly) || fsync(input.handle())) failure=tr("Could not flush the downloaded file.");
-            input.close();
-            if (failure.isEmpty()) {
-                for (int i=0;i<10000;++i) {
-                    destination=QDir(folder).filePath(uniqueName(name,i));
-                    if (!syscall(SYS_renameat2,AT_FDCWD,QFile::encodeName(stage).constData(),AT_FDCWD,QFile::encodeName(destination).constData(),1)) break;
-                    if (errno!=EEXIST || i==9999) { failure=tr("Could not finalize the downloaded file without overwriting another file."); break; }
-                }
-                int directory=::open(QFile::encodeName(folder).constData(),O_RDONLY|O_DIRECTORY|O_NOFOLLOW);
-                if (directory>=0) { if (fsync(directory) && failure.isEmpty()) failure=tr("Could not flush the destination directory."); ::close(directory); }
-            }
-        }
+        } else failure=tr("The download has no writable file grant.");
         if (owner) QMetaObject::invokeMethod(owner,[owner,e,failure,destination] {
             if (!owner) return;
             e->finalizing=false;
@@ -502,14 +482,14 @@ void OceanDownloadManager::removeRecord(const QString &id) {
 void OceanDownloadManager::clearCompleted() { const auto rows=m_items; for (const auto &e:rows) if (e->status=="Completed") removeRecord(e->key); }
 void OceanDownloadManager::openFile(const QString &id) {
     const auto e=find(id); if (!e || e->status!="Completed") return;
-    if (!QFileInfo(e->destination).isFile()) { errorMessage(tr("The downloaded file is missing.")); changed(e,false); return; }
-    OpenWaveApplications::launch(QStringLiteral("files"), {e->destination}, this,
+    if (!payloadAvailable(e->destination)) { errorMessage(tr("The downloaded file is missing.")); changed(e,false); return; }
+    OpenWaveApplications::launch(QStringLiteral("com.openwave.files"), {e->destination}, this,
         [this](const QString &error) { if (!error.isEmpty()) errorMessage(error); });
 }
 void OceanDownloadManager::showInFiles(const QString &id) {
     const auto e=find(id); if (!e || e->status!="Completed") return;
-    if (!QFileInfo(e->destination).isFile()) { errorMessage(tr("The downloaded file is missing.")); changed(e,false); return; }
-    OpenWaveApplications::launch(QStringLiteral("files"), {QFileInfo(e->destination).absolutePath()}, this,
+    if (!payloadAvailable(e->destination)) { errorMessage(tr("The downloaded file is missing.")); changed(e,false); return; }
+    OpenWaveApplications::launch(QStringLiteral("com.openwave.files"), {QFileInfo(e->destination).absolutePath()}, this,
         [this](const QString &error) { if (!error.isEmpty()) errorMessage(error); });
 }
 void OceanDownloadManager::saveResource(const QString &url,bool image,bool saveAs) {

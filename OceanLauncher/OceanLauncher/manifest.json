@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "com.openwave.shell",
+  "name": "OpenWave Shell",
+  "version": "0.1.0",
+  "type": "system",
+  "executable": "bin/ocean-launcher",
+  "runtime": "openwave-qt",
+  "sandbox": {
+    "enabled": true,
+    "profile": "standard"
+  },
+  "permissions": [],
+  "singleInstance": true,
+  "acceptsPaths": false,
+  "role": "compositor"
+}

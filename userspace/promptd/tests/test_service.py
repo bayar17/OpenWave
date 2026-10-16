@@ -197,6 +197,33 @@ class ServiceTest(unittest.TestCase):
         self.call(self.client, "Cancel", "(s)", (cancelled,))
         self.assertEqual(self.call(self.client, "GetResult", "(s)", (cancelled,)), (True, "cancelled", ""))
 
+    def test_six_field_ip_dns_form(self):
+        fields = {
+            "ipMode": {"label": "IP configuration", "initialText": "manual",
+                       "choices": {"automatic": "Automatic (DHCP)", "manual": "Manual"}},
+            "address": {"label": "IPv4 address", "initialText": "192.168.1.50", "minLength": 1,
+                        "maxLength": 15, "activeWhenField": "ipMode", "activeWhenValue": "manual"},
+            "prefix": {"label": "Subnet prefix (0–32)", "initialText": "24", "minLength": 1,
+                       "maxLength": 2, "activeWhenField": "ipMode", "activeWhenValue": "manual"},
+            "gateway": {"label": "Gateway (optional)", "initialText": "", "maxLength": 15,
+                        "activeWhenField": "ipMode", "activeWhenValue": "manual"},
+            "dnsMode": {"label": "DNS configuration", "initialText": "manual",
+                        "choices": {"automatic": "Automatic", "manual": "Manual"}},
+            "dnsServers": {"label": "DNS servers", "initialText": "1.1.1.1, 2001:4860:4860::8888",
+                           "minLength": 1, "maxLength": 512,
+                           "activeWhenField": "dnsMode", "activeWhenValue": "manual"}}
+        for manual in (True, False):
+            request = self.network_form(title="IP and DNS settings", fieldOrder=",".join(fields), fields=fields)
+            self.assertEqual(self.call(self.renderer, "Next")[1], "form")
+            values = {key: value["initialText"] for key, value in fields.items()}
+            if not manual:
+                values.update(ipMode="automatic", address="", prefix="", gateway="",
+                              dnsMode="automatic", dnsServers="")
+            text = GLib.Variant("a{ss}", values).print_(False)
+            self.call(self.renderer, "Respond", "(sss)", (request, "accepted", text))
+            self.assertEqual(self.call(self.client, "GetResult", "(s)", (request,)), (True, "accepted", text))
+            self.call(self.client, "Acknowledge", "(s)", (request,))
+
     def test_invalid_form_schemas(self):
         for changes in ({"fieldOrder": "ssid,ssid"}, {"fieldOrder": "unknown"}, {"fields": {}},
                         {"fields": {"ssid": {"secret": "true"}}},
@@ -221,6 +248,28 @@ class ServiceTest(unittest.TestCase):
         self.error("InvalidResponse", self.renderer, "Respond", "(sss)", (request, "cancelled", "Region/City_1"))
         self.call(self.renderer, "Respond", "(sss)", (request, "accepted", "Region/City_42"))
         self.assertEqual(self.call(self.client, "GetResult", "(s)", (request,)), (True, "accepted", "Region/City_42"))
+
+    def test_settings_permission_choice_and_confirmation(self):
+        choices = {"granted": "Allow", "denied": "Deny",
+                   "not-determined": "Ask next time", "restricted": "Restricted"}
+        options = {"title": self.variant("Save files"),
+                   "message": self.variant("Choose how this application may use the file chooser."),
+                   "choices": self.variant(choices), "initialText": self.variant("granted"),
+                   "acceptLabel": self.variant("Apply"), "cancelLabel": self.variant("Cancel")}
+        prompt = self.call(self.client, "Request", "(sa{sv})", ("selection", options))[0]
+        current, kind, rendered = self.call(self.renderer, "Next")
+        self.assertEqual((current, kind), (prompt, "selection"))
+        self.assertEqual(rendered["choices"], choices)
+        self.assertEqual(rendered["acceptLabel"], "Apply")
+        self.assertEqual(rendered["cancelLabel"], "Cancel")
+        self.call(self.renderer, "Respond", "(sss)", (prompt, "accepted", "denied"))
+        self.assertEqual(self.call(self.client, "GetResult", "(s)", (prompt,)), (True, "accepted", "denied"))
+        confirmation = self.request(acceptLabel="Change", cancelLabel="Cancel")
+        current, kind, rendered = self.call(self.renderer, "Next")
+        self.assertEqual((current, kind), (confirmation, "confirmation"))
+        self.assertEqual(rendered["acceptLabel"], "Change")
+        self.call(self.renderer, "Respond", "(sss)", (confirmation, "cancelled", ""))
+        self.assertEqual(self.call(self.client, "GetResult", "(s)", (confirmation,)), (True, "cancelled", ""))
 
     def test_invalid_selection_requests(self):
         for choices, initial in (({}, ""), ({"UTC": "UTC"}, "Unknown/Zone"),

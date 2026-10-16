@@ -1,6 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <node>
   <interface name="org.openwave.Wallpaper1">
+    <method name="GetImage"><arg type="ay" direction="out"/></method>
     <method name="GetCurrent">
       <arg type="s" direction="out" />
       <arg type="s" direction="out" />

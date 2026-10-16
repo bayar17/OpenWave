@@ -5,6 +5,12 @@
 #include <QMetaObject>
 #include <QPainter>
 #include <QUrl>
+#include <QFile>
+#include <QSaveFile>
+#include <QTemporaryDir>
+#include <memory>
+#include <QCryptographicHash>
+#include <unistd.h>
 #undef signals
 #include <gio/gio.h>
 
@@ -43,6 +49,11 @@ QString localPath(const QUrl &url)
 WallpaperClient::WallpaperClient(QObject *parent) : QObject(parent)
 {
     m_pool.setMaxThreadCount(2);
+    if (geteuid()) {
+        auto cache = std::make_shared<QTemporaryDir>();
+        setProperty("_openwaveWallpaperCache", cache->isValid() ? cache->path() : QString());
+        connect(this, &QObject::destroyed, [cache] { cache->remove(); });
+    }
     m_refreshTimer.setInterval(2000);
     connect(&m_refreshTimer, &QTimer::timeout, this, &WallpaperClient::refresh);
     m_refreshTimer.start();
@@ -54,7 +65,7 @@ WallpaperClient::~WallpaperClient()
     m_pool.waitForDone();
 }
 
-WallpaperClient::Result WallpaperClient::getCurrent()
+WallpaperClient::Result WallpaperClient::getCurrent(const QString &knownHash)
 {
     Result result;
     GVariant *reply = call("GetCurrent", nullptr, &result.error);
@@ -66,6 +77,15 @@ WallpaperClient::Result WallpaperClient::getCurrent()
         result.hash = QString::fromUtf8(hash);
         g_variant_unref(reply);
     }
+    if (geteuid() && !result.hash.isEmpty() && result.hash != knownHash) {
+        reply = call("GetImage", nullptr, &result.error);
+        if (reply) {
+            GVariant *array = g_variant_get_child_value(reply, 0); gsize size = 0;
+            const auto *bytes = static_cast<const char *>(g_variant_get_fixed_array(array, &size, 1));
+            if (size <= 16 * 1024 * 1024) result.bytes = QByteArray(bytes, size);
+            g_variant_unref(array); g_variant_unref(reply);
+        }
+    }
     return result;
 }
 
@@ -73,14 +93,25 @@ void WallpaperClient::refresh()
 {
     if (m_refreshing || m_busy) return;
     m_refreshing = true;
-    m_pool.start([this] {
-        const Result result = getCurrent();
+    const QString knownHash = m_hash;
+    m_pool.start([this, knownHash] {
+        const Result result = getCurrent(knownHash);
         QMetaObject::invokeMethod(this, [this, result] {
             m_refreshing = false;
-            const QUrl source = result.path.isEmpty() ? QUrl() : QUrl::fromLocalFile(result.path);
+            QString path = result.path;
+            if (geteuid()) {
+                const QString cache = property("_openwaveWallpaperCache").toString();
+                path = result.hash.isEmpty() || cache.isEmpty() ? QString() : cache + "/" + result.hash + ".png";
+                if (result.hash != m_hash && !path.isEmpty()) {
+                    QSaveFile file(path);
+                    if (QCryptographicHash::hash(result.bytes, QCryptographicHash::Sha256).toHex() != result.hash.toLatin1() || !file.open(QIODevice::WriteOnly) || file.write(result.bytes) != result.bytes.size() || !file.commit()) path.clear();
+                }
+            }
+            const QUrl source = path.isEmpty() ? QUrl() : QUrl::fromLocalFile(path);
             if (source != m_source || result.hash != m_hash) {
+                if (geteuid() && m_source != source && !m_source.isEmpty()) QFile::remove(m_source.toLocalFile());
                 m_source = source;
-                m_hash = result.hash;
+                m_hash = source.isEmpty() ? QString() : result.hash;
                 emit changed();
             }
         }, Qt::QueuedConnection);

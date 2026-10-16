@@ -4,8 +4,6 @@
 
 class OpenWavePortals;
 
-// Persistent UI preferences use the application's resolved private data directory.
-// Runtime services remain responsible for downloads, cookies and portal grants.
 class BrowserPreferences : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool askOnDownload READ askOnDownload WRITE setAskOnDownload NOTIFY changed)
@@ -28,6 +26,7 @@ public:
     bool blockThirdPartyCookies() const { return m_values.value("blockThirdPartyCookies", true).toBool(); }
     QString searchEngine() const { return m_values.value("searchEngine", "google").toString(); }
     QString downloadFolder() const { return m_values.value("downloadFolder", m_user + "/Downloads").toString(); }
+    QString downloadDirectoryToken() const { return m_values.value("downloadDirectoryToken").toString(); }
     bool choosingFolder() const;
     QString error() const { return m_error; }
     void setAskOnDownload(bool value) { setValue("askOnDownload", value); }

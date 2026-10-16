@@ -1,0 +1,158 @@
+diff --git a/src/modules/module-client-node.c b/src/modules/module-client-node.c
+index dc97808..4a61806 100644
+--- a/src/modules/module-client-node.c
++++ b/src/modules/module-client-node.c
+@@ -5,6 +5,7 @@
+ #include <string.h>
+ #include <stdio.h>
+ #include <errno.h>
++#include <unistd.h>
+ #include <dlfcn.h>
+ 
+ #include "config.h"
+@@ -139,6 +140,19 @@ static void *create_object(void *_data,
+ 	}
+ 
+ 	client = pw_resource_get_client(resource);
++	if (geteuid() == 0) {
++		const char *uid = pw_properties_get(pw_impl_client_get_properties(client), PW_KEY_SEC_UID);
++		if (uid == NULL || !spa_streq(uid, "0")) {
++			const char *category = properties ? pw_properties_get(properties, PW_KEY_MEDIA_CATEGORY) : NULL;
++			if (uid == NULL || category == NULL || !spa_streq(category, "Playback")) {
++				res = -EACCES;
++				pw_resource_errorf_id(resource, new_id, res, "OpenWave only permits application playback streams");
++				goto error_exit;
++			}
++			pw_properties_set(properties, PW_KEY_MEDIA_CLASS, "Stream/Output/Audio");
++		}
++	}
++
+ 	node_resource = pw_resource_new(client, new_id, PW_PERM_ALL, type, version, 0);
+ 	if (node_resource == NULL) {
+ 		res = -errno;
+diff --git a/src/pipewire/global.c b/src/pipewire/global.c
+index c9975f9..2eabc32 100644
+--- a/src/pipewire/global.c
++++ b/src/pipewire/global.c
+@@ -22,13 +22,54 @@ struct impl {
+ };
+ /** \endcond */
+ 
++SPA_EXPORT uint32_t pw_openwave_access_policy_version(void)
++{
++	return 1;
++}
++
++static uint32_t openwave_permissions(struct pw_global *global, struct pw_impl_client *client, uint32_t permissions)
++{
++	const char *uid = pw_properties_get(client->properties, PW_KEY_SEC_UID);
++	struct pw_impl_node *node = NULL;
++	struct pw_impl_port *port = NULL;
++	uint32_t owner;
++	if (geteuid() != 0 || (uid && spa_streq(uid, "0")))
++		return permissions;
++	if (uid == NULL)
++		return 0;
++	if (spa_streq(global->type, PW_TYPE_INTERFACE_Core) || global == client->global)
++		return permissions;
++	if (spa_streq(global->type, PW_TYPE_INTERFACE_Factory)) {
++		const char *name = pw_properties_get(global->properties, PW_KEY_FACTORY_NAME);
++		return name && spa_streq(name, "client-node") ? permissions & (PW_PERM_R | PW_PERM_X) : 0;
++	}
++	if (spa_streq(global->type, PW_TYPE_INTERFACE_Node))
++		node = global->object;
++	else if (spa_streq(global->type, PW_TYPE_INTERFACE_Port)) {
++		port = global->object;
++		node = port->node;
++	}
++	if (node) {
++		const char *id = pw_properties_get(node->properties, PW_KEY_CLIENT_ID);
++		const char *media = pw_properties_get(node->properties, PW_KEY_MEDIA_CLASS);
++		if (id && client->global && spa_atou32(id, &owner, 0) && owner == client->global->id)
++			return permissions & ~PW_PERM_L;
++		if (port && port->direction != PW_DIRECTION_INPUT)
++			return 0;
++		return media && spa_streq(media, "Audio/Sink") ? permissions & (PW_PERM_R | PW_PERM_X) : 0;
++	}
++	if (spa_streq(global->type, "PipeWire:Interface:Metadata"))
++		return permissions & PW_PERM_R;
++	return 0;
++}
++
+ SPA_EXPORT
+ uint32_t pw_global_get_permissions(struct pw_global *global, struct pw_impl_client *client)
+ {
+ 	uint32_t permissions = global->permission_mask;
+ 	if (client->permission_func != NULL)
+ 		permissions &= client->permission_func(global, client, client->permission_data);
+-	return permissions;
++	return openwave_permissions(global, client, permissions);
+ }
+ 
+ /** Create a new global
+@@ -346,6 +387,9 @@ int pw_global_update_permissions(struct pw_global *global, struct pw_impl_client
+ 	struct pw_resource *resource, *t;
+ 	bool do_hide, do_show;
+ 
++	old_permissions = openwave_permissions(global, client, old_permissions);
++	new_permissions = openwave_permissions(global, client, new_permissions);
++
+ 	do_hide = PW_PERM_IS_R(old_permissions) && !PW_PERM_IS_R(new_permissions);
+ 	do_show = !PW_PERM_IS_R(old_permissions) && PW_PERM_IS_R(new_permissions);
+ 
+diff --git a/src/pipewire/impl-link.c b/src/pipewire/impl-link.c
+index a9de783..e4b6ca5 100644
+--- a/src/pipewire/impl-link.c
++++ b/src/pipewire/impl-link.c
+@@ -3,6 +3,7 @@
+ /* SPDX-License-Identifier: MIT */
+ 
+ #include <errno.h>
++#include <unistd.h>
+ #include <string.h>
+ #include <stdio.h>
+ #include <time.h>
+@@ -1136,7 +1137,7 @@ static void try_unlink_controls(struct impl *impl, struct pw_impl_port *output,
+ }
+ 
+ static int check_owner_permissions(struct pw_context *context,
+-		struct pw_impl_node *node, struct pw_global *other, uint32_t permissions)
++		struct pw_impl_node *node, struct pw_global *other, struct pw_impl_port *other_port, uint32_t permissions)
+ {
+ 	const char *str;
+ 	struct pw_impl_client *client;
+@@ -1164,6 +1165,12 @@ static int check_owner_permissions(struct pw_context *context,
+ 	if ((perms & permissions) != permissions)
+ 		/* owner client can't see other node */
+ 		return -EPERM;
++	if (geteuid() == 0) {
++		const char *uid = pw_properties_get(client->properties, PW_KEY_SEC_UID);
++		if ((uid == NULL || !spa_streq(uid, "0")) && (other_port->global == NULL ||
++		    !PW_PERM_IS_R(pw_global_get_permissions(other_port->global, client))))
++			return -EPERM;
++	}
+ 
+ 	return 0;
+ }
+@@ -1193,17 +1200,17 @@ check_permission(struct pw_context *context,
+ 		return -ENOENT;
+ 
+ 	if ((res = check_owner_permissions(context, output->node,
+-					in_global, PW_PERM_R)) < 0) {
++					in_global, input, PW_PERM_R)) < 0) {
+ 		/* output node owner can't see input node, check if the current
+ 		 * client has universal link permissions for the output node */
+-		if (!PW_PERM_IS_L(out_perms))
++		if (geteuid() == 0 || !PW_PERM_IS_L(out_perms))
+ 			return res;
+ 	}
+ 	if ((res = check_owner_permissions(context, input->node,
+-					out_global, PW_PERM_R)) < 0) {
++					out_global, output, PW_PERM_R)) < 0) {
+ 		/* input node owner can't see output node, check if the current
+ 		 * client has universal link permissions for the input node */
+-		if (!PW_PERM_IS_L(in_perms))
++		if (geteuid() == 0 || !PW_PERM_IS_L(in_perms))
+ 			return res;
+ 	}
+ 	return 0;

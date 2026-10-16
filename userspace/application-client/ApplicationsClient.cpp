@@ -4,6 +4,7 @@
 #include <thread>
 #undef signals
 #include <gio/gio.h>
+#include "OpenWaveIdentity.h"
 
 namespace {
 constexpr auto service = "org.openwave.Applications";
@@ -17,6 +18,8 @@ QVariant decode(GVariant *value)
     }
     if (g_variant_is_of_type(value, G_VARIANT_TYPE_STRING)) return QString::fromUtf8(g_variant_get_string(value, nullptr));
     if (g_variant_is_of_type(value, G_VARIANT_TYPE_UINT32)) return g_variant_get_uint32(value);
+    if (g_variant_is_of_type(value, G_VARIANT_TYPE_UINT64)) return quint64(g_variant_get_uint64(value));
+    if (g_variant_is_of_type(value, G_VARIANT_TYPE_INT64)) return qint64(g_variant_get_int64(value));
     if (g_variant_is_of_type(value, G_VARIANT_TYPE_INT32)) return g_variant_get_int32(value);
     if (g_variant_is_of_type(value, G_VARIANT_TYPE_BOOLEAN)) return bool(g_variant_get_boolean(value));
     if (g_variant_is_of_type(value, G_VARIANT_TYPE("a{sv}"))) {
@@ -88,9 +91,7 @@ struct ApplicationsClient::Transport {
         bool okay = g_variant_lookup(credentials, "UnixUserID", "u", &uid) && uid == 0
             && g_variant_lookup(credentials, "ProcessID", "u", &pid);
         g_variant_unref(credentials); g_variant_unref(reply);
-        QFile pidfile(QStringLiteral("/run/openwave/appd.pid"));
-        okay = okay && pidfile.open(QIODevice::ReadOnly) && pidfile.readAll().trimmed().toUInt() == pid
-            && QFile::symLinkTarget(QStringLiteral("/proc/%1/exe").arg(pid)) == QStringLiteral("/usr/libexec/appd");
+        okay = okay && openwave_supervised_process(uid, pid, "/run/openwave/appd.pid");
         if (!okay) { owner.clear(); *error = QStringLiteral("The application service could not be authenticated."); return false; }
         owner = next; return true;
     }
@@ -147,8 +148,6 @@ void ApplicationsClient::call(const QString &method, const QVariantList &argumen
 {
     struct Request { Transport *transport; QString method; QVariantList arguments; Completion completion; };
     auto *request = new Request{m_transport.get(), method, arguments, std::move(completion)};
-    // Attach a source rather than invoke: invoke may run immediately on the GUI
-    // thread before the worker has acquired its context.
     GSource *source = g_idle_source_new();
     g_source_set_callback(source, [](gpointer data) -> gboolean {
         auto *request = static_cast<Request *>(data); auto *transport = request->transport;

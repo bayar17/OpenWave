@@ -9,6 +9,8 @@
 #include <QDebug>
 #include <sys/socket.h>
 #include <unistd.h>
+#undef signals
+#include "OpenWaveIdentity.h"
 
 namespace {
 constexpr int maximumMessage = 16384;
@@ -21,7 +23,7 @@ bool sameUser(QLocalSocket *socket)
     struct ucred peer {};
     socklen_t size = sizeof(peer);
     return getsockopt(socket->socketDescriptor(), SOL_SOCKET, SO_PEERCRED, &peer, &size) == 0
-        && peer.uid == geteuid();
+        && (peer.uid == geteuid() || openwave_supervised_process(peer.uid, peer.pid, "/run/openwave/appd.pid"));
 }
 }
 
