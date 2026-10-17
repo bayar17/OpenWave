@@ -1,5 +1,5 @@
 diff --git a/clang/lib/Basic/Targets.cpp b/clang/lib/Basic/Targets.cpp
-index 8c01cfca8ccb4871abdc70b5ddb002990ae67e43..9a67c8568c007d82a9987bcee3d54c0bc20dd94a 100644
+index 8c01cfca8..9a67c8568 100644
 --- a/clang/lib/Basic/Targets.cpp
 +++ b/clang/lib/Basic/Targets.cpp
 @@ -631,21 +631,29 @@ std::unique_ptr<TargetInfo> AllocateTarget(const llvm::Triple &Triple,
@@ -46,7 +46,7 @@ index 8c01cfca8ccb4871abdc70b5ddb002990ae67e43..9a67c8568c007d82a9987bcee3d54c0b
        return std::make_unique<DragonFlyBSDTargetInfo<X86_64TargetInfo>>(Triple,
                                                                          Opts);
 diff --git a/clang/lib/Basic/Targets/OSTargets.h b/clang/lib/Basic/Targets/OSTargets.h
-index 7c4666606d89f6a24efd3bacc666ed54a183a1fc..d6364cb3cf4314d3bf5eb00b33c25be6c4a2c5c1 100644
+index 7c4666606..d6364cb3c 100644
 --- a/clang/lib/Basic/Targets/OSTargets.h
 +++ b/clang/lib/Basic/Targets/OSTargets.h
 @@ -1,68 +1,55 @@
@@ -1035,7 +1035,7 @@ index 7c4666606d89f6a24efd3bacc666ed54a183a1fc..d6364cb3cf4314d3bf5eb00b33c25be6
 +#endif // LLVM_CLANG_LIB_BASIC_TARGETS_OSTARGETS_H
 \ No newline at end of file
 diff --git a/clang/lib/Driver/CMakeLists.txt b/clang/lib/Driver/CMakeLists.txt
-index 506536cdc04f5f5057730f0ab3976ea94cbea950..ca525ca317e5bcceb4f392dd56811ac1cdf085b8 100644
+index 506536cdc..ca525ca31 100644
 --- a/clang/lib/Driver/CMakeLists.txt
 +++ b/clang/lib/Driver/CMakeLists.txt
 @@ -84,6 +84,7 @@ add_clang_library(clangDriver
@@ -1047,7 +1047,7 @@ index 506536cdc04f5f5057730f0ab3976ea94cbea950..ca525ca317e5bcceb4f392dd56811ac1
    ToolChains/Serenity.cpp
    ToolChains/Solaris.cpp
 diff --git a/clang/lib/Driver/Driver.cpp b/clang/lib/Driver/Driver.cpp
-index e606cdc4c1cf89cedb0a5ed42b34112d87580e1e..3da0e529692e41b5e7637cac69b1e52a52758b4e 100644
+index e606cdc4c..3da0e5296 100644
 --- a/clang/lib/Driver/Driver.cpp
 +++ b/clang/lib/Driver/Driver.cpp
 @@ -39,6 +39,7 @@
@@ -1069,7 +1069,7 @@ index e606cdc4c1cf89cedb0a5ed42b34112d87580e1e..3da0e529692e41b5e7637cac69b1e52a
        TC = std::make_unique<toolchains::Managarm>(*this, Target, Args);
        break;
 diff --git a/llvm/include/llvm/TargetParser/Triple.h b/llvm/include/llvm/TargetParser/Triple.h
-index d819c4975b13e5190611b78c8e37cb95e5ebde19..532f57deb77b04e19f385560fa29eef049c5c875 100644
+index d819c4975..2f2e049d9 100644
 --- a/llvm/include/llvm/TargetParser/Triple.h
 +++ b/llvm/include/llvm/TargetParser/Triple.h
 @@ -347,6 +347,7 @@ public:
@@ -1080,8 +1080,17 @@ index d819c4975b13e5190611b78c8e37cb95e5ebde19..532f57deb77b04e19f385560fa29eef0
      LastOSType = H2
    };
    enum EnvironmentType {
+@@ -742,6 +743,8 @@ public:
+ 
+   bool isOSOpenBSD() const { return getOS() == Triple::OpenBSD; }
+ 
++  bool isOSOpenWave() const { return getOS() == Triple::OpenWave; }
++
+   bool isOSFreeBSD() const { return getOS() == Triple::FreeBSD; }
+ 
+   bool isOSFuchsia() const { return getOS() == Triple::Fuchsia; }
 diff --git a/llvm/lib/Target/X86/X86ISelLoweringCall.cpp b/llvm/lib/Target/X86/X86ISelLoweringCall.cpp
-index 8f14198cf268b3c211fc478bfa9060dfb4819b6f..84e8cd4dc14f9e34a5faa8bb708b097881d4b579 100644
+index 8f14198cf..84e8cd4dc 100644
 --- a/llvm/lib/Target/X86/X86ISelLoweringCall.cpp
 +++ b/llvm/lib/Target/X86/X86ISelLoweringCall.cpp
 @@ -546,7 +546,8 @@ unsigned X86TargetLowering::getAddressSpace() const {
@@ -1095,7 +1104,7 @@ index 8f14198cf268b3c211fc478bfa9060dfb4819b6f..84e8cd4dc14f9e34a5faa8bb708b0978
  
  static Constant* SegmentOffset(IRBuilderBase &IRB,
 diff --git a/llvm/lib/TargetParser/Triple.cpp b/llvm/lib/TargetParser/Triple.cpp
-index 356782c1f6ad49fa75ea774c96865ea401cec0b8..dded20052cdd4b464cc77bba0d45d65e16ab5e78 100644
+index 356782c1f..dded20052 100644
 --- a/llvm/lib/TargetParser/Triple.cpp
 +++ b/llvm/lib/TargetParser/Triple.cpp
 @@ -435,6 +435,8 @@ StringRef Triple::getOSTypeName(OSType Kind) {
@@ -1116,7 +1125,7 @@ index 356782c1f6ad49fa75ea774c96865ea401cec0b8..dded20052cdd4b464cc77bba0d45d65e
  #define TRIPLE_OS_ALIAS(Enum, AliasName) .StartsWith(AliasName, Triple::Enum)
  #include "llvm/TargetParser/TripleName.def"
 diff --git a/llvm/test/CodeGen/X86/stack-protector-target.ll b/llvm/test/CodeGen/X86/stack-protector-target.ll
-index 4ba0302cf6fc30656f65f74cb681eaa5130b3efd..5ff5885a7f2a5d086a27a8c9272794fc51b1628a 100644
+index 4ba0302cf..5ff5885a7 100644
 --- a/llvm/test/CodeGen/X86/stack-protector-target.ll
 +++ b/llvm/test/CodeGen/X86/stack-protector-target.ll
 @@ -1,6 +1,7 @@
@@ -1128,7 +1137,7 @@ index 4ba0302cf6fc30656f65f74cb681eaa5130b3efd..5ff5885a7f2a5d086a27a8c9272794fc
  ; RUN: llc -mtriple=i386-linux-android < %s -o - | FileCheck --check-prefix=I386-TLS %s
  ; RUN: llc -mtriple=x86_64-linux-android < %s -o - | FileCheck --check-prefix=X64-TLS %s
 diff --git a/llvm/unittests/TargetParser/TripleTest.cpp b/llvm/unittests/TargetParser/TripleTest.cpp
-index cfe3bc6abf72fd1ad0ec13f6fb89d88d4ff6971c..91e67673e67f9477af43405df7c9c3e477339114 100644
+index cfe3bc6ab..91e67673e 100644
 --- a/llvm/unittests/TargetParser/TripleTest.cpp
 +++ b/llvm/unittests/TargetParser/TripleTest.cpp
 @@ -3760,4 +3760,14 @@ TEST(DataLayoutTest, CheriRISCV32) {
@@ -1148,7 +1157,7 @@ index cfe3bc6abf72fd1ad0ec13f6fb89d88d4ff6971c..91e67673e67f9477af43405df7c9c3e4
  } // end anonymous namespace
 diff --git a/clang/lib/Driver/ToolChains/OpenWave.cpp b/clang/lib/Driver/ToolChains/OpenWave.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..8e66747f7c64938bf1dc7c95ae816c6a20e26d49
+index 000000000..8e66747f7
 --- /dev/null
 +++ b/clang/lib/Driver/ToolChains/OpenWave.cpp
 @@ -0,0 +1,380 @@
@@ -1535,7 +1544,7 @@ index 0000000000000000000000000000000000000000..8e66747f7c64938bf1dc7c95ae816c6a
 \ No newline at end of file
 diff --git a/clang/lib/Driver/ToolChains/OpenWave.h b/clang/lib/Driver/ToolChains/OpenWave.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..9b200b3881ced02bc431824399b7ad4c16b911dc
+index 000000000..9b200b388
 --- /dev/null
 +++ b/clang/lib/Driver/ToolChains/OpenWave.h
 @@ -0,0 +1,95 @@

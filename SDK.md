@@ -37,10 +37,20 @@ stale SDK paths and refresh their CMake configuration automatically. `qmake` on 
 PATH is the SDK's OpenWave target wrapper.
 
 ```sh
-./build-openwave.sh userspace
-./build-openwave.sh userspace --image out/OpenWave-new.img
+./build-openwave all
+./build-openwave all --image out/OpenWave-new.img
+./build-openwave userspace
+./build-openwave userspace --image out/OpenWave-new.img
 ./run-openwave --image out/OpenWave-new.img run
 ```
+
+`all` applies the OpenWave LLVM patch, rebuilds and installs Clang/LLVM with its
+existing configuration, then builds the available dependency groups, kernel,
+browser engine, SDK clients and system applications. It requires the existing
+target SDK and source inputs described in `README.md`. `./build-openwave llvm`
+builds only the compiler; `./build-openwave llvm-patch` prepares the sources.
+Ordinary application builds and SDK export prepare the patch automatically but
+reuse the installed compiler.
 
 The QEMU launcher disables virtual Ethernet, so guest internet access requires
 connecting Wi-Fi through the passed-through USB adapter. By default it serves
@@ -58,7 +68,7 @@ then assembles `rootfs/`. A new image is only published after `e2fsck` passes; a
 existing image is never overwritten. `fakeroot` remains a host metadata command
 for image ownership and is not the build sysroot or runtime directory.
 
-`./build-openwave.sh sdk` rebuilds only the public clients. The dependency build
+`./build-openwave sdk` rebuilds only the public clients. The dependency build
 helpers install full development dependencies into the architecture-specific
 SDK sysroot, then run the runtime assembler. They use new build caches under
 `out/sdk-dependencies/<target-triple>`; the existing engine and codec binaries

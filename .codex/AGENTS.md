@@ -77,7 +77,7 @@ Compilation uses `toolchain/sysroot/<target-triple>`, exported target Qt in
 Never compile against rootfs: it intentionally has no development headers.
 The library assembler is `scripts/assemble-openwave-rootfs.py`; userspace installs
 first into `out/staging/<target-triple>/userspace`. Public client libraries are
-built by `build-openwave.sh sdk` into the shared SDK headers/CMake prefix and
+built by `build-openwave sdk` into the shared SDK headers/CMake prefix and
 target sysroot libraries.
 
 When target software is installed, it should normally land under paths such as:

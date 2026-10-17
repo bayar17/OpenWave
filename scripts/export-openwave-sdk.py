@@ -56,6 +56,7 @@ def main():
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error('--jobs must be positive')
+    run('bash', ROOT / 'build-openwave', 'llvm-patch')
     sdk = ROOT / 'toolchain'
     sdk.mkdir(exist_ok=True)
     if args.merge_existing:
@@ -104,7 +105,7 @@ def main():
     env = os.environ.copy()
     env.update(OPENWAVE_SDK=str(sdk), OPENWAVE_TARGET_TRIPLE=args.target,
                OPENWAVE_BUILD_JOBS=str(args.jobs))
-    run('bash', ROOT / 'build-openwave.sh', 'sdk', env=env)
+    run('bash', ROOT / 'build-openwave', 'sdk', env=env)
     print(f'Complete Clang, Qt and OpenWave API SDK exported: {sdk}', flush=True)
 
 

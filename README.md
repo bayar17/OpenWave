@@ -6,17 +6,27 @@ system applications. The current target is `x86_64-unknown-openwave` in QEMU.
 ## LLVM sources
 
 `llvm-project/` is an upstream Git submodule pinned to the base of the OpenWave
-compiler patch. Initialize it after cloning this repository:
+compiler patch. Compilation commands initialize the submodule if needed and
+apply the patch automatically before building. To prepare LLVM separately:
 
 ```bash
-git submodule update --init llvm-project
-git -C llvm-project apply --check ../patches/llvm/openwave-llvm.patch
-git -C llvm-project apply --whitespace=nowarn ../patches/llvm/openwave-llvm.patch
+./build-openwave llvm-patch
 ```
 
-The existing development checkout already has that patch applied. Submodule
-initialization alone does not apply it in a fresh checkout. Keep OpenWave compiler
-changes in `patches/llvm/`; see its README for validation and known limitations.
+Already-applied patches are detected and left intact. A conflicting or partially
+applied patch stops the build before compilation, preserving local changes.
+SDK export also prepares LLVM automatically. Preparation changes the source
+checkout; it does not rebuild or replace an existing compiler. Keep OpenWave
+compiler changes in `patches/llvm/`; see its README for known limitations.
+
+`./build-openwave llvm` applies the patch, builds Clang/LLVM and LLD, and installs
+them into `toolchain/`. It reuses `out/llvm-build` and preserves its existing
+configuration. A new build defaults to Release, the X86 backend, and disabled
+LLVM tests, matching the existing compiler setup. Override the build directory
+with `OPENWAVE_LLVM_BUILD`, jobs with `OPENWAVE_BUILD_JOBS`, and fresh-build
+backends with `OPENWAVE_LLVM_TARGETS` (for example, `X86;AArch64`). Native compiler
+overrides are `OPENWAVE_HOST_CC` and `OPENWAVE_HOST_CXX`; target flags are removed
+from the native LLVM build environment.
 
 ## Build commands
 
@@ -24,10 +34,24 @@ Project shell build, staging, image, and QEMU test commands share one entry poin
 
 ```bash
 ./build-openwave --help
+./build-openwave all
+./build-openwave all --image out/OpenWave-new.img
 ./build-openwave sdk
 ./build-openwave userspace
 ./build-openwave userspace --image out/OpenWave-new.img
 ```
+
+`all` applies the LLVM patch, builds/installs the compiler, builds browser
+codecs, ALSA/PipeWire/WirePlumber and the audio kernel, Bluetooth audio, mDNS,
+WPE WebKit, and finally the SDK clients and system applications. The final
+userspace step stages time-zone data and assembles rootfs. Every stage must
+succeed before the next starts; `--image` packs only after the complete build.
+Existing images are rejected before any build work begins.
+
+This command orchestrates the existing builds rather than bootstrapping the
+entire OS from an empty checkout. It requires the populated target Qt/system
+SDK, WPE, SBC, BlueZ, mpg123 and tzdata sources, and a configured Linux kernel
+tree. Downloading dependency commands still fetch their pinned missing sources.
 
 To pack an already assembled rootfs without rebuilding:
 
