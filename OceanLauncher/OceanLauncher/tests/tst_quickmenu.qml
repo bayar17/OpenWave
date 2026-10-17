@@ -37,7 +37,7 @@ Item {
         timeText: "12:12 PM"
         dateText: "Oct 4, 2026 - Sunday"
         backend: radios
-        assetBase: Qt.resolvedUrl("../../OceanTopbard/assets/QuickMenu/")
+        assetBase: Qt.resolvedUrl("../assets/topbar/QuickMenu/")
         regularFont: regularFont.name
         lightFont: lightFont.name
     }

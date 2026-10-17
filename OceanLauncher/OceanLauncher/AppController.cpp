@@ -1,3 +1,5 @@
+#include <QRegularExpression>
+#include <OpenWave/application-id.h>
 #include "AppController.h"
 #include <OpenWave/preferences.h>
 #include <QDir>
@@ -35,7 +37,7 @@ AppController::AppController(QObject *parent)
                 const qint64 previous = m_processIds.take(id); m_pidApps.remove(previous);
                 m_terminating.remove(id); removeSnapshot(id);
                 if (previous) emit appProcessExited(id);
-                if (id == "settings") emit preferencesChanged();
+                if (id == "com.openwave.settings") emit preferencesChanged();
                 emit launchFinished(id, error);
             }
             emit runningAppsChanged();
@@ -97,14 +99,18 @@ void AppController::refreshRegistry()
         }
         installed.sort(); m_installedApps = installed; m_appArtwork = artwork;
         QSettings preferences(m_preferencesPath, QSettings::IniFormat);
-        const QStringList favorites = m_layoutLoaded ? m_favoriteApps
+        QStringList favorites = m_layoutLoaded ? m_favoriteApps
             : preferences.contains("launcher/favorites") ? preferences.value("launcher/favorites").toStringList()
-            : QStringList{"files", "settings", "browser"};
-        const QStringList unpinned = m_layoutLoaded ? m_unpinnedApps : preferences.value("launcher/unpinned").toStringList();
+            : QStringList{"com.openwave.files", "com.openwave.settings", "com.openwave.ocean"};
+        QStringList unpinned = m_layoutLoaded ? m_unpinnedApps : preferences.value("launcher/unpinned").toStringList();
+        for (auto &id : favorites) id = openwaveCanonicalApplicationId(id);
+        for (auto &id : unpinned) id = openwaveCanonicalApplicationId(id);
         m_favoriteApps.clear(); m_unpinnedApps.clear();
         for (const auto &id : favorites) if (installed.contains(id) && !m_favoriteApps.contains(id)) m_favoriteApps.append(id);
         for (const auto &id : unpinned) if (installed.contains(id) && !m_favoriteApps.contains(id) && !m_unpinnedApps.contains(id)) m_unpinnedApps.append(id);
         for (const auto &id : installed) if (!m_favoriteApps.contains(id) && !m_unpinnedApps.contains(id)) m_unpinnedApps.append(id);
+        preferences.setValue("launcher/favorites", m_favoriteApps);
+        preferences.setValue("launcher/unpinned", m_unpinnedApps);
         m_layoutLoaded = true;
         emit registryChanged(); emit appLayoutChanged();
     });
@@ -154,7 +160,8 @@ QString AppController::snapshotPath(const QString &appId)
     if (pid <= 0 || !m_installedApps.contains(appId)) return {};
     const QDir directory(QStringLiteral("/tmp/openwave/process/preview"));
     if (!directory.exists() && !QDir().mkpath(directory.path())) return {};
-    const QString appName = appId.left(1).toUpper() + appId.mid(1);
+    QString appName = m_appArtwork.value(appId).toStringList().value(0, appId).left(80);
+    appName.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_-]")), QStringLiteral("_"));
     const QString path = directory.filePath(QStringLiteral("%1-%2.jpg").arg(pid).arg(appName));
     const QString previous = m_snapshotPaths.value(appId);
     if (!previous.isEmpty() && previous != path) QFile::remove(previous);

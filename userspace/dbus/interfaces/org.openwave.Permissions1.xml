@@ -1,0 +1,17 @@
+<node>
+  <interface name="org.openwave.Permissions1">
+    <method name="QueryFor"><arg name="caller" type="s" direction="in"/><arg name="permission" type="s" direction="in"/><arg name="correlation" type="s" direction="in"/><arg name="correlation" type="s" direction="out"/><arg name="state" type="s" direction="out"/></method>
+    <method name="RequestPermission"><arg name="permission" type="s" direction="in"/><arg name="state" type="s" direction="out"/></method>
+    <method name="CheckPermission"><arg name="permission" type="s" direction="in"/><arg name="state" type="s" direction="out"/></method>
+    <method name="GetPermissionStatus"><arg name="permission" type="s" direction="in"/><arg name="state" type="s" direction="out"/></method>
+    <method name="ListPermissions"><arg name="policies" type="aa{sv}" direction="out"/></method>
+    <method name="SubscribePermissionChanges"/>
+    <method name="RevokePermission"><arg name="application" type="s" direction="in"/><arg name="permission" type="s" direction="in"/></method>
+    <method name="SetPermission"><arg name="application" type="s" direction="in"/><arg name="permission" type="s" direction="in"/><arg name="state" type="s" direction="in"/><arg name="duration" type="s" direction="in"/></method>
+    <method name="ListApplicationsPermissions"><arg name="policies" type="aa{sv}" direction="out"/></method>
+    <method name="AuthorizeFileChooser"><arg name="caller" type="s" direction="in"/><arg name="permission" type="s" direction="in"/><arg name="lease" type="s" direction="out"/></method>
+    <method name="ValidateLease"><arg name="lease" type="s" direction="in"/><arg name="caller" type="s" direction="in"/><arg name="valid" type="b" direction="out"/></method>
+    <method name="ReleaseLease"><arg name="lease" type="s" direction="in"/><arg name="caller" type="s" direction="in"/></method>
+    <signal name="PermissionChanged"><arg name="application" type="s"/><arg name="permission" type="s"/><arg name="state" type="s"/></signal>
+  </interface>
+</node>

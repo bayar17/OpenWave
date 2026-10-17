@@ -48,8 +48,6 @@ ModemInfo modemInfo()
             g_error_free(failure);
         return result;
     }
-    // ModemManager is optional in the current image. Do not activate it merely
-    // to draw the menu, and never infer a cellular carrier from the Wi-Fi link.
     GVariant *reply = g_dbus_connection_call_sync(bus,
         "org.freedesktop.ModemManager1", "/org/freedesktop/ModemManager1",
         "org.freedesktop.DBus.ObjectManager", "GetManagedObjects", nullptr,

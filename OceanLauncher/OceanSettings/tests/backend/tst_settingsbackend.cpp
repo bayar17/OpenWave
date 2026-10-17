@@ -34,6 +34,11 @@ int main(int argc, char **argv)
         CHECK(!settings.wifiStatus().isEmpty());
         CHECK(!settings.systemInfo().value(QStringLiteral("kernel")).toString().isEmpty());
         CHECK(settings.systemInfo().value(QStringLiteral("storageTotal")).toLongLong() > 0);
+        CHECK(!settings.requestPowerAction(QStringLiteral("invalid-action")));
+        if (!settings.powerActionsAvailable()) {
+            CHECK(!settings.requestPowerAction(QStringLiteral("restart")));
+            CHECK(!settings.requestPowerAction(QStringLiteral("shutdown")));
+        }
     }
     {
         SettingsBackend reloaded(path);

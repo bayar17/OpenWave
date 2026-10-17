@@ -27,8 +27,8 @@ signals:
     void saved();
     void errorOccurred(const QString &message);
 private:
-    struct Result { QString path; QString hash; QString error; };
-    static Result getCurrent();
+    struct Result { QString path; QString hash; QString error; QByteArray bytes; };
+    static Result getCurrent(const QString &knownHash);
     static Result saveCrop(const QUrl &url, double x, double y,
                            double width, double height);
     QThreadPool m_pool;

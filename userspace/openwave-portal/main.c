@@ -1,4 +1,5 @@
 #include <OpenWave/OpenWaveXml.h>
+#include <OpenWave/OpenWaveIdentity.h>
 #include <gio/gio.h>
 #include <gio/gunixfdlist.h>
 #include <errno.h>
@@ -24,6 +25,8 @@ typedef struct {
     char **mime_types;
     GPtrArray *paths;
     guint uid, pid, status;
+    char *permission_owner, *lease;
+    gboolean authorizing;
 } Request;
 typedef struct {
     GDBusConnection *bus;
@@ -37,6 +40,7 @@ typedef struct {
 
 static void request_free(Request *request)
 {
+    g_free(request->permission_owner); g_free(request->lease);
     g_free(request->id); g_free(request->sender); g_free(request->mode);
     g_free(request->title); g_free(request->muted_title);
     g_free(request->primary_title); g_free(request->root); g_free(request->initial);
@@ -84,31 +88,6 @@ static char *executable_for_pid(guint pid)
 
 static gboolean safe_component(const char *name);
 
-static char *application_for_executable(const char *executable)
-{
-    GDir *directory = g_dir_open("/usr/share/applications", 0, NULL);
-    if (directory) {
-        const char *name;
-        while ((name = g_dir_read_name(directory))) {
-            if (!g_str_has_suffix(name, ".desktop")) continue;
-            char *path = g_build_filename("/usr/share/applications", name, NULL);
-            GKeyFile *desktop = g_key_file_new();
-            char *result = NULL;
-            if (g_key_file_load_from_file(desktop, path, G_KEY_FILE_NONE, NULL)) {
-                char *exec = g_key_file_get_string(desktop, "Desktop Entry", "Exec", NULL);
-                char *id = g_key_file_get_string(desktop, "Desktop Entry", "X-OpenWave-AppId", NULL);
-                if (exec && id && g_str_equal(exec, executable) && safe_component(id))
-                    result = g_strdup(id);
-                g_free(exec); g_free(id);
-            }
-            g_key_file_free(desktop); g_free(path);
-            if (result) { g_dir_close(directory); return result; }
-        }
-        g_dir_close(directory);
-    }
-    return g_path_get_basename(executable);
-}
-
 static gboolean is_backend(Service *service, const char *sender)
 {
     return service->backend_sender && g_str_equal(sender, service->backend_sender);
@@ -145,7 +124,7 @@ static char *canonical_user_root(Service *service, guint uid)
         safe = chown(data, 0, 0) == 0 && chmod(data, 0755) == 0
             && chown(users, 0, 0) == 0 && chmod(users, 0755) == 0
             && chown(requested, uid, user->pw_gid) == 0
-            && chmod(requested, 0700) == 0;
+            && chmod(requested, 0711) == 0;
     }
     char *result = safe ? realpath(requested, NULL) : NULL;
     g_free(data); g_free(users); g_free(requested);
@@ -175,8 +154,10 @@ static void end_request(Service *service, Request *request, guint status, const 
     announce(service, request);
 }
 
+static void release_lease(Service *, const char *, const char *, const char *);
 static void discard_request(Service *service, Request *request)
 {
+    release_lease(service, request->permission_owner, request->lease, request->sender);
     g_queue_remove(service->requests, request);
     request_free(request);
 }
@@ -283,7 +264,7 @@ static gboolean valid_options(GVariant *options)
         if (g_str_equal(key, "title") || g_str_equal(key, "muted_title")
             || g_str_equal(key, "primary_title") || g_str_equal(key, "initial_directory")
             || g_str_equal(key, "suggested_filename") || g_str_equal(key, "parent_window")
-            || g_str_equal(key, "request_identifier"))
+            || g_str_equal(key, "request_identifier") || g_str_equal(key, "directory_token"))
             valid = g_variant_is_of_type(value, G_VARIANT_TYPE_STRING);
         else if (g_str_equal(key, "mime_types"))
             valid = g_variant_is_of_type(value, G_VARIANT_TYPE("as"));
@@ -295,10 +276,140 @@ static gboolean valid_options(GVariant *options)
     return TRUE;
 }
 
+static GKeyFile *directory_store(void)
+{
+    const char *path = "/var/lib/openwave/portal-directories.ini";
+    struct stat st; GKeyFile *file = g_key_file_new();
+    if (!lstat(path, &st)) {
+        if (!S_ISREG(st.st_mode) || st.st_uid || (st.st_mode & 0077) || st.st_nlink != 1 || st.st_size > 1048576
+            || !g_key_file_load_from_file(file, path, 0, NULL)) { g_key_file_unref(file); return NULL; }
+    } else if (errno != ENOENT) { g_key_file_unref(file); return NULL; }
+    gsize count; char **groups = g_key_file_get_groups(file, &count);
+    gboolean changed = FALSE;
+    for (gsize i = 0; i < count; ++i) {
+        char *app = g_key_file_get_string(file, groups[i], "Application", NULL);
+        const char *id = !g_strcmp0(app, "browser") ? "com.openwave.ocean"
+            : !g_strcmp0(app, "settings") ? "com.openwave.settings"
+            : !g_strcmp0(app, "files") ? "com.openwave.files" : NULL;
+        if (id) { g_key_file_set_string(file, groups[i], "Application", id); changed = TRUE; }
+        g_free(app);
+    }
+    g_strfreev(groups);
+    if (changed) {
+        gsize length; char *contents = g_key_file_to_data(file, &length, NULL);
+        gboolean okay = g_file_set_contents_full(path, contents, length,
+            G_FILE_SET_CONTENTS_CONSISTENT | G_FILE_SET_CONTENTS_DURABLE, 0600, NULL);
+        g_free(contents);
+        if (!okay) { g_key_file_unref(file); return NULL; }
+    }
+    return file;
+}
+static char *remember_directory(Service *service, Request *request)
+{
+    GKeyFile *file = directory_store();
+    if (!file) return NULL;
+    gsize count = 0; char **groups = g_key_file_get_groups(file, &count);
+    if (request->paths->len != 1) { g_strfreev(groups); g_key_file_unref(file); return NULL; }
+    const char *path = g_ptr_array_index(request->paths, 0); struct stat st;
+    int fd = open_beneath(request, path, O_RDONLY | O_DIRECTORY, 0);
+    gboolean okay = fd >= 0 && !fstat(fd, &st); if (fd >= 0) close(fd);
+    if (!okay) { g_strfreev(groups); g_key_file_unref(file); return NULL; }
+    guint owned = 0;
+    for (gsize i = 0; i < count; ++i) {
+        char *app = g_key_file_get_string(file, groups[i], "Application", NULL);
+        char *root = g_key_file_get_string(file, groups[i], "Root", NULL);
+        char *saved = g_key_file_get_string(file, groups[i], "Path", NULL);
+        gboolean mine = !g_strcmp0(app, request->application) && !g_strcmp0(root, request->root);
+        owned += mine;
+        gboolean same = mine && !g_strcmp0(saved, path)
+            && st.st_dev == g_key_file_get_uint64(file, groups[i], "Device", NULL)
+            && st.st_ino == g_key_file_get_uint64(file, groups[i], "Inode", NULL);
+        g_free(app); g_free(root); g_free(saved);
+        if (same) {
+            char *token = g_strdup(groups[i]); g_strfreev(groups); g_key_file_unref(file); return token;
+        }
+    }
+    g_strfreev(groups);
+    if (count >= 1024 || owned >= 64) { g_key_file_unref(file); return NULL; }
+    char *token = g_uuid_string_random();
+    g_key_file_set_string(file, token, "Application", request->application);
+    g_key_file_set_string(file, token, "Root", request->root);
+    g_key_file_set_string(file, token, "Path", path);
+    g_key_file_set_uint64(file, token, "Device", st.st_dev); g_key_file_set_uint64(file, token, "Inode", st.st_ino);
+    gsize serialized = 0; char *contents = g_key_file_to_data(file, &serialized, NULL); g_free(contents);
+    okay = serialized <= 1048576 && g_key_file_save_to_file(file, "/var/lib/openwave/portal-directories.ini", NULL)
+        && !chmod("/var/lib/openwave/portal-directories.ini", 0600);
+    g_key_file_unref(file); (void)service;
+    if (!okay) g_clear_pointer(&token, g_free);
+    return token;
+}
+static char *download_directory(Service *service, const char *token, const char *app, const char *root)
+{
+    if (!token || !*token) {
+        char *path = g_build_filename(root, "Downloads", NULL);
+        if (g_mkdir_with_parents(path, 0700)) { g_free(path); return NULL; }
+        Request request = {.root = (char *)root};
+        int fd = open_beneath(&request, path, O_RDONLY | O_DIRECTORY, 0);
+        if (fd < 0) g_clear_pointer(&path, g_free); else close(fd);
+        return path;
+    }
+    GKeyFile *file = directory_store(); if (!file) return NULL;
+    char *owner = g_key_file_get_string(file, token, "Application", NULL);
+    char *user = g_key_file_get_string(file, token, "Root", NULL);
+    char *path = g_key_file_get_string(file, token, "Path", NULL);
+    Request request = {.root = (char *)root}; struct stat st;
+    int fd = path && !g_strcmp0(app, owner) && !g_strcmp0(root, user) ? open_beneath(&request, path, O_RDONLY | O_DIRECTORY, 0) : -1;
+    gboolean okay = fd >= 0 && !fstat(fd, &st) && st.st_dev == g_key_file_get_uint64(file, token, "Device", NULL)
+        && st.st_ino == g_key_file_get_uint64(file, token, "Inode", NULL);
+    if (fd >= 0) close(fd);
+    g_key_file_unref(file); g_free(owner); g_free(user); (void)service;
+    if (!okay) g_clear_pointer(&path, g_free);
+    return path;
+}
+typedef struct { Service *service; char *id; char *owner; char *sender; } Authorization;
+static void release_lease(Service *service, const char *owner, const char *lease, const char *sender)
+{
+    if (!owner || !lease || !*lease) return;
+    g_dbus_connection_call(service->bus, owner, "/org/openwave/Permissions", "org.openwave.Permissions1", "ReleaseLease",
+        g_variant_new("(ss)", lease, sender), NULL, 0, 1000, NULL, NULL, NULL);
+}
+static void authorized(GObject *source, GAsyncResult *result, gpointer data)
+{
+    Authorization *auth = data; Service *service = auth->service;
+    GError *error = NULL;
+    GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), result, &error);
+    Request *request = find_request(service, auth->id);
+    if (request) request->authorizing = FALSE;
+    if (reply) {
+        const char *lease; g_variant_get(reply, "(&s)", &lease);
+        if (request && request->status == PENDING) {
+            request->lease = g_strdup(lease); request->permission_owner = g_strdup(auth->owner);
+            if (!strcmp(request->mode, "CreateFile")) {
+                char *path = g_build_filename(request->initial, request->suggested, NULL);
+                g_ptr_array_add(request->paths, path); end_request(service, request, SELECTED, NULL);
+            }
+        } else release_lease(service, auth->owner, lease, auth->sender);
+        g_variant_unref(reply);
+    } else if (request && request->status == PENDING) end_request(service, request, FAILED, "File access was not authorized.");
+    g_clear_error(&error); g_free(auth->id); g_free(auth->owner); g_free(auth->sender); g_free(auth);
+}
+static void authorize(Service *service, Request *request)
+{
+    if (service->test_mode) return;
+    char *owner = openwave_service_owner(service->bus, "org.openwave.Permissions", "/run/openwave/permissiond.pid", NULL);
+    if (!owner) { end_request(service, request, FAILED, "The permission service is unavailable."); return; }
+    const char *permission = (!strcmp(request->mode, "SaveFile") || !strcmp(request->mode, "CreateFile")) ? "files.write"
+        : !strcmp(request->mode, "SelectDirectory") ? "files.directory" : "files.read";
+    Authorization *auth = g_new0(Authorization, 1);
+    auth->service = service; auth->id = g_strdup(request->id); auth->owner = owner; auth->sender = g_strdup(request->sender);
+    request->authorizing = TRUE;
+    g_dbus_connection_call(service->bus, owner, "/org/openwave/Permissions", "org.openwave.Permissions1", "AuthorizeFileChooser",
+        g_variant_new("(ss)", request->sender, permission), G_VARIANT_TYPE("(s)"), 0, 130000, NULL, authorized, auth);
+}
 static void open_request(Service *service, const char *sender, const char *mode,
                          GVariant *parameters, GDBusMethodInvocation *call)
 {
-    if (!service->backend_sender) {
+    if (!service->backend_sender && strcmp(mode, "CreateFile")) {
         fail(call, "BackendUnavailable", "The file chooser is unavailable."); return;
     }
     if (g_queue_get_length(service->requests) >= 64) {
@@ -308,7 +419,17 @@ static void open_request(Service *service, const char *sender, const char *mode,
     if (!credentials(service, sender, &uid, &pid)) {
         fail(call, "Unauthorized", "Could not verify the requesting process."); return;
     }
-    char *root = canonical_user_root(service, uid);
+    GVariant *identity = service->test_mode ? NULL : openwave_resolve_caller(service->bus, sender, NULL);
+    guint user_uid = uid;
+    if (!service->test_mode && (!identity || !g_variant_lookup(identity, "userId", "u", &user_uid))) {
+        if (identity) g_variant_unref(identity);
+        fail(call, "Unauthorized", "The requester is not a live managed application."); return;
+    }
+    const char *appid = NULL;
+    if (identity) g_variant_lookup(identity, "appId", "&s", &appid);
+    g_autofree char *verified_app = g_strdup(appid);
+    if (identity) g_variant_unref(identity);
+    char *root = canonical_user_root(service, user_uid);
     char *executable = executable_for_pid(pid);
     if (!root || !executable) {
         fail(call, "Unauthorized", "The requester has no verified user storage or executable.");
@@ -340,7 +461,12 @@ static void open_request(Service *service, const char *sender, const char *mode,
         && (!identifier || strlen(identifier) <= 128)
         && (!suggested || safe_component(suggested)) && valid_mimes(mimes)
         && (!multiple || g_str_equal(mode, "OpenFile") || g_str_equal(mode, "OpenFiles"));
-    char *initial_path = initial && *initial ? realpath(initial, NULL) : g_strdup(root);
+    const char *directory_token = NULL;
+    g_variant_lookup(options, "directory_token", "&s", &directory_token);
+    char *initial_path = !strcmp(mode, "CreateFile")
+        ? download_directory(service, directory_token, verified_app, root)
+        : initial && *initial ? realpath(initial, NULL) : g_strdup(root);
+    if (!strcmp(mode, "CreateFile") && (!suggested || !*suggested || (directory_token && strlen(directory_token) > 128))) valid = FALSE;
     if (!initial_path || !within(root, initial_path)
         || !g_file_test(initial_path, G_FILE_TEST_IS_DIR)) valid = FALSE;
     if (!valid) {
@@ -357,10 +483,22 @@ static void open_request(Service *service, const char *sender, const char *mode,
     request->root = root;
     request->initial = initial_path;
     request->suggested = g_strdup(suggested ? suggested : "");
+    if (!strcmp(mode, "CreateFile")) {
+        for (guint suffix = 1; suffix < 10000; ++suffix) {
+            char *candidate = g_build_filename(initial_path, request->suggested, NULL);
+            struct stat st; gboolean exists = !lstat(candidate, &st); g_free(candidate);
+            if (!exists) break;
+            g_free(request->suggested);
+            const char *dot = strrchr(suggested, '.');
+            if (dot == suggested) dot = NULL;
+            char *stem = dot ? g_strndup(suggested, dot - suggested) : g_strdup(suggested);
+            request->suggested = g_strdup_printf("%s (%u)%s", stem, suffix, dot ? dot : ""); g_free(stem);
+        }
+    }
     request->parent = g_strdup(parent ? parent : "");
     request->request_identifier = g_strdup(identifier ? identifier : "");
     request->application = service->test_mode ? g_path_get_basename(executable)
-                                              : application_for_executable(executable);
+                                              : g_strdup(verified_app);
     request->mime_types = mimes;
     request->paths = g_ptr_array_new_with_free_func(g_free);
     request->uid = uid; request->pid = pid;
@@ -370,6 +508,7 @@ static void open_request(Service *service, const char *sender, const char *mode,
     g_free(uuid); g_free(executable); g_variant_unref(options);
     g_queue_push_tail(service->requests, request);
     g_dbus_method_invocation_return_value(call, g_variant_new("(o)", request->id));
+    authorize(service, request);
 }
 
 static void return_result(Service *service, Request *request,
@@ -383,9 +522,22 @@ static void return_result(Service *service, Request *request,
     g_variant_builder_init(&names, G_VARIANT_TYPE("as"));
     g_variant_builder_init(&handles, G_VARIANT_TYPE("ah"));
     if (request->status == SELECTED) {
+        if (!service->test_mode) {
+            char *owner = openwave_service_owner(service->bus, "org.openwave.Permissions", "/run/openwave/permissiond.pid", NULL);
+            GVariant *reply = owner && request->lease && !g_strcmp0(owner, request->permission_owner)
+                ? g_dbus_connection_call_sync(service->bus, owner, "/org/openwave/Permissions", "org.openwave.Permissions1", "ValidateLease",
+                    g_variant_new("(ss)", request->lease, request->sender), G_VARIANT_TYPE("(b)"), 0, 1500, NULL, NULL) : NULL;
+            gboolean valid = FALSE;
+            if (reply) { g_variant_get(reply, "(b)", &valid); g_variant_unref(reply); }
+            g_free(owner);
+            if (!valid) {
+                g_object_unref(fds); fail(call, "PermissionDenied", "The file grant expired or was revoked.");
+                discard_request(service, request); return;
+            }
+        }
         for (guint i = 0; i < request->paths->len; ++i) {
             const char *saved_path = g_ptr_array_index(request->paths, i);
-            gboolean save = g_str_equal(request->mode, "SaveFile");
+            gboolean save = g_str_equal(request->mode, "SaveFile") || g_str_equal(request->mode, "CreateFile");
             char *path = validated_path(request, saved_path, save);
             if (!path) {
                 g_object_unref(fds);
@@ -423,7 +575,7 @@ static void method_call(GDBusConnection *bus, const char *sender, const char *ob
     (void) bus; (void) object; (void) interface;
     Service *service = data;
     if (g_str_equal(method, "OpenFile") || g_str_equal(method, "OpenFiles")
-        || g_str_equal(method, "SaveFile") || g_str_equal(method, "SelectDirectory")) {
+        || g_str_equal(method, "SaveFile") || g_str_equal(method, "SelectDirectory") || g_str_equal(method, "CreateFile")) {
         open_request(service, sender, method, parameters, call); return;
     }
     if (g_str_equal(method, "RegisterBackend")) {
@@ -432,7 +584,8 @@ static void method_call(GDBusConnection *bus, const char *sender, const char *ob
         gboolean okay = credentials(service, sender, &uid, &pid)
             && uid == (service->test_mode ? getuid() : 0)
             && (executable = executable_for_pid(pid))
-            && g_str_equal(executable, service->backend_executable);
+            && g_str_equal(executable, service->backend_executable)
+            && (service->test_mode || openwave_supervised_process(uid, pid, "/run/openwave/ocean.pid"));
         g_free(executable);
         if (!okay) { fail(call, "Unauthorized", "Only Ocean may provide the file chooser."); return; }
         if (service->backend_sender && !g_str_equal(sender, service->backend_sender)) {
@@ -449,7 +602,7 @@ static void method_call(GDBusConnection *bus, const char *sender, const char *ob
         Request *next = NULL;
         for (GList *node = service->requests->head; node; node = node->next) {
             Request *candidate = node->data;
-            if (candidate->status == PENDING) { next = candidate; break; }
+            if (candidate->status == PENDING && strcmp(candidate->mode, "CreateFile") && (service->test_mode || candidate->lease)) { next = candidate; break; }
         }
         GVariantBuilder options;
         g_variant_builder_init(&options, G_VARIANT_TYPE("a{sv}"));
@@ -478,6 +631,7 @@ static void method_call(GDBusConnection *bus, const char *sender, const char *ob
     Request *request = find_request(service, id);
     if (!request) { fail(call, "UnknownRequest", "No such file chooser request."); return; }
     if (g_str_equal(method, "CompleteRequest")) {
+        if (!service->test_mode && !request->lease) { fail(call, "PermissionDenied", "This request has no permission grant."); return; }
         if (!is_backend(service, sender)) {
             fail(call, "Unauthorized", "Only the registered backend can complete requests."); return;
         }
@@ -509,6 +663,14 @@ static void method_call(GDBusConnection *bus, const char *sender, const char *ob
     if (!g_str_equal(sender, request->sender)) {
         fail(call, "Unauthorized", "Only the requesting application can use this request."); return;
     }
+    if (g_str_equal(method, "DirectoryToken")) {
+        if (request->status != SELECTED || strcmp(request->mode, "SelectDirectory") || !request->lease) {
+            fail(call, "InvalidRequest", "No selected directory grant is available."); return;
+        }
+        char *token = remember_directory(service, request);
+        if (!token) { fail(call, "Unavailable", "Could not retain the selected directory."); return; }
+        g_dbus_method_invocation_return_value(call, g_variant_new("(s)", token)); g_free(token); return;
+    }
     if (g_str_equal(method, "CancelRequest")) {
         end_request(service, request, CANCELLED, NULL);
         g_dbus_method_invocation_return_value(call, NULL); return;
@@ -533,6 +695,14 @@ static void name_owner_changed(GDBusConnection *bus, const char *sender,
     Service *service = data;
     const char *name, *old_owner, *new_owner;
     g_variant_get(parameters, "(&s&s&s)", &name, &old_owner, &new_owner);
+    if (!strcmp(name, "org.openwave.Permissions") && *old_owner) {
+        for (GList *node = service->requests->head; node; node = node->next) {
+            Request *request = node->data;
+            if (request->status == PENDING || request->status == SELECTED) {
+                request->status = PENDING; end_request(service, request, FAILED, "The permission service restarted.");
+            }
+        }
+    }
     if (*new_owner || !*old_owner) return;
     if (service->backend_sender && g_str_equal(name, service->backend_sender)) {
         g_clear_pointer(&service->backend_sender, g_free);
@@ -551,13 +721,16 @@ static const GDBusInterfaceVTable vtable = { .method_call = method_call };
 
 int main(int argc, char **argv)
 {
+#ifndef PORTAL_TESTING
+    if (argc != 1) return 2;
+#endif
     if (argc != 1 && (argc != 4 || !g_str_equal(argv[1], "--test-root"))) {
         g_printerr("usage: openwave-portal [--test-root ROOT BACKEND_EXECUTABLE]\n");
         return 2;
     }
     Service service = { .requests = g_queue_new(),
         .root_prefix = argc == 4 ? argv[2] : "/",
-        .backend_executable = argc == 4 ? argv[3] : "/usr/bin/ocean-launcher",
+        .backend_executable = argc == 4 ? argv[3] : "/System/Applications/com.openwave.shell/bin/ocean-launcher",
         .test_mode = argc == 4 };
     GError *error = NULL;
     service.bus = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, &error);

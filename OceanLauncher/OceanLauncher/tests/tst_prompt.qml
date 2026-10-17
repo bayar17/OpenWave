@@ -28,7 +28,6 @@ Item {
         id: dialog
         anchors.fill: parent
         backend: backend
-        fontSource: Qt.resolvedUrl("../../OceanFiles/assets/fonts/SourceSansPro-ExtraLight.otf")
     }
     TestCase {
         name: "SystemPrompt"
@@ -155,6 +154,53 @@ Item {
             verify(list.currentItem.y >= list.contentY)
             verify(list.currentItem.y + list.currentItem.height <= list.contentY + list.height + 1)
             dialog.respond("cancelled")
+        }
+        function test_ipDnsFormLabelsModesAndSmallScreen() {
+            screen.width = 544; screen.height = 960
+            open("form", {title: "IP and DNS settings", message: "Saved Network\nChanging the active network may briefly interrupt Wi-Fi.",
+                fieldOrder: "ipMode,address,prefix,gateway,dnsMode,dnsServers", fields: {
+                    ipMode: {label: "IP configuration", initialText: "manual",
+                        choices: {automatic: "Automatic (DHCP)", manual: "Manual"}},
+                    address: {label: "IPv4 address", initialText: "192.168.1.50", minLength: 1,
+                        activeWhenField: "ipMode", activeWhenValue: "manual"},
+                    prefix: {label: "Subnet prefix (0–32)", initialText: "24", minLength: 1,
+                        activeWhenField: "ipMode", activeWhenValue: "manual"},
+                    gateway: {label: "Gateway (optional)", initialText: "192.168.1.1",
+                        activeWhenField: "ipMode", activeWhenValue: "manual"},
+                    dnsMode: {label: "DNS configuration", initialText: "manual",
+                        choices: {automatic: "Automatic", manual: "Manual"}},
+                    dnsServers: {label: "DNS servers", initialText: "1.1.1.1, 2001:4860:4860::8888", minLength: 1,
+                        activeWhenField: "dnsMode", activeWhenValue: "manual"}
+                }, acceptLabel: "Save", cancelLabel: "Cancel"})
+            tryCompare(dialog, "phase", "open")
+            const panel = findChild(dialog, "systemPromptPanel")
+            const label = findChild(dialog, "systemPromptFieldLabel_address")
+            const address = findChild(dialog, "systemPromptField_address")
+            verify(label.visible)
+            compare(label.text, "IPv4 address")
+            verify(label.mapToItem(panel, 0, label.height).y <= address.mapToItem(panel, 0, 0).y)
+            const save = findChild(dialog, "systemPromptAccept")
+            verify(save.mapToItem(panel, 0, save.height).y <= panel.height)
+            verify(panel.y >= dialog.safeTop)
+            verify(panel.y + panel.height <= screen.height - dialog.safeBottom)
+            const viewport = findChild(dialog, "systemPromptFormViewport")
+            backend.request = Object.assign({}, backend.request, {message: "Network configuration details. ".repeat(30)})
+            // Update the pending request without interrupting an already visible prompt.
+            dialog.shownRequest = backend.request
+            verify(viewport.contentHeight > viewport.height)
+            dialog.focusForm(false)
+            verify(viewport.contentY >= 0)
+            dialog.setField("ipMode", "automatic")
+            dialog.setField("dnsMode", "automatic")
+            compare(address.visible, false)
+            compare(findChild(dialog, "systemPromptField_dnsServers").visible, false)
+            compare(dialog.inputValid, true)
+            dialog.respond("accepted")
+            compare(backend.values.ipMode, "automatic")
+            compare(backend.values.address, "")
+            compare(backend.values.prefix, "")
+            compare(backend.values.gateway, "")
+            compare(backend.values.dnsServers, "")
         }
         function test_form_validation_and_masked_password() {
             networkForm()

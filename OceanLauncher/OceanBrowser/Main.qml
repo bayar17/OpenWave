@@ -1,5 +1,6 @@
 pragma ComponentBehavior: Bound
 import QtQuick
+import OpenWave.Fonts 1.0
 import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Window
@@ -21,6 +22,8 @@ ApplicationWindow {
     property bool webAvailable: false
     property var webView: null
     property string engineError: ""
+    readonly property bool errorVisible: pageMode === "web" && (!webAvailable || engineError.length > 0)
+    onErrorVisibleChanged: Qt.callLater(root.refreshAddress)
     readonly property bool historyActive: webView && String(webView.url) === "about:history"
     property string downloadNotice: ""
     property string contextImage: ""
@@ -53,8 +56,7 @@ ApplicationWindow {
         if (initialUrl.length > 0) navigate(initialUrl)
     }
 
-    FontLoader { id: uiFont; source: "assets/fonts/SourceSansPro-ExtraLight.otf" }
-    font.family: uiFont.name
+    font.family: Fonts.family
 
     function addressFor(text) {
         const value = text.trim()
@@ -90,7 +92,8 @@ ApplicationWindow {
             activeTab >= 0 ? tabs[activeTab].id : "")
     }
     function refreshAddress() {
-        const address = activeTab >= 0 ? tabs[activeTab].url : "about:overview"
+        const address = activeTab >= 0 ? tabs[activeTab].failedUrl || tabs[activeTab].url : "about:overview"
+        if (errorVisible && !addressInput.activeFocus) { addressInput.text = ""; return }
         if (addressInput.activeFocus || BrowserPreferences.alwaysShowFullUrl)
             addressInput.text = address
         else {
@@ -98,6 +101,18 @@ ApplicationWindow {
             addressInput.text = origin ? origin[0] : address
         }
         if (!addressInput.activeFocus) addressInput.cursorPosition = 0
+    }
+    function retryNavigation() {
+        if (transitionBusy || activeTab < 0) return
+        menuOpen = false
+        addressInput.focus = false
+        if (!webAvailable) { activateTab(activeTab); return }
+        const address = tabs[activeTab].failedUrl || tabs[activeTab].url
+        if (!BrowserInput.reloadView(webView, address)) webView.reload()
+    }
+    function submitAddress() {
+        if (errorVisible && !addressInput.activeFocus) retryNavigation()
+        else navigate(addressInput.activeFocus ? addressInput.text : String(webView ? webView.url : "about:overview"))
     }
     function openSettings() {
         menuOpen = false
@@ -120,7 +135,7 @@ ApplicationWindow {
     function appendTab(privateTab, address, id, title) {
         const tab = {id: id || ("tab-" + Date.now() + "-" + Math.floor(Math.random() * 1000000)),
             privateTab: privateTab, url: address || "about:overview", title: title || "",
-            view: null, preview: id && !privateTab ? String(BrowserData.previewSource(id)) : "", error: ""}
+            view: null, preview: id && !privateTab ? String(BrowserData.previewSource(id)) : "", error: "", failedUrl: ""}
         tabs = tabs.concat([tab])
         tabsModel.append({tabId: tab.id, address: tab.url, label: tabLabel(tab.url),
             privateTab: privateTab, preview: tab.preview})
@@ -155,16 +170,13 @@ ApplicationWindow {
             })
             view.titleChanged.connect(function() { tab.title = view.title; root.saveTabs() })
             view.loadingChanged.connect(function(request) {
-                // Track the actual terminal status, including failure/cancellation.
-                // WPE does not emit new loading statuses for redirect hops.
                 if (request.status === 0) view.navigationLoading = true
                 else if (request.status === 1 || request.status === 2 || request.status === 3)
                     view.navigationLoading = false
-                tab.error = request.errorString || ""
+                tab.error = request.status === 3 ? request.errorString || qsTr("Unable to load this page.") : ""
+                tab.failedUrl = request.status === 3 ? String(request.url || tab.url) : ""
                 if (root.tabs[root.activeTab] === tab) root.engineError = tab.error
                 if (request.status === 3) console.warn("Ocean Browser load failed: " + request.errorString)
-                // LoadSucceededStatus is emitted once for the final committed URL;
-                // canceled loads, failures, and redirect hops never reach this branch.
                 if (request.status === 2 && !request.errorString && BrowserPreferences.rememberHistory) {
                     const address = String(view.url)
                     const token = History.recordVisit(address, String(view.title), tab.privateTab)
@@ -179,7 +191,8 @@ ApplicationWindow {
             view.url = tab.url
         } catch (error) {
             console.warn("Ocean WPE view: " + error)
-            tab.error = "WPEWebKit is not available."
+            if (tab.view) { tab.view.destroy(); tab.view = null }
+            tab.error = qsTr("WPEWebKit is not available.")
             return false
         }
         return true
@@ -204,8 +217,9 @@ ApplicationWindow {
         pendingIndex = index === undefined ? -1 : index
         const tab = tabs[activeTab]
         pendingCapture = tab ? tab.id : ""
-        if (tab && tab.view && tab.view.visible
-                && BrowserData.capturePreview(historyActive ? webHost : tab.view, tab.id, tab.privateTab))
+        const item = historyActive || errorVisible ? webHost : tab && tab.view
+        if (tab && item && item.visible
+                && BrowserData.capturePreview(item, tab.id, tab.privateTab))
             captureTimeout.restart()
         else finishCapture()
     }
@@ -287,6 +301,8 @@ ApplicationWindow {
         if (activeTab < 0) activateTab(appendTab(false, address))
         if (webView) {
             webView.visible = true
+            if (activeTab >= 0 && tabs[activeTab].failedUrl === address
+                    && BrowserInput.reloadView(webView, address)) return
             webView.url = address
         }
     }
@@ -373,13 +389,13 @@ ApplicationWindow {
 
             Item {
                 id: webHost
-                x: 1; y: 1; width: parent.width - 2; height: parent.height - 2
-                // EGLFS presents the 768-wide UI canvas on the actual KMS mode.
-                // Cap CSS width for higher-resolution phone displays as well.
+                x: 1; width: parent.width - 2
+                anchors.top: parent.top; anchors.topMargin: 1
+                anchors.bottom: bottomShade.top
                 readonly property real physicalScale: Math.min(root.Screen.width / root.width,
                                                                root.Screen.height / root.height)
                 readonly property real cssViewportWidth: Math.min(500, width * physicalScale)
-                visible: root.pageMode === "web" && root.webAvailable
+                visible: root.pageMode === "web"
                          && (root.overviewProgress < 1 || root.returningFromTabs)
                 enabled: !root.transitionBusy && !root.overviewOpen
                 transform: [
@@ -398,7 +414,7 @@ ApplicationWindow {
                     id: historyContent
                     anchors.fill: parent; z: 5
                     visible: root.historyActive
-                    fontFamily: uiFont.name; reduceMotion: root.reducedMotion
+                    fontFamily: Fonts.family; reduceMotion: root.reducedMotion
                     onOpenPage: function(url) { root.navigate(url) }
                     onBrowserAction: function(action) {
                         if (action === "Show all tabs") root.captureThen("overview")
@@ -415,20 +431,13 @@ ApplicationWindow {
                     layer.enabled: true
                     layer.effect: MultiEffect { blurEnabled: true; blurMax: 32; blur: 0.6 }
                 }
-                clip: true
-            }
-
-            Item {
-                visible: !root.overviewOpen && root.pageMode === "web" && (!root.webAvailable || root.engineError.length > 0)
-                anchors.fill: parent
-                Text {
-                    anchors.centerIn: parent
-                    width: parent.width - 90
-                    text: root.engineError
-                    wrapMode: Text.WordWrap
-                    horizontalAlignment: Text.AlignHCenter
-                    color: "#555"; font.family: uiFont.name; font.pixelSize: 33
+                BrowserErrorPage {
+                    anchors.fill: parent; z: 20
+                    visible: root.errorVisible
+                    message: root.engineError
+                    fontFamily: Fonts.family
                 }
+                clip: true
             }
 
             Item {
@@ -439,7 +448,7 @@ ApplicationWindow {
                     x: 45; y: 65; width: parent.width - 90
                     text: root.pageMode === "downloads" ? "Downloads"
                         : root.pageMode === "about" ? "About Ocean Browser" : "Private tabs"
-                    color: "#222"; font.family: uiFont.name; font.pixelSize: 48
+                    color: "#222"; font.family: Fonts.family; font.pixelSize: 48
                 }
                 Text {
                     id: messageBody
@@ -448,14 +457,14 @@ ApplicationWindow {
                         : root.pageMode === "downloads" ? "No downloads yet"
                         : "Private browsing needs an isolated WPEWebKit session."
                     wrapMode: Text.WordWrap
-                    color: "#555"; font.family: uiFont.name; font.pixelSize: 30
+                    color: "#555"; font.family: Fonts.family; font.pixelSize: 30
                 }
             }
 
             DownloadsPage {
                 anchors.fill: parent
                 visible: root.pageMode === "downloads" && !root.overviewOpen
-                fontFamily: uiFont.name
+                fontFamily: Fonts.family
             }
 
             GridView {
@@ -529,7 +538,7 @@ ApplicationWindow {
                         width: parent.width - 20
                         text: (tabCard.privateTab ? "Private · " : "") + tabCard.label
                         elide: Text.ElideRight; horizontalAlignment: Text.AlignHCenter
-                        color: "#111"; font.family: uiFont.name; font.pixelSize: 32
+                        color: "#111"; font.family: Fonts.family; font.pixelSize: 32
                     }
                     Rectangle {
                         x: cardImage.x + cardImage.width - 54; y: 12
@@ -587,8 +596,10 @@ ApplicationWindow {
                         anchors.right: searchButton.left; anchors.rightMargin: 3
                         height: parent.height
                         text: "about:overview"
+                        placeholderText: qsTr("type to search")
+                        placeholderTextColor: "#9d9d9d"
                         color: "#121212"; selectionColor: "#8fd5e4"
-                        font.family: uiFont.name; font.pixelSize: 32
+                        font.family: Fonts.family; font.pixelSize: 32
                         verticalAlignment: TextInput.AlignVCenter
                         leftPadding: 0; rightPadding: 0
                         topPadding: 0; bottomPadding: 0
@@ -598,13 +609,18 @@ ApplicationWindow {
                     }
                     Item {
                         id: searchButton
+                        Accessible.role: Accessible.Button
+                        Accessible.name: root.errorVisible && !addressInput.activeFocus ? qsTr("Reload page") : qsTr("Search or open address")
+                        Accessible.onPressAction: root.submitAddress()
                         anchors.right: parent.right; anchors.rightMargin: 9
                         width: 62; height: parent.height
                         BrowserGlyph {
                             anchors.centerIn: parent
-                            width: 42; height: 42; kind: "search"; strokeColor: "black"
+                            width: 42; height: 42
+                            kind: root.errorVisible && !addressInput.activeFocus ? "reload" : "search"
+                            strokeColor: "black"
                         }
-                        TapHandler { onTapped: root.navigate(addressInput.activeFocus ? addressInput.text : String(root.webView ? root.webView.url : "about:overview")) }
+                        TapHandler { onTapped: root.submitAddress() }
                     }
                     AddressLoadingBorder {
                         anchors.fill: parent
@@ -697,7 +713,7 @@ ApplicationWindow {
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
                                     text: menuRow.modelData
-                                    color: "white"; font.family: uiFont.name; font.pixelSize: 43
+                                    color: "white"; font.family: Fonts.family; font.pixelSize: 43
                                     font.preferTypoLineMetrics: true
                                 }
                                 TapHandler { onTapped: root.menuAction(menuRow.modelData) }
@@ -725,7 +741,7 @@ ApplicationWindow {
         BrowserSettingsPage {
             x: 17; y: 64; width: 733; height: 1276
             visible: root.settingsOpen
-            fontFamily: uiFont.name; reduceMotion: root.reducedMotion
+            fontFamily: Fonts.family; reduceMotion: root.reducedMotion
             backdrop: settingsBackdrop
             onClosed: root.settingsOpen = false
         }
@@ -749,7 +765,7 @@ ApplicationWindow {
         y: parent.height - 145 * root.contentScale
         width: Math.min(parent.width - 40, noticeText.implicitWidth + 30); height: 44 * root.contentScale
         radius: 12; color: "#df414d58"; visible: root.downloadNotice.length > 0; z: 100
-        Text { id: noticeText; anchors.centerIn: parent; text: root.downloadNotice; color: "white"; font.family: uiFont.name; font.pixelSize: 24 * root.contentScale }
+        Text { id: noticeText; anchors.centerIn: parent; text: root.downloadNotice; color: "white"; font.family: Fonts.family; font.pixelSize: 24 * root.contentScale }
     }
     Popup {
         id: resourceMenu
@@ -764,7 +780,7 @@ ApplicationWindow {
                 delegate: Item {
                     required property string modelData
                     width: resourceMenu.availableWidth; height: 60 * root.contentScale
-                    Text { anchors.centerIn: parent; text: parent.modelData; color: "white"; font.family: uiFont.name; font.pixelSize: 32 * root.contentScale }
+                    Text { anchors.centerIn: parent; text: parent.modelData; color: "white"; font.family: Fonts.family; font.pixelSize: 32 * root.contentScale }
                     TapHandler { onTapped: {
                         resourceMenu.close()
                         if (modelData === qsTr("Save Image")) Downloads.saveResource(root.contextImage, true, false)

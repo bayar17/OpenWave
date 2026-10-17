@@ -1,4 +1,5 @@
 #include <QGuiApplication>
+#include <OpenWave/FontManager.h>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QIcon>
@@ -21,6 +22,10 @@ int main(int argc, char *argv[])
     // WPEQtView shares an OpenGL scene graph with the Qt Quick chrome.
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
     QGuiApplication app(argc, argv);
+    OpenWave::FontManager::initialize();
+    QFont browserFont = QGuiApplication::font();
+    browserFont.setWeight(QFont::ExtraLight);
+    QGuiApplication::setFont(browserFont);
     QCoreApplication::setApplicationName(QStringLiteral("Ocean Browser"));
     QCoreApplication::setOrganizationName(QStringLiteral("OpenWave"));
     QGuiApplication::setDesktopFileName(QStringLiteral("ocean-browser"));
@@ -34,7 +39,7 @@ int main(int argc, char *argv[])
             return QString();
         });
 
-    QString aboutDirectory = QStringLiteral("/usr/share/ocean-browser/about");
+    QString aboutDirectory = QCoreApplication::applicationDirPath() + QStringLiteral("/../resources/about");
 #ifdef OCEAN_BROWSER_SOURCE_ABOUT_DIR
     if (!QDir(aboutDirectory).exists())
         aboutDirectory = QStringLiteral(OCEAN_BROWSER_SOURCE_ABOUT_DIR);
@@ -45,14 +50,15 @@ int main(int argc, char *argv[])
     BrowserData browserData(previews);
     BrowserPreferences preferences(browserData.dataPath(), browserData.userPath());
     OceanHistoryManager history(browserData.dataPath());
-    qputenv("OCEAN_BROWSER_DATA_DIRECTORY", browserData.dataPath().toUtf8());
-    qputenv("WPE_SHELL_MEDIA_DISK_CACHE_PATH", (browserData.dataPath() + QStringLiteral("/cache/HTTP")).toUtf8());
+    // The existing WPE Qt plugin appends cache/HTTP to this cache-only base.
+    qputenv("OCEAN_BROWSER_DATA_DIRECTORY", (browserData.dataPath() + QStringLiteral("/Cache")).toUtf8());
+    qputenv("WPE_SHELL_MEDIA_DISK_CACHE_PATH", (browserData.dataPath() + QStringLiteral("/Cache/HTTP")).toUtf8());
     OceanCookieManager cookies(browserData.dataPath(), &preferences);
     if (!cookies.ready()) qWarning("Cookie profile initialization: %s", qPrintable(cookies.error()));
     QObject::connect(&cookies, &OceanCookieManager::storageError, &app,
                      [](const QString &error) { qWarning("Cookie profile: %s", qPrintable(error)); });
     OceanDownloadManager downloads(browserData.dataPath(), browserData.userPath(), &preferences);
-    qputenv("MESA_SHADER_CACHE_DIR", (browserData.dataPath() + QStringLiteral("/cache/GPUCache")).toUtf8());
+    qputenv("MESA_SHADER_CACHE_DIR", (browserData.dataPath() + QStringLiteral("/Cache/GPUCache")).toUtf8());
     WallpaperClient wallpaper;
     BrowserInput input;
     QQmlApplicationEngine engine;
@@ -64,8 +70,6 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("Cookies"), &cookies);
     engine.rootContext()->setContextProperty(QStringLiteral("Downloads"), &downloads);
     engine.rootContext()->setContextProperty(QStringLiteral("Wallpaper"), &wallpaper);
-    // WPE installs its QML plugin under lib64, while OpenWave's own Qt QML
-    // modules live under /usr/qml.
     engine.addImportPath(QStringLiteral("/usr/lib64/qt6/qml"));
     const QStringList arguments = QCoreApplication::arguments();
     if (arguments.size() > 1)
@@ -73,9 +77,6 @@ int main(int argc, char *argv[])
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
                      &app, [] { QCoreApplication::exit(-1); }, Qt::QueuedConnection);
     engine.loadFromModule("OceanBrowser", "Main");
-    // OpenWave's Qt build uses the Unix event dispatcher without GLib support.
-    // WPEWebKit uses the default GLib context for process launching, IPC and
-    // network callbacks, so keep that context moving from the Qt event loop.
     QTimer glibPump;
     glibPump.setInterval(8);
     QObject::connect(&glibPump, &QTimer::timeout, &app, [] {

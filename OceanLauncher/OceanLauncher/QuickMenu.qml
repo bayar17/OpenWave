@@ -75,8 +75,6 @@ Item {
 
         MouseArea {
             anchors.fill: parent
-            // The open panel owns its background, so taps do not reach the
-            // launcher or a Wayland app underneath it.
         }
 
         Item {

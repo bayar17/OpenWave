@@ -12,7 +12,7 @@
 #include <unistd.h>
 
 BrowserPreferences::BrowserPreferences(const QString &path, const QString &user, QObject *parent)
-    : QObject(parent), m_file(path + "/Browser/Settings.json"), m_user(QDir::cleanPath(user)),
+    : QObject(parent), m_file(path + "/Config/Settings.json"), m_user(QDir::cleanPath(user)),
       m_portal(new OpenWavePortals(this))
 {
     if (!safeStorage() || !QDir().mkpath(QFileInfo(m_file).absolutePath()))
@@ -34,8 +34,9 @@ BrowserPreferences::BrowserPreferences(const QString &path, const QString &user,
                         if (saved.value(key).metaType().id() == QMetaType::Bool) m_values.insert(key, saved.value(key));
                     const auto engine = saved.value("searchEngine").toString();
                     if (QStringList{"google", "duckduckgo", "bing"}.contains(engine)) m_values.insert("searchEngine", engine);
-                    const auto folder = QFileInfo(saved.value("downloadFolder").toString()).canonicalFilePath();
-                    if ((folder == m_user || folder.startsWith(m_user + "/")) && QFileInfo(folder).isDir())
+                    m_values.insert("downloadDirectoryToken", saved.value("downloadDirectoryToken").toString().left(128));
+                    const auto folder = QDir::cleanPath(saved.value("downloadFolder").toString());
+                    if ((folder == m_user || folder.startsWith(m_user + "/")) && !folder.isEmpty())
                         m_values.insert("downloadFolder", folder);
                 }
             }
@@ -49,10 +50,11 @@ BrowserPreferences::BrowserPreferences(const QString &path, const QString &user,
         char buffer[4096];
         const auto link = QStringLiteral("/proc/self/fd/%1").arg(grant->descriptor()).toLocal8Bit();
         const auto count = readlink(link.constData(), buffer, sizeof(buffer));
-        const QString path = count > 0 ? QFileInfo(QString::fromLocal8Bit(buffer, count)).canonicalFilePath() : QString();
-        if ((path != m_user && !path.startsWith(m_user + "/")) || !QFileInfo(path).isDir() || !QFileInfo(path).isWritable()) {
+        const QString path = count > 0 ? QDir::cleanPath(QString::fromLocal8Bit(buffer, count)) : QString();
+        if ((path != m_user && !path.startsWith(m_user + "/")) || grant->directoryToken().isEmpty()) {
             reportError(tr("Choose a writable folder in your data directory.")); return;
         }
+        setValue("downloadDirectoryToken", grant->directoryToken());
         setValue("downloadFolder", path);
     });
 }

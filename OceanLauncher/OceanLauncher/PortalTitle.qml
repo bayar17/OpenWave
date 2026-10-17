@@ -3,8 +3,6 @@ import QtQuick
 Item {
     id: titleItem
 
-    // Callers can supply translated segments. A legacy single-string title
-    // falls back to emphasizing its final whitespace-separated word.
     property string title: ""
     property string mutedTitle: ""
     property string primaryTitle: ""

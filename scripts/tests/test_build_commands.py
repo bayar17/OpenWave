@@ -87,7 +87,7 @@ sys.exit(23 if subject == os.environ.get('FAIL_COMPONENT', 'sdk') and phase == o
     def test_invalid_arguments_fail_before_building(self):
         for args in (('unknown',), ('sdk', 'extra'), ('userspace', '--image'),
                      ('browser-engine', 'invalid'), ('image',), ('test-appd',),
-                     ('llvm', 'extra'), ('all', '--image')):
+                     ('llvm', 'extra'), ('selinux', 'extra'), ('test-selinux',), ('all', '--image')):
             with self.subTest(args=args):
                 result = self.command(*args, OPENWAVE_SDK='/missing-sdk')
                 self.assertEqual(result.returncode, 2, result.stderr)
@@ -130,7 +130,8 @@ sys.exit(23 if subject == os.environ.get('FAIL_COMPONENT', 'sdk') and phase == o
         runtime = self.root / 'runtime'
         (runtime / 'usr/bin').mkdir(parents=True)
         (runtime / 'init').touch()
-        (runtime / 'usr/bin/ocean-launcher').touch()
+        (runtime / 'System/Applications/com.openwave.shell/bin').mkdir(parents=True)
+        (runtime / 'System/Applications/com.openwave.shell/bin/ocean-launcher').touch()
         commands = (('userspace', '--image', str(image)), ('all', '--image', str(image)),
                     ('image', str(runtime), str(image)),
                     ('test-appd', str(image)), ('test-browser-input', str(image)))
@@ -188,7 +189,7 @@ sys.exit(23 if subject == os.environ.get('FAIL_COMPONENT', 'sdk') and phase == o
                           '    log.write(json.dumps(sys.argv[1:]) + "\\n")\n'
                           'sys.exit(23 if sys.argv[1] == os.environ.get("FAIL_STAGE") else 0)\n')
         functions = ''
-        for stage in ('llvm', 'browser_engine', 'audio', 'bluetooth_audio', 'mdns', 'userspace'):
+        for stage in ('llvm', 'browser_engine', 'audio', 'bluetooth_audio', 'mdns', 'selinux', 'bubblewrap', 'userspace'):
             functions += (f'build_{stage}() (\n'
                           f'    python3 "$ROOT/log-stage.py" {stage} "$@"\n)\n')
         builder.write_text(builder.read_text().replace('\nCOMMAND=', '\n' + functions + '\nCOMMAND=', 1))
@@ -199,7 +200,7 @@ sys.exit(23 if subject == os.environ.get('FAIL_COMPONENT', 'sdk') and phase == o
         result = self.command('all', '--image', image)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls(), [['llvm'], ['browser_engine', 'deps'], ['audio'],
-                                       ['bluetooth_audio'], ['mdns'], ['browser_engine', 'engine'],
+                                       ['bluetooth_audio'], ['mdns'], ['selinux'], ['bubblewrap'], ['browser_engine', 'engine'],
                                        ['userspace', '--image', image]])
 
     def test_all_stops_at_failed_llvm_stage(self):
@@ -214,6 +215,29 @@ sys.exit(23 if subject == os.environ.get('FAIL_COMPONENT', 'sdk') and phase == o
         self.assertEqual(result.returncode, 23, result.stderr)
         self.assertEqual(self.calls()[-1], ['mdns'])
         self.assertFalse(any(call[0] == 'userspace' for call in self.calls()))
+
+    def test_all_stops_at_failed_selinux_stage(self):
+        self.stub_all_stages()
+        result = self.command('all', FAIL_STAGE='selinux')
+        self.assertEqual(result.returncode, 23, result.stderr)
+        self.assertEqual(self.calls()[-1], ['selinux'])
+        self.assertFalse(any(call[0] == 'userspace' or call == ['browser_engine', 'engine']
+                             for call in self.calls()))
+
+    def test_selinux_rejects_bad_cached_source_before_installing(self):
+        for name in ('pkg-config', 'flex'):
+            tool = self.tools / name
+            tool.write_text('#!/bin/sh\nexit 0\n')
+            tool.chmod(0o755)
+        download = self.root / 'out/sdk-dependencies/x86_64-unknown-openwave/selinux-3.11'
+        download.mkdir(parents=True)
+        (download / 'libsepol-3.11.tar.gz').write_bytes(b'corrupted archive')
+        result = self.command('selinux')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('FAILED', result.stdout)
+        self.assertFalse((self.root / 'third_party/libsepol-3.11').exists())
+        self.assertFalse((self.sdk / 'sysroot/x86_64-unknown-openwave/usr/include/sepol').exists())
+        self.assertFalse((self.root / 'rootfs').exists())
 
     def test_repeated_patch_preserves_local_changes(self):
         result = self.command('llvm-patch')

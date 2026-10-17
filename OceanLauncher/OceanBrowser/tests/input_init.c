@@ -14,7 +14,7 @@ int main(void)
         const char *arguments[] = { NULL };
         GVariant *reply = g_dbus_connection_call_sync(bus,
             "org.openwave.Applications", "/org/openwave/Applications", "org.openwave.Applications1",
-            "Launch", g_variant_new("(s^as)", "input-test", arguments), NULL,
+            "Launch", g_variant_new("(s^as)", "org.openwave.qa.browser-input", arguments), NULL,
             G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &error);
         if (reply) g_variant_unref(reply);
         g_object_unref(bus);
@@ -24,7 +24,7 @@ int main(void)
     for (int i = 0; i < 600; ++i) {
         int status;
         while (waitpid(-1, &status, WNOHANG) > 0) {}
-        FILE *file = fopen("/tmp/browser-input-result", "r");
+        FILE *file = fopen("/Data/Users/root/.DataLocation/Applications/org.openwave.qa.browser-input/Data/input-result", "r");
         if (file) {
             if (fscanf(file, "%d", &result) != 1) result = -1;
             fclose(file);

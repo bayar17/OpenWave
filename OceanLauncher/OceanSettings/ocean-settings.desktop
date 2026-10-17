@@ -2,8 +2,8 @@
 Type=Application
 Name=Settings
 Comment=Configure your OpenWave device
-Exec=/usr/bin/ocean-settings
+Exec=/System/Services/openwave-launch com.openwave.settings
 Icon=ocean-settings
 Terminal=false
 Categories=Settings;
-X-OpenWave-AppId=settings
+X-OpenWave-AppId=com.openwave.settings

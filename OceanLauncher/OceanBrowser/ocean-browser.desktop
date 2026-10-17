@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=Browser
-Exec=/usr/bin/ocean-browser
+Exec=/System/Services/openwave-launch com.openwave.ocean
 Icon=ocean-browser
 Categories=Network;WebBrowser;
 Terminal=false
-X-OpenWave-AppId=browser
+X-OpenWave-AppId=com.openwave.ocean

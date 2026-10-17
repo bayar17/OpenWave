@@ -1,4 +1,5 @@
 import QtQuick
+import OpenWave.Fonts 1.0
 import QtQuick.Controls
 
 Item {
@@ -43,7 +44,6 @@ Item {
         }
     }
 
-    FontLoader { id: extraLight; source: "qrc:/OceanPortal/assets/fonts/SourceSansPro-ExtraLight.otf" }
     FontLoader { id: regular; source: "assets/fonts/Inter-Regular.otf" }
     FontLoader { id: light; source: "assets/fonts/Inter-Light.otf" }
 
@@ -336,7 +336,7 @@ Item {
             primaryTitle: chooser.displayedPrimaryTitle
             primaryColor: panel.ink
             mutedOpacity: panel.titleMutedOpacity
-            fontFamily: extraLight.name
+            fontFamily: Fonts.family
         }
         Text {
             visible: !chooser.searchOpen
@@ -345,7 +345,7 @@ Item {
                 : chooser.displayedMode === "SaveFile" ? "Save file as..."
                 : chooser.displayedMode === "SelectDirectory" ? "Select a folder"
                 : "Select a file"
-            color: panel.mutedInk; font.family: extraLight.name; font.pixelSize: 24
+            color: panel.mutedInk; font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: 24
             verticalAlignment: Text.AlignVCenter
         }
         TextField {
@@ -442,7 +442,7 @@ Item {
                 background: Rectangle { color: pathButton.down ? "#20ffffff" : "transparent"; radius: 8 }
                 contentItem: Text {
                     text: filesBackend ? filesBackend.breadcrumb : "Data"
-                    color: panel.ink; font.family: extraLight.name; font.pixelSize: 34
+                    color: panel.ink; font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: 34
                     elide: Text.ElideLeft; verticalAlignment: Text.AlignVCenter
                     leftPadding: 9
                 }
@@ -505,7 +505,7 @@ Item {
                 text: chooser.displayedMode === "SaveFile" ? "Save"
                     : chooser.displayedMode === "SelectDirectory" ? "Select" : "Open"
                 color: chooser.lightTheme ? "#25313a" : "white"
-                font.family: extraLight.name; font.pixelSize: 29
+                font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: 29
                 horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
             }
         }
@@ -591,7 +591,7 @@ Item {
                         background: Rectangle { color: parent.down ? "#26ffffff" : "transparent"; radius: 12 }
                         contentItem: Text {
                             text: modelData; color: panel.ink
-                            font.family: extraLight.name; font.pixelSize: 33
+                            font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: 33
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
@@ -639,7 +639,7 @@ Item {
             Text {
                 x: 25; y: 26; width: parent.width - 50
                 text: "About This Portal"
-                color: panel.ink; font.family: extraLight.name; font.pixelSize: 37
+                color: panel.ink; font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: 37
             }
             Text {
                 x: 25; y: 91; width: parent.width - 50
@@ -653,7 +653,7 @@ Item {
                 background: Item {}
                 contentItem: Text {
                     text: "Close"; color: panel.ink
-                    font.family: extraLight.name; font.pixelSize: 28
+                    font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: 28
                     horizontalAlignment: Text.AlignHCenter
                 }
             }

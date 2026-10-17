@@ -79,6 +79,11 @@ else:
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('-vnc', json.loads(self.log.read_text()))
 
+    def test_guest_can_restart_without_exiting_qemu(self):
+        result = self.command('--vnc')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('-no-reboot', json.loads(self.log.read_text()))
+
     def test_conflicting_modes_fail_before_launch(self):
         for flags in (('--window', '--vnc'), ('--vnc', '--qemu-window')):
             with self.subTest(flags=flags):

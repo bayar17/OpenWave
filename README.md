@@ -42,7 +42,7 @@ Project shell build, staging, image, and QEMU test commands share one entry poin
 ```
 
 `all` applies the LLVM patch, builds/installs the compiler, builds browser
-codecs, ALSA/PipeWire/WirePlumber and the audio kernel, Bluetooth audio, mDNS,
+codecs, ALSA/PipeWire/WirePlumber and the audio kernel, Bluetooth audio, mDNS, SELinux libraries, Bubblewrap,
 WPE WebKit, and finally the SDK clients and system applications. The final
 userspace step stages time-zone data and assembles rootfs. Every stage must
 succeed before the next starts; `--image` packs only after the complete build.
@@ -60,7 +60,7 @@ To pack an already assembled rootfs without rebuilding:
 ```
 
 Image creation refuses to overwrite existing images. The `audio`,
-`bluetooth-audio`, `browser-engine`, `mdns`, and `tzdata` commands retain their
+`bluetooth-audio`, `browser-engine`, `mdns`, `selinux`, `bubblewrap`, and `tzdata` commands retain their
 existing dependency builds. Automated guest checks use `test-appd` or
 `test-browser-input` followed by a new test image path.
 
@@ -94,6 +94,8 @@ commit or archive checksum, build them, and install into the target SDK:
 | --- | --- |
 | `./build-openwave audio` | ALSA, PipeWire, WirePlumber |
 | `./build-openwave mdns` | libdaemon, Avahi |
+| `./build-openwave selinux` | libsepol/libselinux 3.11 and OpenWave policy (requires SDK PCRE2 and host flex) |
+| `./build-openwave bubblewrap` | Bubblewrap 0.11.1 and libcap 2.78, installed into rootfs with SELinux support |
 | `./build-openwave browser-engine deps` | Host NASM; target dav1d, libavif, libvpx, GStreamer and its enabled subprojects |
 | `./build-openwave browser-engine media` | GStreamer and its enabled media subprojects |
 
@@ -108,3 +110,8 @@ The build helpers use the same SDK paths through `source env.sh --build`, withou
 adding target compiler flags to host-tool builds. Export the complete toolchain
 with `python3 scripts/export-openwave-sdk.py`. See `SDK.md` for SDK configuration,
 runtime staging, and rootfs separation.
+
+SELinux policy, boot configuration and recovery options are documented in
+[docs/SELINUX.md](docs/SELINUX.md).
+
+Native application installation and migration: [application bundles](docs/APPLICATION-BUNDLES.md).

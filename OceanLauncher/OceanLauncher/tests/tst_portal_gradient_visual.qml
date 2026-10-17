@@ -1,4 +1,5 @@
 import QtQuick
+import OpenWave.Fonts 1.0
 import QtTest
 import ".." as Ocean
 
@@ -8,15 +9,11 @@ Item {
     height: 120
 
     Rectangle { anchors.fill: parent; color: "#454e53" }
-    FontLoader {
-        id: titleFont
-        source: "../../OceanFiles/assets/fonts/SourceSansPro-ExtraLight.otf"
-    }
     Ocean.PortalTitle {
         x: 20; y: 20; width: 400; height: 80
         mutedTitle: "WWWW"
         primaryTitle: "WWWW"
-        fontFamily: titleFont.name
+        fontFamily: Fonts.family
         fontPixelSize: 48
     }
 
@@ -24,7 +21,7 @@ Item {
         name: "PortalGradientVisual"
         when: windowShown
         function test_gradientIsVisible() {
-            tryCompare(titleFont, "status", FontLoader.Ready)
+            verify(Fonts.sourceSansProAvailable)
             wait(100)
             const image = grabImage(screen)
             function brightest(from, to) {

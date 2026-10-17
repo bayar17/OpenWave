@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "com.openwave.ocean",
+  "name": "Browser",
+  "version": "0.1.0",
+  "type": "system",
+  "executable": "bin/ocean",
+  "runtime": "openwave-qt",
+  "sandbox": {
+    "enabled": true,
+    "profile": "standard"
+  },
+  "permissions": [],
+  "singleInstance": true,
+  "acceptsPaths": false,
+  "icon": "resources/Icon.svg"
+}

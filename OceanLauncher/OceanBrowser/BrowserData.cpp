@@ -52,9 +52,9 @@ BrowserData::BrowserData(BrowserPreviews *previews, QString usersPath, QString u
         if (QFileInfo(ancestor).isSymbolicLink()) qFatal("Browser profile path is a symbolic link");
         ancestor = QFileInfo(ancestor).absolutePath();
     }
-    for (const QString &relative : {QString(), QStringLiteral("cache/images"),
-            QStringLiteral("cache/GPUCache"), QStringLiteral("cache/JSCache"),
-            QStringLiteral("cache/HTTP"), QStringLiteral("passwords")}) {
+    for (const QString &relative : {QString(), QStringLiteral("Config"), QStringLiteral("Data"), QStringLiteral("Cache/images"),
+            QStringLiteral("Cache/GPUCache"), QStringLiteral("Cache/JSCache"),
+            QStringLiteral("Cache/HTTP"), QStringLiteral("Data/passwords")}) {
         const QString directory = QDir(m_path).filePath(relative);
         if (QFileInfo(directory).isSymbolicLink() || !QDir().mkpath(directory))
             qFatal("Cannot create browser profile directory");
@@ -64,11 +64,11 @@ BrowserData::BrowserData(BrowserPreviews *previews, QString usersPath, QString u
     QStringList retained;
     for (const QVariant &tab : session().value(QStringLiteral("tabs")).toList())
         retained.append(tab.toMap().value(QStringLiteral("id")).toString() + QStringLiteral(".jpg"));
-    const QDir previewsDirectory(m_path + QStringLiteral("/cache/images"));
+    const QDir previewsDirectory(m_path + QStringLiteral("/Cache/images"));
     for (const QString &name : previewsDirectory.entryList({QStringLiteral("*.jpg")}, QDir::Files))
         if (!retained.contains(name)) QFile::remove(previewsDirectory.filePath(name));
     for (const QString &name : {QStringLiteral("bookmarks.json")})
-        if (!QFile::exists(QDir(m_path).filePath(name))) writeJson(name, QVariantList{});
+        if (!QFile::exists(QDir(m_path + QStringLiteral("/Data")).filePath(name))) writeJson(name, QVariantList{});
 }
 
 bool BrowserData::reduceMotion() const
@@ -78,13 +78,13 @@ bool BrowserData::reduceMotion() const
 }
 QVariant BrowserData::readJson(const QString &name) const
 {
-    QFile file(QDir(m_path).filePath(name));
+    QFile file(QDir(m_path + QStringLiteral("/Data")).filePath(name));
     if (!file.open(QIODevice::ReadOnly)) return {};
     return QJsonDocument::fromJson(file.readAll()).toVariant();
 }
 bool BrowserData::writeJson(const QString &name, const QVariant &value)
 {
-    QSaveFile file(QDir(m_path).filePath(name));
+    QSaveFile file(QDir(m_path + QStringLiteral("/Data")).filePath(name));
     if (!file.open(QIODevice::WriteOnly)) {
         emit storageError(QStringLiteral("Could not save browser data."));
         return false;
@@ -119,7 +119,7 @@ void BrowserData::saveSession(const QVariantList &tabs, const QString &activeId)
 QUrl BrowserData::previewSource(const QString &id) const
 {
     if (!validId(id)) return {};
-    const QString path = m_path + QStringLiteral("/cache/images/%1.jpg").arg(id);
+    const QString path = m_path + QStringLiteral("/Cache/images/%1.jpg").arg(id);
     return QFile::exists(path) ? QUrl::fromLocalFile(path) : QUrl{};
 }
 bool BrowserData::capturePreview(QQuickItem *item, const QString &id, bool privateTab)
@@ -138,7 +138,7 @@ bool BrowserData::capturePreview(QQuickItem *item, const QString &id, bool priva
                 m_previews->put(id, image);
                 source = QUrl(QStringLiteral("image://browserpreviews/%1?%2").arg(id).arg(revision));
             } else {
-                const QString path = m_path + QStringLiteral("/cache/images/%1.jpg").arg(id);
+                const QString path = m_path + QStringLiteral("/Cache/images/%1.jpg").arg(id);
                 QSaveFile file(path);
                 if (file.open(QIODevice::WriteOnly)) {
                     file.setPermissions(ownerAccess);
@@ -158,5 +158,5 @@ void BrowserData::removePreview(const QString &id)
     if (!validId(id)) return;
     m_previewGeneration.remove(id);
     m_previews->remove(id);
-    QFile::remove(m_path + QStringLiteral("/cache/images/%1.jpg").arg(id));
+    QFile::remove(m_path + QStringLiteral("/Cache/images/%1.jpg").arg(id));
 }

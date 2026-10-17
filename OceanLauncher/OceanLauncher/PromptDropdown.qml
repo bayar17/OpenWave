@@ -36,8 +36,6 @@ ComboBox {
         width: control.width
         height: Math.min(control.count, 5) * 58 * control.uiScale
         padding: 0; modal: true; dim: false; focus: true
-        // Controls reparent popup items to the window overlay. Preserve any
-        // scaling applied to Ocean's phone viewport outside this component.
         scale: control.sceneScale
         transformOrigin: Item.TopLeft
         onAboutToShow: {

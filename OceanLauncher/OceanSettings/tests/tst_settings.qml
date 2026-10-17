@@ -9,6 +9,8 @@ Item {
         property string localHostname: deviceName.toLowerCase().replace(/[^a-z0-9]/g, "") + ".local"
         property bool reduceMotion: false
         property bool largeText: false
+        property bool powerActionsAvailable: true
+        property var powerActions: []
         property string bluetoothStatus: "No Bluetooth adapter found."
         property string wifiStatus: "No Wi-Fi adapter found."
         property var systemInfo: ({os: "OpenWave", architecture: "x86_64", kernel: "test-kernel",
@@ -19,6 +21,7 @@ Item {
         function setLargeText(value) { largeText = value; return true }
         function refreshRadios() {}
         function closeApp(home) {}
+        function requestPowerAction(action) { powerActions = powerActions.concat([action]); return true }
     }
     QtObject {
         id: connectivity
@@ -189,6 +192,8 @@ Item {
             page.bluetoothPromptAction = ""
             page.addNetworkPending = false
             page.generalPromptAction = ""
+            page.wifiPromptAction = ""
+            page.wifiPromptSsid = ""
             connectivity.requestedDeviceName = ""
             page.closeBluetoothInfo()
             connectivity.networks = [
@@ -198,10 +203,23 @@ Item {
             backend.reduceMotion = false
             backend.largeText = false
             backend.deviceName = "KB Phone"
+            backend.powerActionsAvailable = true
+            backend.powerActions = []
             page.selectTab(1)
             findChild(page, "settingsTabs").contentX = 0
             exitSpy.clear()
             wait(50)
+        }
+        function test_appsTabAndBackNavigation() {
+            page.selectTab(5)
+            const apps = findChild(page, "settingsAppsPage")
+            verify(apps.visible)
+            apps.openApplication({appId: "browser", name: "Browser", trusted: false})
+            verify(page.back()); compare(apps.depth, 0)
+            page.selectTab(2)
+            verify(!apps.visible)
+            compare(apps.applicationId, "")
+            verify(findChild(page, "settingsTab_apps"))
         }
         function test_wallpaperCropSlidesAndKeepsOutputAspect() {
             page.selectTab(4)
@@ -231,11 +249,89 @@ Item {
             tryCompare(cropper, "visible", false)
             tryCompare(wallpaperPage, "x", 0)
         }
+        function test_generalCategoriesAndPreservedSettings() {
+            backend.reduceMotion = true
+            app.timeBackend = timeBackend
+            page.selectTab(2)
+            const general = findChild(page, "settingsGeneralPage")
+            compare(general.category, "")
+            compare(general.categories.map(entry => entry.title), ["About", "Storage", "Locale & Languages", "Power options"])
+            mouseClick(findChild(page, "settingsGeneral_about"))
+            wait(20)
+            compare(general.category, "about")
+            verify(findChild(page, "settingsDeviceName").visible)
+            compare(findChild(page, "settingsSystem_kernel").detail, "test-kernel")
+            verify(!findChild(page, "settingsTimezone").visible)
+            verify(page.back()); compare(general.category, ""); wait(20)
+            mouseClick(findChild(page, "settingsGeneral_storage"))
+            wait(20)
+            compare(general.category, "storage")
+            compare(findChild(page, "settingsStorageInfo").detail, "1.0 GB available of 2.0 GB")
+            mouseClick(findChild(page, "settingsPermissions"))
+            compare(page.permissionsOpen, true)
+            verify(page.back()); compare(page.permissionsOpen, false)
+            compare(general.category, "storage")
+            verify(page.back())
+            wait(20)
+            mouseClick(findChild(page, "settingsGeneral_locale"))
+            wait(20)
+            compare(general.category, "locale")
+            verify(findChild(page, "settingsTimezone").visible)
+            verify(page.back())
+            wait(20)
+            mouseClick(findChild(page, "settingsGeneral_power"))
+            wait(20)
+            verify(findChild(page, "settingsRestart").visible)
+            verify(findChild(page, "settingsShutdown").visible)
+            page.selectTab(1); page.selectTab(2)
+            compare(general.category, "")
+        }
+        function test_generalSearchOpensCategory() {
+            mouseClick(findChild(page, "settingsSearch"))
+            findChild(page, "settingsSearchField").text = "Storage"
+            compare(page.searchResults.length, 1)
+            keyClick(Qt.Key_Return)
+            tryCompare(page, "currentTab", 2)
+            tryCompare(findChild(page, "settingsGeneralPage"), "category", "storage")
+            compare(page.searching, false)
+        }
+        function test_powerActionsRequireConfirmationAndIgnoreStaleResults() {
+            backend.reduceMotion = true
+            page.selectTab(2)
+            findChild(page, "settingsGeneralPage").openCategory("power")
+            tryCompare(findChild(page, "settingsGeneralDetails"), "enabled", true)
+            wait(20)
+            for (const action of ["restart", "shutdown"]) {
+                mouseClick(findChild(page, action === "restart" ? "settingsRestart" : "settingsShutdown"))
+                compare(prompts.kind, "confirmation")
+                compare(prompts.options.acceptLabel, action === "restart" ? "Restart" : "Shut down")
+                compare(prompts.options.cancelLabel, "Cancel")
+                compare(backend.powerActions.length, 0)
+                prompts.respond("cancelled", "")
+                compare(backend.powerActions.length, 0)
+            }
+            page.requestPowerAction("restart")
+            prompts.respond("accepted", "")
+            compare(backend.powerActions, ["restart"])
+            page.requestPowerAction("shutdown")
+            prompts.respond("accepted", "")
+            compare(backend.powerActions, ["restart", "shutdown"])
+            page.requestPowerAction("shutdown")
+            page.selectTab(1)
+            compare(prompts.busy, false)
+            prompts.respond("accepted", "")
+            compare(backend.powerActions, ["restart", "shutdown"])
+            page.selectTab(2); backend.powerActionsAvailable = false
+            page.requestPowerAction("restart")
+            compare(prompts.busy, false)
+            verify(!findChild(page, "settingsRestart").enabled)
+        }
         function test_timezonePickerChangesGeneralSetting() {
             app.timeBackend = timeBackend
             timeBackend.timezone = "Europe/Istanbul"
             page.selectTab(2)
-            wait(50)
+            findChild(page, "settingsGeneralPage").openCategory("locale")
+            wait(260)
             mouseClick(findChild(page, "settingsTimezone"))
             compare(prompts.kind, "selection")
             compare(prompts.title, "Time zone")
@@ -499,85 +595,133 @@ Item {
             compare(infoPane.x, infoPane.width)
             compare(connectivity.requestedInfoSsid, "")
         }
+        function openSavedIpSettings() {
+            app.connectivityBackend = connectivity
+            backend.reduceMotion = true
+            page.selectTab(0)
+            page.openSavedWifiInfo({ssid: "Saved Network", saved: true})
+            page.openIpConfig()
+        }
         function test_manualWifiIpAndDnsSettings() {
             verify(page.validIpAddress("2001:4860:4860::8888"))
             verify(page.validIpAddress("::1"))
             verify(!page.validIpAddress("2001:::1"))
             verify(!page.validIpAddress("999.1.1.1"))
             verify(!page.validIpAddress("001.1.1.1"))
-            connectivity.networks = [
-                {ssid: "Saved Network", security: "WPA", strength: 65, connected: false, saved: true}
-            ]
-            app.connectivityBackend = connectivity
-            backend.reduceMotion = true
-            page.selectTab(0)
-            page.openSavedWifiInfo(connectivity.networks[0])
-            let pane = findChild(page, "settingsWifiInfoPane")
-            pane.contentY = 400
-            mouseClick(findChild(page, "settingsWifiIpConfig"))
-            let dialog = findChild(page, "settingsIpConfigDialog")
-            tryCompare(dialog, "opened", true)
-            wait(150)
-            mouseClick(findChild(page, "settingsIpMode"))
-            compare(dialog.manualIp, true)
-            compare(dialog.manualDns, false)
-            mouseClick(findChild(page, "settingsDnsMode"))
-            compare(dialog.manualDns, true)
-            compare(dialog.dnsServers.count, 1)
-            verify(dialog.dnsRepeater.itemAt(0) !== null)
-            let address = findChild(page, "settingsIpAddress")
-            address.text = "invalid"
-            findChild(page, "settingsIpPrefix").text = "24"
-            findChild(page, "settingsIpGateway").text = "192.168.1.1"
-            dialog.dnsRepeater.itemAt(0).field.text = "1.1.1.1"
-            dialog.scrollView.contentY = dialog.scrollView.contentHeight - dialog.scrollView.height
-            wait(50)
-            mouseClick(findChild(page, "settingsAddDnsServer"))
-            compare(dialog.dnsServers.count, 2)
-            dialog.dnsRepeater.itemAt(1).field.text = "2001:4860:4860::8888"
-            dialog.scrollView.contentY = dialog.scrollView.contentHeight - dialog.scrollView.height
-            wait(50)
-            mouseClick(findChild(page, "settingsAddDnsServer"))
-            compare(dialog.dnsServers.count, 3)
-            dialog.dnsRepeater.itemAt(2).field.text = "9.9.9.9"
-            mouseClick(dialog.dnsRepeater.itemAt(2).removeButton)
-            mouseClick(findChild(page, "settingsSaveIpConfig"))
-            compare(dialog.opened, true)
+            openSavedIpSettings()
+            compare(findChild(page, "settingsIpConfigDialog"), null)
+            compare(prompts.kind, "form")
+            compare(prompts.title, "IP and DNS settings")
+            compare(prompts.options.fields.ipMode.initialText, "automatic")
+            compare(prompts.options.fields.dnsMode.initialText, "automatic")
+            compare(prompts.options.fields.prefix.initialText, "24")
+            compare(prompts.options.fields.address.activeWhenField, "ipMode")
+            compare(prompts.options.fields.dnsServers.activeWhenField, "dnsMode")
+            const values = {ipMode: "manual", address: "invalid", prefix: "24",
+                gateway: "192.168.1.1", dnsMode: "manual", dnsServers: "1.1.1.1, 2001:4860:4860::8888"}
+            prompts.respondFields("accepted", values)
             compare(Object.keys(connectivity.savedIpConfig).length, 0)
-            address.text = "192.168.1.50"
-            dialog.dnsRepeater.itemAt(1).field.text = "invalid-dns"
-            mouseClick(findChild(page, "settingsSaveIpConfig"))
-            compare(dialog.opened, true)
+            compare(prompts.busy, true)
+            compare(prompts.options.fields.address.initialText, "invalid")
+            values.address = "192.168.1.50"
+            values.dnsServers = "invalid-dns"
+            prompts.respondFields("accepted", values)
             compare(Object.keys(connectivity.savedIpConfig).length, 0)
-            dialog.dnsRepeater.itemAt(1).field.text = "2001:4860:4860::8888"
-            mouseClick(findChild(page, "settingsSaveIpConfig"))
-            compare(dialog.visible, false)
+            compare(prompts.busy, true)
+            compare(prompts.options.fields.address.initialText, "192.168.1.50")
+            values.dnsServers = "1.1.1.1, 2001:4860:4860::8888"
+            prompts.respondFields("accepted", values)
+            compare(prompts.busy, false)
             compare(connectivity.savedIpConfig.ssid, "Saved Network")
-            compare(connectivity.savedIpConfig.manualIp, true)
             compare(connectivity.savedIpConfig.address, "192.168.1.50")
             compare(connectivity.savedIpConfig.prefix, 24)
             compare(connectivity.savedIpConfig.gateway, "192.168.1.1")
+            compare(connectivity.savedIpConfig.manualIp, true)
             compare(connectivity.savedIpConfig.manualDns, true)
             compare(connectivity.savedIpConfig.dns.length, 2)
             compare(connectivity.savedIpConfig.dns[1], "2001:4860:4860::8888")
-            compare(connectivity.savedWifiInfo.configuredAddress, "192.168.1.50")
-
             page.openIpConfig()
-            mouseClick(findChild(page, "settingsIpMode"))
-            compare(dialog.manualIp, false)
-            compare(dialog.manualDns, true)
-            mouseClick(findChild(page, "settingsSaveIpConfig"))
+            compare(prompts.options.fields.address.initialText, "192.168.1.50")
+            compare(prompts.options.fields.dnsServers.initialText, values.dnsServers)
+            values.ipMode = "automatic"
+            prompts.respondFields("accepted", values)
             compare(connectivity.savedIpConfig.manualIp, false)
+            compare(connectivity.savedIpConfig.address, "")
+            compare(connectivity.savedIpConfig.prefix, 0)
+            compare(connectivity.savedIpConfig.gateway, "")
             compare(connectivity.savedIpConfig.manualDns, true)
             compare(connectivity.savedIpConfig.dns.length, 2)
-
             page.openIpConfig()
-            mouseClick(findChild(page, "settingsDnsMode"))
-            compare(dialog.manualDns, false)
-            mouseClick(findChild(page, "settingsSaveIpConfig"))
+            values.dnsMode = "automatic"
+            prompts.respondFields("accepted", values)
             compare(connectivity.savedIpConfig.manualIp, false)
             compare(connectivity.savedIpConfig.manualDns, false)
             compare(connectivity.savedIpConfig.dns.length, 0)
+        }
+        function test_ipSettingsCancelledAndStaleResults() {
+            const values = {ipMode: "automatic", address: "", prefix: "", gateway: "",
+                dnsMode: "manual", dnsServers: "1.1.1.1"}
+            openSavedIpSettings()
+            prompts.respondFields("cancelled", values)
+            compare(page.wifiPromptAction, "")
+            compare(Object.keys(connectivity.savedIpConfig).length, 0)
+            page.openIpConfig()
+            verify(page.back())
+            compare(prompts.busy, false)
+            verify(page.wifiInfoOpen)
+            prompts.respondFields("accepted", values)
+            compare(Object.keys(connectivity.savedIpConfig).length, 0)
+            page.openIpConfig()
+            page.openSavedWifiInfo({ssid: "Other Network", saved: true})
+            prompts.respondFields("accepted", values)
+            compare(Object.keys(connectivity.savedIpConfig).length, 0)
+            page.openIpConfig()
+            page.closeSavedWifiInfo()
+            compare(prompts.busy, false)
+            prompts.respondFields("accepted", values)
+            compare(Object.keys(connectivity.savedIpConfig).length, 0)
+            openSavedIpSettings()
+            page.selectTab(2)
+            compare(prompts.busy, false)
+            prompts.respondFields("accepted", values)
+            compare(Object.keys(connectivity.savedIpConfig).length, 0)
+        }
+        function test_ipSettingsUnavailableAndInvalidValues() {
+            openSavedIpSettings()
+            const options = prompts.options
+            page.openIpConfig()
+            compare(prompts.options, options)
+            prompts.respondFields("renderer_lost", {})
+            connectivity.savedWifiInfoLoading = true
+            page.openIpConfig()
+            compare(prompts.busy, false)
+            connectivity.savedWifiInfoLoading = false
+            connectivity.busy = true
+            page.openIpConfig()
+            compare(prompts.busy, false)
+            connectivity.busy = false
+            const values = {ipMode: "manual", address: "192.168.1.50", prefix: "24",
+                gateway: "192.168.1.1", dnsMode: "manual", dnsServers: "1.1.1.1"}
+            for (const prefix of ["33", "-1", "", "1e1"]) {
+                page.openIpConfig()
+                values.prefix = prefix
+                prompts.respondFields("accepted", values)
+                compare(Object.keys(connectivity.savedIpConfig).length, 0)
+                verify(prompts.busy)
+                prompts.cancel()
+            }
+            values.prefix = "24"
+            values.gateway = "999.1.1.1"
+            page.openIpConfig()
+            prompts.respondFields("accepted", values)
+            compare(Object.keys(connectivity.savedIpConfig).length, 0)
+            prompts.cancel()
+            values.gateway = ""
+            values.dnsServers = " , "
+            page.openIpConfig()
+            prompts.respondFields("accepted", values)
+            compare(Object.keys(connectivity.savedIpConfig).length, 0)
+            prompts.cancel()
         }
         function test_wifiScanWindowAndRefresh() {
             compare(page.wifiScanDurationMs, 30000)
@@ -694,7 +838,7 @@ Item {
             wait(290)
             compare(outgoing.visible, false)
             compare(page.tabIncomingOpacity, 1)
-            compare(findChild(page, "settingsDeviceName").visible, true)
+            compare(findChild(page, "settingsGeneral_about").visible, true)
         }
         function openSettings() {
             page.selectTab(1)
@@ -853,7 +997,8 @@ Item {
             app.connectivityBackend = connectivity
             openSettings()
             page.selectTab(2)
-            wait(50)
+            findChild(page, "settingsGeneralPage").openCategory("about")
+            wait(260)
             mouseClick(findChild(page, "settingsDeviceName"))
             compare(prompts.kind, "input")
             const pattern = new RegExp("^(?:" + prompts.options.validationPattern + ")$")

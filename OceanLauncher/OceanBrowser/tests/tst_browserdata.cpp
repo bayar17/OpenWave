@@ -18,7 +18,7 @@ private slots:
         const auto session = data.session();
         QCOMPARE(session.value("tabs").toList().size(), 1);
         QCOMPARE(session.value("activeId").toString(), QStringLiteral("tab-regular"));
-        QFile file(data.dataPath() + "/tabs.json");
+        QFile file(data.dataPath() + "/Data/tabs.json");
         QVERIFY(file.open(QIODevice::ReadOnly));
         const auto bytes = file.readAll();
         QVERIFY(!bytes.contains("private"));
@@ -44,7 +44,7 @@ private slots:
         QVERIFY(data.capturePreview(item.data(), "tab-private", true));
         QTRY_COMPARE(spy.size(), 1);
         QCOMPARE(spy.last().at(1).toUrl().scheme(), QString("image"));
-        QVERIFY(!QFile::exists(data.dataPath() + "/cache/images/tab-private.jpg"));
+        QVERIFY(!QFile::exists(data.dataPath() + "/Cache/images/tab-private.jpg"));
         QSize size;
         QVERIFY(!previews.requestImage("tab-private", &size, {}).isNull());
         QVERIFY(data.capturePreview(item.data(), "tab-normal", false));

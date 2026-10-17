@@ -66,8 +66,6 @@ void OpenWavePromptClient::poll()
             finish(QStringLiteral("service_lost"), {}, error.isEmpty() ? QStringLiteral("Invalid prompt result.") : error);
         } else if (values[0].toBool()) {
             m_transport.call(QStringLiteral("Acknowledge"), {id}, [](const QVariantList &, const QString &) {});
-            // Cancellation issued before the result arrives always wins locally.
-            // In particular, cancelled/lost prompts cannot trigger an app action.
             finish(m_cancelPending ? QStringLiteral("cancelled") : values[1].toString(),
                    m_cancelPending ? QString() : values[2].toString());
         }

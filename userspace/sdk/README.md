@@ -68,6 +68,7 @@ Use headers such as `<OpenWave/OpenWavePromptClient.h>`. Available components:
 | SystemControls | QuickMenuBackend | audiod, connectivityd, backlight devices |
 | ApplicationData | application-data.h, preferences.h | Existing per-user data conventions |
 | Xml | OpenWaveXml.h | Local XML parsing with libxml2; external D-Bus interface files |
+| Fonts | FontManager.h; `OpenWave.Fonts` QML module | Shared system fonts and Qt's font database |
 
 These are the existing asynchronous clients, not mock services. File chooser
 results grant file descriptors; callers should use PortalGrant rather than
@@ -133,3 +134,16 @@ Host Qt recovery requires native development dependencies (including PNG,
 OpenGL/EGL, GBM, DRM and zlib), CMake, Ninja and a native C++ compiler. A locally
 staged native dependency prefix can be supplied with `--host-dependencies`;
 OpenWave target libraries are never used to build host tools.
+
+The Fonts component uses Source Sans Pro from the central system font directory.
+Call `OpenWave::FontManager::initialize()` after constructing `QGuiApplication`,
+link `OpenWave::Fonts`, and import `OpenWave.Fonts 1.0` in QML. Use
+`font.family: Fonts.family` or `font: Fonts.font(28, Font.Light)`.
+`Fonts.families` and `Fonts.styles(family)` expose Qt's live font catalog.
+Pass `OpenWaveSDK_QML_IMPORT_PATH` as the `IMPORT_PATH` argument to
+`qt_add_qml_module` so QML tooling can resolve the installed module.
+
+`OpenWave::Permissions` exports `OpenWave::PermissionClient`, an asynchronous
+permission API and Qt model. File Chooser grants remain the enforcement path;
+a permission check by itself conveys no ambient access. See
+[permissiond](../permissiond/README.md) for supported permissions and trust rules.

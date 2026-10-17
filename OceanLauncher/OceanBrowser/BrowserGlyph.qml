@@ -12,7 +12,7 @@ Canvas {
         c.save()
         c.scale(width / 48, height / 48)
         c.strokeStyle = strokeColor
-        c.lineWidth = 3.4
+        c.lineWidth = kind === "reload" ? 1.8 : 3.4
         c.lineCap = "round"
         c.lineJoin = "round"
         c.beginPath()
@@ -26,6 +26,12 @@ Canvas {
         } else if (kind === "plus") {
             c.moveTo(24, 7); c.lineTo(24, 41)
             c.moveTo(7, 24); c.lineTo(41, 24)
+        } else if (kind === "reload") {
+            c.arc(24, 24, 18, Math.PI * 1.15, Math.PI * 1.95)
+            c.moveTo(42, 9); c.lineTo(42, 22); c.lineTo(29, 22)
+            c.moveTo(40, 32)
+            c.arc(24, 24, 18, Math.PI * 0.15, Math.PI * 0.95)
+            c.moveTo(6, 39); c.lineTo(6, 26); c.lineTo(19, 26)
         } else if (kind === "close") {
             c.moveTo(8, 8); c.lineTo(40, 40)
             c.moveTo(40, 8); c.lineTo(8, 40)

@@ -2,9 +2,9 @@
 Type=Application
 Name=Files
 Comment=Browse your OpenWave files
-Exec=/usr/bin/ocean-files
+Exec=/System/Services/openwave-launch com.openwave.files
 Icon=ocean-files
 Terminal=false
 Categories=Utility;FileManager;
-X-OpenWave-AppId=files
+X-OpenWave-AppId=com.openwave.files
 X-OpenWave-AcceptsPaths=true

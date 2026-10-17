@@ -3,7 +3,7 @@ project(OceanBrowser VERSION 0.1 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 find_package(Qt6 6.10 REQUIRED COMPONENTS Quick QuickControls2 Svg Sql Network ShaderTools)
-find_package(OpenWaveSDK REQUIRED COMPONENTS Applications Wallpaper FileChooser ApplicationData)
+find_package(OpenWaveSDK REQUIRED COMPONENTS Fonts Applications Wallpaper FileChooser ApplicationData)
 qt_standard_project_setup(REQUIRES 6.10)
 
 qt_add_executable(appOceanBrowser main.cpp BrowserInput.cpp BrowserInput.h BrowserData.cpp BrowserData.h BrowserPreferences.cpp BrowserPreferences.h OceanHistoryManager.cpp OceanHistoryManager.h
@@ -12,24 +12,24 @@ qt_add_executable(appOceanBrowser main.cpp BrowserInput.cpp BrowserInput.h Brows
 qt_add_qml_module(appOceanBrowser
     URI OceanBrowser
     VERSION 1.0
-    QML_FILES Main.qml BrowserSettingsPage.qml BrowserSwitch.qml BrowserGlyph.qml HistoryPage.qml DownloadsPage.qml AddressLoadingBorder.qml SearchCompatibility.js
+    IMPORT_PATH "${OpenWaveSDK_QML_IMPORT_PATH}"
+    QML_FILES Main.qml BrowserSettingsPage.qml BrowserSwitch.qml BrowserGlyph.qml BrowserErrorPage.qml HistoryPage.qml DownloadsPage.qml AddressLoadingBorder.qml SearchCompatibility.js
     RESOURCES
         assets/Icon.svg assets/globe.svg
-        assets/fonts/SourceSansPro-ExtraLight.otf
 )
 qt_add_shaders(appOceanBrowser address_loading_shader
     PREFIX "/OceanBrowser"
     FILES shaders/address-loading.frag
 )
 set_target_properties(appOceanBrowser PROPERTIES
-    OUTPUT_NAME ocean-browser
+    OUTPUT_NAME ocean
     MACOSX_BUNDLE TRUE
     WIN32_EXECUTABLE TRUE
     BUILD_WITH_INSTALL_RPATH TRUE
     INSTALL_RPATH "$ORIGIN/../lib;$ORIGIN/../lib64"
 )
 target_link_libraries(appOceanBrowser PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Svg Qt6::Sql Qt6::Network)
-target_link_libraries(appOceanBrowser PRIVATE OpenWave::Applications OpenWave::Wallpaper OpenWave::FileChooser OpenWave::ApplicationData)
+target_link_libraries(appOceanBrowser PRIVATE OpenWave::Fonts OpenWave::Applications OpenWave::Wallpaper OpenWave::FileChooser OpenWave::ApplicationData)
 if(CMAKE_CROSSCOMPILING)
     target_include_directories(appOceanBrowser PRIVATE
         "${CMAKE_SYSROOT}/usr/include/glib-2.0"
@@ -51,9 +51,8 @@ else()
     target_compile_definitions(appOceanBrowser PRIVATE
         OCEAN_BROWSER_DESKTOP_FILE=\"${CMAKE_CURRENT_SOURCE_DIR}/ocean-browser.desktop\")
 endif()
-install(DIRECTORY about/ DESTINATION ${CMAKE_INSTALL_DATADIR}/ocean-browser/about
+install(DIRECTORY about/ DESTINATION /System/Applications/com.openwave.ocean/resources/about
     FILES_MATCHING PATTERN "*.html")
-install(TARGETS appOceanBrowser RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 # Do not advertise a nonfunctional browser to the launcher before WPE is installed.
 if(EXISTS "${CMAKE_SYSROOT}/usr/lib64/qt6/qml/org/wpewebkit/qtwpe/libqtwpe.so")
@@ -61,5 +60,7 @@ if(EXISTS "${CMAKE_SYSROOT}/usr/lib64/qt6/qml/org/wpewebkit/qtwpe/libqtwpe.so")
     install(FILES assets/Icon.svg DESTINATION ${CMAKE_INSTALL_DATADIR}/pixmaps
         RENAME ocean-browser.svg)
 endif()
-install(FILES assets/fonts/SourceSansPro-OFL.txt
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/ocean-browser)
+
+include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/OpenWaveBundle.cmake")
+openwave_install_bundle(appOceanBrowser com.openwave.ocean SYSTEM)
+install(FILES assets/Icon.svg DESTINATION /System/Applications/com.openwave.ocean/resources)

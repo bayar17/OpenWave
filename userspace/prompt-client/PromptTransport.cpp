@@ -4,6 +4,7 @@
 #include <unistd.h>
 #undef signals
 #include <gio/gio.h>
+#include "OpenWaveIdentity.h"
 
 namespace {
 constexpr auto busName = "org.openwave.Prompt";
@@ -24,8 +25,6 @@ GVariant *encode(const QVariant &value)
     if (value.metaType().id() == QMetaType::Int || value.metaType().id() == QMetaType::UInt
         || value.metaType().id() == QMetaType::Double) {
         const double number = value.toDouble();
-        // Preserve invalid numeric options as strings so promptd rejects them,
-        // rather than accidentally wrapping a negative value to an unsigned int.
         if (number >= 0 && number <= 4294967295.0 && number == quint32(number))
             return g_variant_new_uint32(quint32(number));
     }
@@ -74,12 +73,10 @@ QString daemonOwner(GDBusConnection *bus, QString *error)
     GVariant *credentials = g_variant_get_child_value(reply, 0);
     guint uid = 0, pid = 0;
     bool okay = g_variant_lookup(credentials, "UnixUserID", "u", &uid)
-        && g_variant_lookup(credentials, "ProcessID", "u", &pid) && uid == getuid();
+        && g_variant_lookup(credentials, "ProcessID", "u", &pid)
+        && openwave_supervised_process(uid, pid, "/run/openwave/promptd.pid");
     g_variant_unref(credentials); g_variant_unref(reply);
-    QFile pidfile(QStringLiteral("/run/openwave/promptd.pid"));
-    okay = okay && pidfile.open(QIODevice::ReadOnly) && pidfile.readAll().trimmed().toUInt() == pid;
-    const QString executable = QFile::symLinkTarget(QStringLiteral("/proc/%1/exe").arg(pid));
-    if (!okay || executable != QStringLiteral("/usr/libexec/promptd")) {
+    if (!okay) {
         *error = QStringLiteral("The session prompt service could not be verified.");
         return {};
     }

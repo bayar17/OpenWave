@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run under dbus-run-session against the target openwave-portal binary."""
+"""Run under dbus-run-session with a PORTAL_TESTING daemon launcher argument."""
 
 import os
 from pathlib import Path
@@ -66,11 +66,8 @@ def main():
         ))
         other = Path(directory) / "outside.png"
         other.write_bytes(image.read_bytes())
-        loader = ROOT / "fakeroot/lib64/ld-linux-x86-64.so.2"
-        binary = ROOT / "out/openwave-userspace/openwave-portal/openwave-portal"
+        binary = Path(sys.argv[1]).resolve()
         process = subprocess.Popen([
-            str(loader), "--library-path",
-            f"{ROOT}/fakeroot/usr/lib64:{ROOT}/fakeroot/lib64",
             str(binary), "--test-root", directory, os.path.realpath(sys.executable),
         ], env=os.environ.copy())
         try:

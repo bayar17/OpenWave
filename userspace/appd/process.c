@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "appd.h"
+#include "OpenWaveSELinux.h"
 #include <glib-unix.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -116,11 +117,12 @@ static void exited(GPid pid, gint status, gpointer data)
     kill_cgroup(instance->cgroup);
     journal(instance, TRUE);
     remove_preview(pid);
-    char *socket = g_strdup_printf("%s/openwave-app-%d.socket", m->runtime, pid);
+    char *socket = g_strdup_printf("%s/openwave-app-%d.socket", instance->runtime, pid);
     unlink(socket); g_free(socket);
     g_spawn_close_pid(pid);
+    appd_services_event(m, "ApplicationTerminated", app, instance);
     g_ptr_array_remove_fast(m->instances, instance);
-    g_free(instance->cgroup); g_free(instance);
+    appd_release_isolation(instance); g_free(instance->cgroup); g_free(instance);
     if (expected) appd_emit(m, "ApplicationStopped", g_variant_new("(si)", app->id, status));
     else appd_emit(m, "ApplicationCrashed", g_variant_new("(si)", app->id, status));
     appd_state(m, app, appd_instance(m, app) ? "Running" : expected ? "Stopped" : "Crashed",
@@ -244,7 +246,7 @@ static void connected(GObject *source, GAsyncResult *result, gpointer data)
     if (!c->connection) { command_done(c, FALSE); return; }
     struct ucred peer; socklen_t size = sizeof(peer);
     int fd = g_socket_get_fd(g_socket_connection_get_socket(c->connection));
-    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &size) || peer.uid != c->manager->uid || peer.pid != c->pid) {
+    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &size) || peer.uid != command_instance(c)->uid || peer.pid != c->pid) {
         command_done(c, FALSE); return;
     }
     g_output_stream_write_all_async(g_io_stream_get_output_stream(G_IO_STREAM(c->connection)),
@@ -256,7 +258,7 @@ static void send_command(Command *c)
     c->cancel = g_cancellable_new();
     c->reply_size = 0;
     c->timeout = g_timeout_add(1000, command_timeout, c);
-    char *path = g_strdup_printf("%s/openwave-app-%d.socket", c->manager->runtime, c->pid);
+    char *path = g_strdup_printf("%s/openwave-app-%d.socket", command_instance(c)->runtime, c->pid);
     GSocketAddress *address = g_unix_socket_address_new(path); g_free(path);
     GSocketClient *client = g_socket_client_new();
     g_socket_client_connect_async(client, G_SOCKET_CONNECTABLE(address), c->cancel, connected, c);
@@ -293,10 +295,15 @@ void appd_activate(Manager *m, Instance *instance, char **arguments)
     else appd_emit(m, "ActivationRequested", g_variant_new("(su)", instance->app->id, instance->pid));
 }
 
-typedef struct { Manager *manager; pid_t parent; const char *cgroup_procs; } Setup;
+typedef struct { Manager *manager; Instance *instance; pid_t parent; const char *cgroup_procs; } Setup;
+static void child_failure(const char *message)
+{
+    ssize_t ignored = write(STDERR_FILENO, message, strlen(message)); (void)ignored;
+    _exit(126);
+}
 static void child_setup(gpointer data)
 {
-    Setup *setup = data; Manager *m = setup->manager;
+    Setup *setup = data; Instance *instance = setup->instance;
     if (setsid() < 0) _exit(126);
     sigset_t mask; sigemptyset(&mask); sigprocmask(SIG_SETMASK, &mask, NULL);
     if (setup->cgroup_procs) {
@@ -305,30 +312,56 @@ static void child_setup(gpointer data)
         close(fd);
     }
     umask(0077);
-    if (geteuid() == 0 && (setgroups(0, NULL) || setgid(m->gid) || setuid(m->uid))) _exit(126);
-    if (geteuid() != m->uid || getegid() != m->gid) _exit(126);
+    if (!appd_trusted_app(instance->app) && openwave_selinux_app_exec()) child_failure("appd: cannot select application SELinux domain\n");
+    if (appd_enter_namespace(instance)) child_failure("appd: cannot enter prepared namespaces\n");
+    gid_t render = instance->render_gid;
+    if (geteuid() == 0 && (setgroups(render ? 1 : 0, render ? &render : NULL) || setgid(instance->uid) || setuid(instance->uid))) child_failure("appd: cannot drop application credentials\n");
+    if (geteuid() != instance->uid || getegid() != instance->uid) _exit(126);
     if (prctl(PR_SET_PDEATHSIG, SIGKILL) < 0 || getppid() != setup->parent) _exit(126);
-    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) _exit(126);
+    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0 || appd_enforce_isolation(instance)) child_failure("appd: cannot enforce application Landlock policy\n");
+    if (!appd_trusted_app(instance->app) && appd_install_seccomp()) child_failure("appd: cannot install application syscall filter\n");
 }
 
-static char **environment(Manager *m, App *app)
+static char **environment(Manager *m, App *app, Instance *instance)
 {
     char **env = g_new0(char *, 1);
     const char *names[] = {"LANG", "LC_ALL", "LC_MESSAGES", "LC_CTYPE", NULL};
     for (guint i = 0; names[i]; ++i)
         if (g_getenv(names[i])) env = g_environ_setenv(env, names[i], g_getenv(names[i]), TRUE);
     const char *pairs[][2] = {{"PATH", "/usr/bin:/bin"}, {"QT_QPA_PLATFORM", "wayland"},
-        {"QT_WAYLAND_DISABLE_WINDOWDECORATION", "1"}, {"WAYLAND_DISPLAY", "wayland-0"},
+        {"QT_WAYLAND_DISABLE_WINDOWDECORATION", "1"}, {"WAYLAND_DISPLAY", "/run/ocean/wayland-0"},
         {"QSG_RHI_BACKEND", "opengl"}, {"DBUS_SYSTEM_BUS_ADDRESS", "unix:path=/run/dbus/system_bus_socket"},
         {"OPENWAVE_APP_ID", app->id}, {"HOME", m->home}, {"USER", m->user}, {"LOGNAME", m->user},
-        {"XDG_RUNTIME_DIR", m->runtime}};
+        {"XDG_RUNTIME_DIR", instance->runtime}, {"OPENWAVE_SESSION_USER", m->user}};
     for (guint i = 0; i < G_N_ELEMENTS(pairs); ++i) env = g_environ_setenv(env, pairs[i][0], pairs[i][1], TRUE);
-    char *session = g_strdup_printf("unix:path=%s/bus", m->runtime);
+    char *session = appd_trusted_app(app) ? g_strdup_printf("unix:path=%s/bus", m->runtime)
+        : g_strdup("unix:path=/run/openwave/session-bus");
     env = g_environ_setenv(env, "DBUS_SESSION_BUS_ADDRESS", session, TRUE); g_free(session);
     char *config = m->uid == 0 ? g_strdup("/var/lib/openwave") : g_build_filename(m->home, ".config", NULL);
     char *state = g_build_filename(config, "state", NULL);
     env = g_environ_setenv(env, "XDG_CONFIG_HOME", config, TRUE);
     env = g_environ_setenv(env, "XDG_STATE_HOME", state, TRUE);
+    if (!appd_trusted_app(app)) {
+        env = g_environ_setenv(env, "WAYLAND_DISPLAY", "/run/openwave/wayland-0", TRUE);
+        env = g_environ_setenv(env, "PIPEWIRE_RUNTIME_DIR", "/run/openwave", TRUE);
+        char *private_config = g_build_filename(instance->data, "Config", NULL);
+        env = g_environ_setenv(env, "XDG_CONFIG_HOME", private_config, TRUE); g_free(private_config);
+        char *private_state = g_build_filename(instance->data, "Data", NULL);
+        env = g_environ_setenv(env, "XDG_STATE_HOME", private_state, TRUE); g_free(private_state);
+        char *private_data = g_build_filename(instance->data, "Data", NULL);
+        env = g_environ_setenv(env, "XDG_DATA_HOME", private_data, TRUE); g_free(private_data);
+        env = g_environ_setenv(env, "HOME", instance->data, TRUE);
+        char *temporary = g_build_filename(instance->runtime, "tmp", NULL);
+        env = g_environ_setenv(env, "TMPDIR", temporary, TRUE); g_free(temporary);
+    }
+    char *plugins = g_strdup_printf("%s/plugins:/usr/plugins", app->bundle);
+    char *qml = g_strdup_printf("%s/qml:/usr/qml:/usr/lib64/qt6/qml", app->bundle);
+    char *cache = g_build_filename(instance->data, "Cache", NULL);
+    env = g_environ_setenv(env, "QT_PLUGIN_PATH", plugins, TRUE);
+    env = g_environ_setenv(env, "QML_IMPORT_PATH", qml, TRUE);
+    env = g_environ_setenv(env, "OPENWAVE_BUNDLE_ROOT", app->bundle, TRUE);
+    env = g_environ_setenv(env, "XDG_CACHE_HOME", cache, TRUE);
+    g_free(plugins); g_free(qml); g_free(cache);
     g_free(config); g_free(state); return env;
 }
 
@@ -342,24 +375,23 @@ gboolean appd_launch(Manager *m, App *app, char **arguments, GError **error)
     Instance *existing = appd_instance(m, app);
     if (existing && existing->stopping) { g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_BUSY, "Application is stopping"); return FALSE; }
     if (existing && app->single) { appd_activate(m, existing, arguments); return TRUE; }
-    if (!appd_verified_file(app->desktop, FALSE, error) || !appd_verified_file(app->argv[0], TRUE, error)) return FALSE;
-    char *data = g_strdup_printf("%s/.DataLocation/Applications/%s", m->home, app->id);
-    /* Changing existing data ownership is deliberately excluded from this migration. */
-    if (m->uid == 0 && g_mkdir_with_parents(data, 0700)) {
-        g_set_error(error, G_IO_ERROR, g_io_error_from_errno(errno), "Cannot create application data directory: %s", g_strerror(errno));
-        g_free(data); return FALSE;
+    if (!appd_validate_bundle(app, error)) return FALSE;
+    Instance *instance = g_new0(Instance, 1); instance->manager = m; instance->app = app;
+    if (!appd_prepare_isolation(m, instance, error)) {
+        appd_release_isolation(instance); g_free(instance); return FALSE;
     }
-    if (m->uid != 0 && (stat(data, &st) || st.st_uid != m->uid || (st.st_mode & 0077))) {
-        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED, "Non-root application data must be provisioned by the session administrator");
-        g_free(data); return FALSE;
+    appd_publish_preferences(m);
+    if (!appd_prepare_namespace(instance, error)) {
+        appd_release_isolation(instance); g_free(instance);
+        appd_state(m, app, "Stopped", error && *error ? (*error)->message : "Namespace setup failed");
+        return FALSE;
     }
-    g_free(data);
     GPtrArray *argv = g_ptr_array_new();
     for (char **p = app->argv; *p; ++p) g_ptr_array_add(argv, *p);
     for (char **p = arguments; *p; ++p) g_ptr_array_add(argv, *p);
     g_ptr_array_add(argv, NULL);
-    char **env = environment(m, app);
-    Instance *instance = g_new0(Instance, 1); instance->manager = m; instance->app = app;
+    appd_publish_preferences(m);
+    char **env = environment(m, app, instance);
     char *procs = NULL;
     if (m->cgroup_root) {
         char *uuid = g_uuid_string_random();
@@ -367,22 +399,40 @@ gboolean appd_launch(Manager *m, App *app, char **arguments, GError **error)
         instance->cgroup = g_build_filename(m->cgroup_root, name, NULL); g_free(name);
         if (mkdir(instance->cgroup, 0755)) {
             g_set_error(error, G_IO_ERROR, g_io_error_from_errno(errno), "Cannot create application cgroup: %s", g_strerror(errno));
-            g_free(instance->cgroup); g_free(instance); g_strfreev(env); g_ptr_array_unref(argv); return FALSE;
+            appd_release_isolation(instance); g_free(instance->cgroup); g_free(instance); g_strfreev(env); g_ptr_array_unref(argv); return FALSE;
         }
         procs = g_build_filename(instance->cgroup, "cgroup.procs", NULL);
+        if (!appd_trusted_app(app)) {
+            char *limit_path = g_build_filename(instance->cgroup, "pids.max", NULL);
+            char *limit = g_strdup_printf("%u", m->pids_max);
+            int fd = open(limit_path, O_WRONLY | O_CLOEXEC | O_NOFOLLOW);
+            gboolean configured = fd >= 0 && write(fd, limit, strlen(limit)) == (ssize_t)strlen(limit);
+            if (fd >= 0) close(fd);
+            g_free(limit); g_free(limit_path);
+            if (!configured) {
+                g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Cannot limit application processes");
+                kill_cgroup(instance->cgroup); appd_release_isolation(instance);
+                g_free(instance->cgroup); g_free(instance); g_free(procs); g_strfreev(env); g_ptr_array_unref(argv); return FALSE;
+            }
+        }
     }
-    Setup setup = {m, getpid(), procs};
+    Setup setup = {m, instance, getpid(), procs};
     appd_state(m, app, "Starting", "");
-    gboolean okay = g_spawn_async("/", (char **)argv->pdata, env, G_SPAWN_DO_NOT_REAP_CHILD,
-        child_setup, &setup, &instance->pid, error);
+    const int targets[] = {3, 4, 5, 6};
+    gboolean okay = g_spawn_async_with_pipes_and_fds("/", (const char *const *)argv->pdata,
+        (const char *const *)env, G_SPAWN_DO_NOT_REAP_CHILD, child_setup, &setup, -1, -1, -1,
+        instance->namespace_fds, targets, instance->namespace_sandboxed ? 4 : 0,
+        &instance->pid, NULL, NULL, NULL, error);
+    appd_close_namespace(instance);
     g_free(procs); g_strfreev(env); g_ptr_array_unref(argv);
     if (!okay) {
-        kill_cgroup(instance->cgroup); g_free(instance->cgroup); g_free(instance);
+        kill_cgroup(instance->cgroup); appd_release_isolation(instance); g_free(instance->cgroup); g_free(instance);
         appd_state(m, app, "Stopped", error && *error ? (*error)->message : "Launch failed"); return FALSE;
     }
     instance->start_time = start_time(instance->pid);
     g_ptr_array_add(m->instances, instance); journal(instance, FALSE);
     appd_state(m, app, "Running", "");
+    appd_services_event(m, "ApplicationLaunched", app, instance);
     appd_emit(m, "ApplicationStarted", g_variant_new("(su)", app->id, instance->pid));
     return TRUE;
 }
@@ -417,6 +467,16 @@ void appd_recover(Manager *m)
     if (!statfs("/sys/fs/cgroup", &fs) && (unsigned long)fs.f_type == CGROUP2_SUPER_MAGIC) {
         m->cgroup_root = g_strdup("/sys/fs/cgroup/openwave-apps");
         if (g_mkdir_with_parents(m->cgroup_root, 0755)) g_clear_pointer(&m->cgroup_root, g_free);
+        const char *controls[] = {"/sys/fs/cgroup/cgroup.subtree_control", "/sys/fs/cgroup/openwave-apps/cgroup.subtree_control"};
+        for (guint i = 0; m->cgroup_root && i < G_N_ELEMENTS(controls); ++i) {
+            int fd = open(controls[i], O_WRONLY | O_CLOEXEC | O_NOFOLLOW);
+            gboolean okay = fd >= 0 && write(fd, "+pids", 5) == 5;
+            if (fd >= 0) close(fd);
+            if (!okay) {
+                g_warning("appd: cannot enable cgroup task limits");
+                g_clear_pointer(&m->cgroup_root, g_free);
+            }
+        }
         if (m->cgroup_root) {
             GDir *groups = g_dir_open(m->cgroup_root, 0, NULL);
             const char *name;
@@ -450,4 +510,14 @@ void appd_recover(Manager *m)
         unlink(path); g_free(path); g_key_file_unref(file);
     }
     g_dir_close(dir);
+}
+
+void appd_revoke(Manager *m, App *app)
+{
+    for (guint i = 0; i < m->instances->len; ++i) {
+        Instance *instance = g_ptr_array_index(m->instances, i);
+        if (instance->app != app) continue;
+        instance->stopping = TRUE;
+        kill_cgroup(instance->cgroup); kill(-instance->pid, SIGKILL);
+    }
 }

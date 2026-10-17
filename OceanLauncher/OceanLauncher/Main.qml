@@ -484,7 +484,7 @@ ApplicationWindow {
             { "shellSurface": xdgSurface, "output": compositorOutput,
               "toplevel": toplevel, "visible": false })
         if (!item) {
-            finishAppLaunch("settings", "The application surface could not be displayed.")
+            finishAppLaunch("com.openwave.settings", "The application surface could not be displayed.")
             return
         }
         // The app paints behind the system bar; its controls use a top inset.
@@ -579,8 +579,6 @@ ApplicationWindow {
         id: oceanScreen
         objectName: "oceanScreen"
 
-        // Keep the existing design scale, but use the whole available canvas
-        // so the drawer can wrap to more columns in a wider window.
         width: root.contentScale > 0 ? root.width / root.contentScale : 768
         height: root.contentScale > 0 ? root.height / root.contentScale : 1366
 
@@ -639,54 +637,34 @@ ApplicationWindow {
             }
         }
 
-        Flickable {
-            id: recentStrip
+        RecentAppGrid {
+            id: recentGrid
             objectName: "recentApps"
             visible: recentApps.count > 0 && !root.applicationVisible
                      && !loadingView.active && !drawerSheet.open
                      && !recentTransition.active
             enabled: visible
-            x: 0
+            x: 32
             y: 147
-            width: parent.width
-            height: 445
-            contentWidth: Math.max(width, recentRow.width)
-            contentHeight: height
-            flickableDirection: Flickable.HorizontalFlick
-            boundsBehavior: Flickable.StopAtBounds
+            width: parent.width - 64
+            height: Math.max(0, drawerSheet.closedY - y - 80)
+            model: recentApps
+            viewportItem: oceanScreen
+            appController: root.appController
+            renderScale: root.contentScale
+            fontFamily: root.font.family
+            reduceMotion: root.reduceMotion
+            interactionEnabled: !root.transitionBusy && root.pendingTerminationAppId === ""
             z: root.dismissalGlow > 0 || root.pendingTerminationAppId ? 30 : 10
 
-            Row {
-                id: recentRow
-                x: Math.max(0, (recentStrip.width - width) / 2)
-                spacing: 72
-
-                Repeater {
-                    model: recentApps
-                    RecentAppCard {
-                        id: recentCard
-                        viewportItem: oceanScreen
-                        renderScale: root.contentScale
-                        fontFamily: root.font.family
-                        reduceMotion: root.reduceMotion
-                        interactionEnabled: root.pendingTerminationAppId === ""
-                        onActivated: (appId, cardItem) => root.startRecentEntry(appId, cardItem)
-                        onEdgeProximity: strength => {
-                            if (!root.pendingTerminationAppId)
-                                root.dismissalGlow = strength
-                        }
-                        onTerminationRequested: (appId, cardItem) => {
-                            if (!root.killBackgroundApp(appId))
-                                cardItem.cancelDismissal()
-                        }
-                        Connections {
-                            target: root.appController
-                            function onTerminationFailed(appId, message) {
-                                if (appId === recentCard.appId) recentCard.cancelDismissal()
-                            }
-                        }
-                    }
-                }
+            onActivated: (appId, cardItem) => root.startRecentEntry(appId, cardItem)
+            onEdgeProximity: strength => {
+                if (!root.pendingTerminationAppId)
+                    root.dismissalGlow = strength
+            }
+            onTerminationRequested: (appId, cardItem) => {
+                if (!root.killBackgroundApp(appId))
+                    cardItem.cancelDismissal()
             }
         }
 
@@ -783,20 +761,13 @@ ApplicationWindow {
 
         }
 
-        /*
-         * APP DRAWER
-         */
         Item {
             id: drawerSheet
             objectName: "drawerSheet"
 
             property real closedY: oceanScreen.height - 185
-            // The open dock starts below the status bar. Its moving chevron
-            // finishes inside the status row, between the clock and cellular.
             property real openY: statusBar.height
 
-            // Complete the handoff over the last 96 design pixels. Following
-            // position (not the target state) also handles reversed drags.
             readonly property real chevronArrival:
                 Math.max(0, Math.min(1, 1 - (y - openY) / 96))
             readonly property real chevronBlend:
@@ -968,9 +939,6 @@ ApplicationWindow {
                 easing.type: Easing.OutQuart
             }
 
-            /*
-             * Main drawer background.
-             */
             Rectangle {
                 anchors.fill: parent
 
@@ -978,12 +946,6 @@ ApplicationWindow {
                 opacity: 1 - loadingView.progress
             }
 
-            /*
-             * Larger invisible handle region.
-             *
-             * This means the user does not need to hit
-             * the actual chevron precisely.
-             */
             Item {
                 id: drawerHandle
                 objectName: "drawerHandle"
@@ -1047,9 +1009,6 @@ ApplicationWindow {
                 }
             }
 
-            /*
-             * Dock / App Bar
-             */
             Item {
                 id: dock
                 opacity: 1 - Math.min(1, loadingView.progress * 3)
@@ -1102,9 +1061,6 @@ ApplicationWindow {
                 color: "#80ffffff"
             }
 
-            /*
-             * Application grid
-             */
             DrawerAppGrid {
                 id: appGrid
                 objectName: "appDrawerGrid"
@@ -1181,8 +1137,6 @@ ApplicationWindow {
             reduceMotion: root.reduceMotion
             onReady: appId => {
                 if (crossfade && root.appController) {
-                    // The opaque loading screen now covers the source, so its
-                    // preview can be saved and hidden before the target appears.
                     if (root.foregroundSurface) root.backgroundApplication(root.foregroundSurface, false)
                     root.appController.launchExternalApp(appId)
                 }
@@ -1294,8 +1248,6 @@ ApplicationWindow {
                      && !root.promptModal
         }
 
-        // Tint the entire screen below the status icons. The chooser itself
-        // stays above them to intercept touches without obscuring the bar.
         PortalBackdrop {
             anchors.fill: parent
             z: 65
@@ -1351,14 +1303,6 @@ ApplicationWindow {
             Behavior on opacity { NumberAnimation { duration: 150 } }
         }
 
-        /*
-         * BOTTOM EDGE GESTURE
-         *
-         * Dragging upward from the last 55 pixels of the
-         * display grabs the drawer.
-         *
-         * It is only enabled while the drawer is closed.
-         */
         Item {
             id: bottomEdgeGesture
             objectName: "homeControl"
@@ -1398,9 +1342,6 @@ ApplicationWindow {
             }
         }
 
-        /*
-         * Home gesture indicator
-         */
         Rectangle {
             id: homeIndicator
             opacity: 1 - loadingView.progress

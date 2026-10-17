@@ -10,6 +10,13 @@ class ApplicationLayoutTests : public QObject
     Q_OBJECT
     QTemporaryDir profile;
 
+    bool registryReady(const AppController &controller)
+    {
+        const auto installed = controller.installedApps();
+        return installed.contains("com.openwave.files") && installed.contains("com.openwave.settings")
+            && installed.contains("com.openwave.ocean");
+    }
+
     void verifyPlacement(const AppController &controller)
     {
         const QStringList placed = controller.favoriteApps() + controller.unpinnedApps();
@@ -29,10 +36,12 @@ private slots:
     void moveAndPersist()
     {
         QStringList favorites, drawer;
+        int installedCount = 0;
         {
             AppController controller;
             if (!QFile::exists("/run/openwave/appd.pid")) QSKIP("Requires appd in the target runtime.");
-            QTRY_COMPARE(controller.installedApps().size(), 3);
+            QTRY_VERIFY(registryReady(controller));
+            installedCount = controller.installedApps().size();
             QSignalSpy changes(&controller, &AppController::appLayoutChanged);
             verifyPlacement(controller);
             for (const auto &app : controller.installedApps()) {
@@ -40,22 +49,23 @@ private slots:
                 verifyPlacement(controller);
             }
             QVERIFY(controller.favoriteApps().isEmpty());
-            QCOMPARE(controller.unpinnedApps().size(), 3);
-            QVERIFY(controller.moveApp("browser", false, 0));
-            QCOMPARE(controller.unpinnedApps().first(), QString("browser"));
-            QVERIFY(controller.moveApp("files", true, 0));
-            QVERIFY(controller.moveApp("settings", true, 0));
+            QCOMPARE(controller.unpinnedApps().size(), installedCount);
+            QVERIFY(controller.moveApp("com.openwave.ocean", false, 0));
+            QCOMPARE(controller.unpinnedApps().first(), QString("com.openwave.ocean"));
+            QVERIFY(controller.moveApp("com.openwave.files", true, 0));
+            QVERIFY(controller.moveApp("com.openwave.settings", true, 0));
             verifyPlacement(controller);
-            QCOMPARE(controller.unpinnedApps(), QStringList{"browser"});
-            QVERIFY(controller.moveApp("settings", true, 2));
-            QCOMPARE(controller.favoriteApps(), (QStringList{"files", "settings"}));
+            QCOMPARE(controller.unpinnedApps().first(), QString("com.openwave.ocean"));
+            QCOMPARE(controller.unpinnedApps().size(), installedCount - 2);
+            QVERIFY(controller.moveApp("com.openwave.settings", true, 2));
+            QCOMPARE(controller.favoriteApps(), (QStringList{"com.openwave.files", "com.openwave.settings"}));
             QVERIFY(!controller.moveApp("not-installed", false, 0));
             QVERIFY(changes.count() >= 6);
             favorites = controller.favoriteApps();
             drawer = controller.unpinnedApps();
         }
         AppController restored;
-        QTRY_COMPARE(restored.installedApps().size(), 3);
+        QTRY_COMPARE(restored.installedApps().size(), installedCount);
         QCOMPARE(restored.favoriteApps(), favorites);
         QCOMPARE(restored.unpinnedApps(), drawer);
         verifyPlacement(restored);
@@ -69,9 +79,10 @@ private slots:
         settings.sync();
         AppController controller;
         if (!QFile::exists("/run/openwave/appd.pid")) QSKIP("Requires appd in the target runtime.");
-        QTRY_COMPARE(controller.installedApps().size(), 3);
-        QCOMPARE(controller.favoriteApps(), QStringList{"files"});
-        QCOMPARE(controller.unpinnedApps(), (QStringList{"browser", "settings"}));
+        QTRY_VERIFY(registryReady(controller));
+        QCOMPARE(controller.favoriteApps(), QStringList{"com.openwave.files"});
+        QCOMPARE(controller.unpinnedApps().first(), QString("com.openwave.ocean"));
+        QVERIFY(controller.unpinnedApps().contains("com.openwave.settings"));
         verifyPlacement(controller);
     }
 
@@ -79,9 +90,9 @@ private slots:
     {
         QTest::addColumn<QStringList>("favorites");
         QTest::newRow("none") << QStringList{};
-        QTest::newRow("one") << QStringList{"files"};
-        QTest::newRow("two") << (QStringList{"files", "browser"});
-        QTest::newRow("three") << (QStringList{"files", "browser", "settings"});
+        QTest::newRow("one") << QStringList{"com.openwave.files"};
+        QTest::newRow("two") << (QStringList{"com.openwave.files", "com.openwave.ocean"});
+        QTest::newRow("three") << (QStringList{"com.openwave.files", "com.openwave.ocean", "com.openwave.settings"});
     }
 
     void restoreFavoriteCounts()
@@ -89,11 +100,11 @@ private slots:
         QFETCH(QStringList, favorites);
         QSettings settings(profile.path() + "/OpenWave/settings.ini", QSettings::IniFormat);
         settings.setValue("launcher/favorites", favorites);
-        settings.setValue("launcher/unpinned", QStringList{"settings", "browser", "files"});
+        settings.setValue("launcher/unpinned", QStringList{"com.openwave.settings", "com.openwave.ocean", "com.openwave.files"});
         settings.sync();
         AppController controller;
         if (!QFile::exists("/run/openwave/appd.pid")) QSKIP("Requires appd in the target runtime.");
-        QTRY_COMPARE(controller.installedApps().size(), 3);
+        QTRY_VERIFY(registryReady(controller));
         QCOMPARE(controller.favoriteApps(), favorites);
         verifyPlacement(controller);
     }

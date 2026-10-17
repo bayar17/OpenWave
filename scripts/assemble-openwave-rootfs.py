@@ -21,21 +21,21 @@ RPATH_FIXES = []
 STAGE = ROOT / 'out/staging' / TRIPLE / 'userspace'
 RUNTIME = Path(os.environ.get('OPENWAVE_ROOTFS', ROOT / 'rootfs')).resolve()
 # Runtime entry points and helper programs, not development utilities.
-BIN = {'ocean-launcher', 'ocean-browser', 'ocean-files', 'ocean-settings',
-       'openwave-shell', 'dbus-daemon', 'udevadm', 'pipewire', 'wireplumber',
-       'wpctl', 'nm-online', 'getent', 'iconv', 'locale', 'gsettings', 'gio', 'gdbus'}
+BIN = { 'dbus-daemon', 'udevadm', 'pipewire', 'wireplumber',
+       'wpctl', 'nm-online', 'getent', 'iconv', 'locale', 'gsettings', 'gio', 'gdbus', 'bwrap'}
 SBIN = {'NetworkManager', 'udevd', 'udevadm', 'avahi-daemon', 'iconvconfig'}
 SHARE = {'X11', 'alsa', 'alsa-card-profile', 'applications', 'avahi', 'dbus-1',
          'drirc.d', 'fontconfig', 'fonts', 'glib-2.0', 'gst-plugins-base',
          'gstreamer-1.0', 'icu', 'libdrm', 'licenses', 'locale', 'ocean-browser',
          'pipewire', 'pixmaps', 'spa-0.2', 'wireplumber', 'wpe-webkit-2.0',
          'xkeyboard-config-2', 'xml', 'zoneinfo'}
-QML = {'QML', 'QtQml', 'QtQml/Models', 'QtQml/WorkerScript', 'QtQuick',
+QML = {'OpenWave/Fonts', 'QML', 'QtQml', 'QtQml/Models', 'QtQml/WorkerScript', 'QtQuick',
        'QtQuick/Window', 'QtQuick/Controls', 'QtQuick/Controls/impl',
        'QtQuick/Controls/Basic', 'QtQuick/Controls/Basic/impl',
        'QtQuick/Controls/Fusion', 'QtQuick/Controls/Fusion/impl',
        'QtQuick/Templates', 'QtQuick/Effects', 'QtQuick/Layouts',
-       'QtQuick/Shapes', 'QtWayland/Compositor', 'QtWayland/Compositor/XdgShell'}
+       'QtQuick/Shapes', 'QtQuick/Dialogs', 'QtQuick/Dialogs/quickimpl',
+       'Qt/labs/folderlistmodel', 'QtWayland/Compositor', 'QtWayland/Compositor/XdgShell'}
 PLUGINS = {'platforms/libqeglfs.so', 'platforms/libqwayland.so',
            'egldeviceintegrations/libqeglfs-kms-integration.so',
            'wayland-shell-integration/libxdg-shell.so',
@@ -50,8 +50,26 @@ DEVEL = {'include', 'cmake', 'pkgconfig', 'objects-Release', 'metatypes',
 DEVEL_EXT = {'.a', '.o', '.la', '.prl', '.pc', '.cmake', '.h', '.hpp', '.qmltypes'}
 
 
+LEGACY_APPS = {'ocean-launcher', 'ocean-browser', 'ocean-files', 'ocean-settings', 'openwave-shell'}
+SERVICES = {'appd', 'permissiond', 'promptd', 'openwave-portal', 'wallpaperagentd', 'timed', 'connectivityd', 'audiod'}
+BUNDLES = {'com.openwave.shell': 'ocean-launcher', 'com.openwave.ocean': 'ocean',
+           'com.openwave.files': 'ocean-files', 'com.openwave.settings': 'ocean-settings',
+           'com.openwave.photos': 'ocean-photos'}
+
+
 def runtime_path(rel):
     p = rel.parts
+    if len(p) >= 3 and p[:2] == ('usr', 'bin') and p[2] in LEGACY_APPS:
+        return False
+    if len(p) >= 3 and p[:2] == ('usr', 'libexec') and p[2] in SERVICES:
+        return False
+    if len(p) >= 3 and p[:3] == ('usr', 'share', 'ocean-browser'):
+        return False
+    if p[0] in ('System', 'Applications') and (rel.suffix in DEVEL_EXT or '.git' in p):
+        return False
+    if rel.as_posix() in {'usr/lib/fonts/SourceSansPro-ExtraLight.otf',
+                          'usr/lib64/fonts/SourceSansPro-ExtraLight.otf'}:
+        return False
     # User data and persistent service state are not development installations.
     # Preserve arbitrary names/extensions, including a user's source files.
     if p[0] != 'usr':
@@ -202,7 +220,7 @@ def assemble(base):
                         if priority > library_priorities.get(src.name, (-1, -1)):
                             libraries[src.name] = (src, rel)
                             library_priorities[src.name] = priority
-                    else:
+                    elif rel.parts[0] not in ('System', 'Applications'):
                         libraries.setdefault(src.name, (src, rel))
                 if runtime_path(rel):
                     resources[rel] = src
@@ -227,6 +245,13 @@ def assemble(base):
         # GStreamer, PipeWire, codecs, and WPE are seeded with their plugin trees.
         dynamic = ['libnss_files.so.2', 'libnss_dns.so.2', 'libnss_compat.so.2',
                    'libEGL.so.1', 'libGLESv2.so.2', 'libgbm.so.1']
+        # Keep the SELinux runtime available to native clients before services
+        # start linking it. Development headers/static archives stay in the SDK.
+        selinux = ['libselinux.so.1', 'libsepol.so.2']
+        if any((SYSROOT / 'usr/lib64' / name).exists() for name in selinux):
+            if not all((SYSROOT / 'usr/lib64' / name).is_file() for name in selinux):
+                raise RuntimeError('Incomplete SELinux SDK: run ./build-openwave selinux')
+            dynamic.extend(selinux)
         queue = [p for p in files(build) if elf(p)]
         requested = set(dynamic)
         scanned = set()
@@ -257,20 +282,54 @@ def assemble(base):
                 if path in scanned:
                     continue
                 scanned.add(path)
-                requested.update(needed(path))
+                dependencies = needed(path)
+                private_lib = None
+                rel = path.relative_to(build)
+                if rel.parts[0] in ('System', 'Applications'):
+                    bundle_depth = 3 if rel.parts[0] == 'System' else 2
+                    private_lib = build.joinpath(*rel.parts[:bundle_depth], 'lib')
+                requested.update(name for name in dependencies if not private_lib or not (private_lib / name).is_file())
         # Empty runtime mount points and the existing private data layout.
-        for name in ('dev', 'proc', 'sys', 'run', 'tmp', 'var', 'Data'):
+        for name in ('dev', 'proc', 'sys', 'run', 'tmp', 'var', 'Data', 'System', 'System/Applications', 'System/Services', 'Applications'):
             (build / name).mkdir(exist_ok=True)
         (build / 'tmp').chmod(0o1777)
         build.chmod(0o755)
         # appd trusts administrative metadata/executables only through roots
         # that cannot be written by a group. Build-host umasks are not policy.
         for name in ('usr', 'usr/bin', 'usr/libexec', 'usr/share',
-                     'usr/share/applications', 'usr/share/pixmaps', 'etc/openwave'):
+                     'usr/share/applications', 'usr/share/pixmaps', 'etc/openwave',
+                     'var', 'var/lib'):
             (build / name).chmod(0o755)
-        required = ['init', 'usr/bin/ocean-launcher', 'usr/bin/ocean-browser', 'usr/bin/ocean-files',
-                    'usr/bin/ocean-settings', 'usr/libexec/promptd', 'usr/libexec/openwave-portal',
-                    'usr/libexec/appd']
+        for root in ('System', 'System/Applications', 'System/Services', 'Applications'):
+            (build / root).chmod(0o755)
+        for bundle_root in ('System/Applications', 'Applications'):
+            for bundle in (build / bundle_root).iterdir():
+                if not bundle.is_dir() or bundle.is_symlink():
+                    raise RuntimeError(f'Invalid installed bundle directory: {bundle}')
+                manifest_path = bundle / 'manifest.json'
+                if manifest_path.stat().st_size > 65536:
+                    raise RuntimeError(f'Oversized manifest: {manifest_path}')
+                manifest = json.loads(manifest_path.read_text())
+                appid = bundle.name
+                executable = manifest.get('executable', '')
+                if manifest.get('id') != appid or manifest.get('schemaVersion') != 1 or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z0-9][A-Za-z0-9_-]*){2,}', appid):
+                    raise RuntimeError(f'Invalid installed bundle identity: {appid}')
+                if not executable.startswith('bin/') or any(part in ('', '.', '..') for part in executable.split('/')) or not (bundle / executable).is_file():
+                    raise RuntimeError(f'Invalid bundle executable: {appid}')
+                if appid in BUNDLES and executable != f'bin/{BUNDLES[appid]}':
+                    raise RuntimeError(f'Unexpected system bundle executable: {appid}')
+                for directory in ('lib', 'plugins', 'qml', 'resources'):
+                    (bundle / directory).mkdir(exist_ok=True)
+                for directory, dirs, names in os.walk(bundle):
+                    Path(directory).chmod(0o755)
+                    for name in dirs + names:
+                        path = Path(directory) / name
+                        if path.is_symlink():
+                            raise RuntimeError(f'Symlinks are not accepted in installed bundles: {path}')
+                        if path.is_file():
+                            path.chmod(0o755 if os.access(path, os.X_OK) else 0o644)
+        required = ['init'] + [f'System/Applications/{appid}/bin/{exe}' for appid, exe in BUNDLES.items()]
+        required += [f'System/Services/{name}' for name in SERVICES | {'openwave-launch'}]
         for rel in required:
             if not (build / rel).exists():
                 raise RuntimeError(f'Missing runtime entry point: {rel}')
