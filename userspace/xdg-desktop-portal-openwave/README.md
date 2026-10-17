@@ -47,7 +47,7 @@ section globs such as `org.freedesktop.*`. Unknown keys return
 the value once; deprecated public `Read` preserves its historical double variant.
 There is no write API.
 
-The design and protocol checks were researched using XERJ against
+The design and protocol checks were informed by
 `flatpak/xdg-desktop-portal` commit
 `8eba842f30070e2d90e16832462ad8171bd5beed`, particularly
 `desktop-portal/settings.c`, `tests/test_settings.py`, and

@@ -70,13 +70,13 @@ Browser storage separation, persistent cookies/local storage, SELinux domain,
 and recovery after appd restarts. It shuts down the test VM after reporting.
 Use it only in a disposable test image with the normal OpenWave init as PID 1.
 
-Reference coding used XERJ against KDE/Angelfish commit
+The runtime design was informed by KDE/Angelfish commit
 `2a82873b85f8b608c3b4c8cbe6244e9bc1396027`, particularly
 `src/webappmanager.cpp`, `src/webappcreator.cpp`, and `angelfish-webapp/main.cpp`, for the small-runtime plus
 metadata approach. OpenWave uses its own bundles, native prompts, and WPE engine;
 no upstream implementation was copied.
 
-The maximized-window offset was checked through XERJ against Qt/qtwayland commit
+The maximized-window offset was checked against Qt/qtwayland commit
 `512ab34ec219a21e09b6988b2f87e3708d853482`,
 `src/compositor/extensions/qwaylandxdgshellintegration.cpp`. Qt restores a
 maximized move item's output position, so the Shell keeps the reserved web app
@@ -99,7 +99,7 @@ access and removes permission decisions. Reserved application UID mappings remai
 system metadata, preventing accidental UID reuse; they contain no website data.
 The exported SDK requires no new transport or application-side filesystem access.
 
-Uninstall reference coding used XERJ against KDE/Angelfish commit
+The uninstall design was informed by KDE/Angelfish commit
 `2a82873b85f8b608c3b4c8cbe6244e9bc1396027`, `src/webappmanager.cpp`, for removing
 the launcher registration and publishing a model update. OpenWave implements its
 own authenticated broker, process shutdown, and private-storage deletion.

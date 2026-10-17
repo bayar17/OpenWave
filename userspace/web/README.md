@@ -93,9 +93,9 @@ navigation, JavaScript, redirects, cancellation and failure. Ocean's
 tests need OpenWave's EGL/Wayland runtime, rather than the software/offscreen
 Qt renderer.
 
-Reference coding used XERJ and KDE/Angelfish commit
+The engine wrapper draws on KDE/Angelfish commit
 `2a82873b85f8b608c3b4c8cbe6244e9bc1396027`, `lib/contents/ui/WebView.qml`, for
-the engine-wrapper approach only. Angelfish uses Qt WebEngine; its engine code
+its design approach only. Angelfish uses Qt WebEngine; its engine code
 was not copied. WPE integration was checked against OpenWave's vendor snapshot,
 `Source/WebKit/UIProcess/API/wpe/qt6/WPEQtView.h` (SHA-256
 `9608e4600e6c803aa0ebdbb464914d1f4905c5f4c4fec1959791c1a7d590dd11`) and

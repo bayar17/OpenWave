@@ -40,3 +40,9 @@ __pycache__/
 .DS_Store
 *.ds_store
 ._*
+
+# Local reference-search tooling.
+/.xerjignore
+/AGENTS.md
+/references/xerj/
+/scripts/reference-code.py
