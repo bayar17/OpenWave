@@ -1,0 +1,10 @@
+find_package(Qt6 REQUIRED COMPONENTS Core)
+add_executable(permissiond main.cpp PermissionService.cpp PolicyStore.cpp LifecycleBridge.cpp PermissionRegistry.cpp)
+target_compile_features(permissiond PRIVATE cxx_std_17)
+target_compile_options(permissiond PRIVATE -Wall -Wextra)
+target_link_libraries(permissiond PRIVATE Qt6::Core OpenWave::Identity)
+set_target_properties(permissiond PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "$ORIGIN/../lib64;$ORIGIN/../lib")
+install(TARGETS permissiond RUNTIME DESTINATION /System/Services)
+install(FILES org.openwave.Permissions.conf DESTINATION share/dbus-1/system.d)
+
+set_target_properties(permissiond PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "/usr/lib64;/usr/lib")

@@ -35,6 +35,7 @@ static gboolean clean_empty_cgroups(gpointer data)
 int main(void)
 {
     Manager m = {0}; GError *error = NULL;
+    m.session = g_uuid_string_random();
     if (!appd_configuration(&m, "/etc/openwave/appd.conf", &error)) goto failure;
     if (prctl(PR_SET_CHILD_SUBREAPER, 1) < 0) { g_printerr("appd: cannot become a child subreaper\n"); return 1; }
     m.loop = g_main_loop_new(NULL, FALSE); m.instances = g_ptr_array_new();
@@ -46,6 +47,7 @@ int main(void)
     appd_registry_scan(&m);
     if (!appd_register_bus(&m, &error)) goto failure;
     appd_recover(&m); appd_registry_watch(&m);
+    appd_publish_preferences(&m); g_timeout_add(500, appd_publish_preferences, &m);
     char *ready = g_build_filename(m.state_dir, "ready", NULL);
     char *pid = g_strdup_printf("%d\n", getpid());
     if (!g_file_set_contents(ready, pid, -1, &error)) goto failure;
@@ -53,7 +55,7 @@ int main(void)
     g_unix_signal_add(SIGTERM, stop, &m); g_unix_signal_add(SIGINT, stop, &m);
     g_timeout_add(250, clean_empty_cgroups, &m);
     g_print("appd: ready, %u applications, execution user %s (uid %u)\n", g_hash_table_size(m.apps), m.user, m.uid);
-    if (m.uid == 0) g_warning("appd: explicit legacy root session; non-root migration is not complete");
+    g_print("appd: Settings and Files trusted; other applications require isolation\n");
     g_main_loop_run(m.loop);
     unlink(ready); g_free(ready);
     return 0;

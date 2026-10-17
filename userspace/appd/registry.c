@@ -65,117 +65,82 @@ gboolean appd_configuration(Manager *m, const char *path, GError **error)
     if (!m->runtime) m->runtime = g_strdup("/run/ocean");
     gint deadline = g_key_file_get_integer(config, "Execution", "ShutdownTimeoutMs", NULL);
     m->shutdown_ms = deadline ? CLAMP(deadline, 100, 30000) : 2500;
-    m->desktop_dir = g_strdup("/usr/share/applications");
+    gint limit = g_key_file_get_integer(config, "Isolation", "MaxProcesses", NULL);
+    m->pids_max = limit ? CLAMP(limit, 64, 65536) : 512;
     m->state_dir = g_strdup("/run/openwave/appd");
-    m->launcher_exe = g_strdup("/usr/bin/ocean-launcher");
+    m->launcher_exe = g_strdup("/System/Applications/com.openwave.shell/bin/ocean-launcher");
     g_key_file_unref(config);
-    return TRUE;
-}
-
-static gboolean valid_id(const char *id)
-{
-    if (!id || !*id || strlen(id) > 128 || !g_ascii_isalnum(*id)) return FALSE;
-    for (const char *p = id; *p; ++p)
-        if (!g_ascii_isalnum(*p) && *p != '-' && *p != '_' && *p != '.') return FALSE;
     return TRUE;
 }
 
 static void app_free(gpointer data)
 {
     App *a = data;
-    g_free(a->id); g_free(a->name); g_free(a->icon); g_free(a->desktop);
-    g_strfreev(a->argv); g_free(a->state); g_free(a->error); g_free(a);
+    g_free(a->id); g_free(a->name); g_free(a->icon); g_free(a->manifest);
+    g_free(a->bundle); g_free(a->digest); g_strfreev(a->permissions); g_strfreev(a->argv); g_free(a->state); g_free(a->error); g_free(a);
 }
 
-static App *read_app(const char *path)
+gboolean appd_validate_bundle(App *app, GError **error)
 {
-    GError *error = NULL;
-    if (!metadata_file(path, &error)) {
-        g_warning("appd: %s", error->message); g_clear_error(&error); return NULL;
-    }
-    GKeyFile *file = g_key_file_new();
-    App *a = g_new0(App, 1);
-    char *exec = NULL, *type = NULL, *icon = NULL;
-    if (!g_key_file_load_from_file(file, path, 0, NULL)) goto invalid;
-    type = g_key_file_get_string(file, "Desktop Entry", "Type", NULL);
-    if (g_strcmp0(type, "Application") || g_key_file_get_boolean(file, "Desktop Entry", "Hidden", NULL)
-        || g_key_file_get_boolean(file, "Desktop Entry", "Terminal", NULL)) goto invalid;
-    a->id = g_key_file_get_string(file, "Desktop Entry", "X-OpenWave-AppId", NULL);
-    if (!valid_id(a->id)) goto invalid;
-    a->name = g_key_file_get_locale_string(file, "Desktop Entry", "Name", NULL, NULL);
-    if (!a->name || !*a->name) goto invalid;
-    exec = g_key_file_get_string(file, "Desktop Entry", "Exec", NULL);
-    if (!exec || !g_shell_parse_argv(exec, NULL, &a->argv, NULL) || !a->argv[0]
-        || !appd_verified_file(a->argv[0], TRUE, NULL)) goto invalid;
-    char *resolved = realpath(a->argv[0], NULL);
-    g_free(a->argv[0]); a->argv[0] = resolved;
-    if (!g_str_has_prefix(a->argv[0], "/usr/bin/") && !g_str_has_prefix(a->argv[0], "/usr/libexec/")) goto invalid;
-    GPtrArray *fixed = g_ptr_array_new_with_free_func(g_free);
-    for (char **p = a->argv; *p; ++p) {
-        if (!strcmp(*p, "%f") || !strcmp(*p, "%F") || !strcmp(*p, "%u") || !strcmp(*p, "%U")) {
-            a->paths = TRUE;
-            continue;
-        }
-        if (strchr(*p, '%')) { g_ptr_array_unref(fixed); goto invalid; }
-        g_ptr_array_add(fixed, g_strdup(*p));
-    }
-    g_ptr_array_add(fixed, NULL);
-    g_strfreev(a->argv); a->argv = (char **)g_ptr_array_free(fixed, FALSE);
-    a->paths |= g_key_file_get_boolean(file, "Desktop Entry", "X-OpenWave-AcceptsPaths", NULL);
-    a->single = !g_key_file_has_key(file, "Desktop Entry", "X-OpenWave-SingleInstance", NULL)
-        || g_key_file_get_boolean(file, "Desktop Entry", "X-OpenWave-SingleInstance", NULL);
-    icon = g_key_file_get_string(file, "Desktop Entry", "Icon", NULL);
-    if (icon && !strchr(icon, '/')) {
-        const char *extensions[] = {"", ".svg", ".png", ".jpg", NULL};
-        for (int i = 0; extensions[i]; ++i) {
-            char *name = g_strconcat(icon, extensions[i], NULL);
-            char *candidate = g_build_filename("/usr/share/pixmaps", name, NULL);
-            g_free(name);
-            if (appd_verified_file(candidate, FALSE, NULL)) { a->icon = g_filename_to_uri(candidate, NULL, NULL); g_free(candidate); break; }
-            g_free(candidate);
-        }
-    } else if (icon && appd_verified_file(icon, FALSE, NULL)) a->icon = g_filename_to_uri(icon, NULL, NULL);
-    if (!a->icon) a->icon = g_strdup("");
-    a->desktop = g_strdup(path);
-    a->state = g_strdup("Stopped"); a->error = g_strdup("");
-    g_free(type); g_free(exec); g_free(icon); g_key_file_unref(file);
-    return a;
-invalid:
-    g_free(type); g_free(exec); g_free(icon); g_key_file_unref(file); app_free(a);
-    return NULL;
+    App *fresh = appd_read_bundle(app->bundle);
+    gboolean valid = fresh && !g_strcmp0(fresh->digest, app->digest)
+        && !g_strcmp0(fresh->argv[0], app->argv[0]);
+    if (fresh) app_free(fresh);
+    if (!valid) g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED,
+        "Bundle changed or failed validation; refresh the application registry");
+    return valid;
 }
 
 void appd_registry_scan(Manager *m)
 {
     gboolean changed = FALSE;
     if (!m->apps) m->apps = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, app_free);
-    GDir *directory = g_dir_open(m->desktop_dir, 0, NULL);
-    if (!directory) return;
     GHashTable *found = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
-    const char *name;
-    while ((name = g_dir_read_name(directory))) {
-        if (!g_str_has_suffix(name, ".desktop")) continue;
-        char *path = g_build_filename(m->desktop_dir, name, NULL);
-        App *next = read_app(path); g_free(path);
-        if (!next) continue;
-        if (g_hash_table_contains(found, next->id)) { g_warning("appd: duplicate application ID %s", next->id); app_free(next); continue; }
+    GHashTable *candidates = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, app_free);
+    const char *roots[] = {"/System/Applications", "/Applications", NULL};
+    for (guint i = 0; roots[i]; ++i) {
+        GDir *directory = g_dir_open(roots[i], 0, NULL);
+        const char *name;
+        while (directory && (name = g_dir_read_name(directory))) {
+            char *path = g_build_filename(roots[i], name, NULL);
+            App *next = appd_read_bundle(path); g_free(path);
+            if (!next) continue;
+            if (g_hash_table_contains(found, next->id)) {
+                g_warning("appd: rejecting duplicate bundle ID %s", next->id);
+                g_hash_table_remove(candidates, next->id); app_free(next); continue;
+            }
+            g_hash_table_add(found, g_strdup(next->id));
+            g_hash_table_insert(candidates, g_strdup(next->id), next);
+        }
+        if (directory) g_dir_close(directory);
+    }
+    g_hash_table_remove_all(found);
+    GHashTableIter candidates_iter; gpointer candidate, candidate_key;
+    g_hash_table_iter_init(&candidates_iter, candidates);
+    while (g_hash_table_iter_next(&candidates_iter, &candidate_key, &candidate)) {
+        App *next = candidate;
         g_hash_table_add(found, g_strdup(next->id));
+        g_hash_table_iter_steal(&candidates_iter); g_free(candidate_key);
         App *old = g_hash_table_lookup(m->apps, next->id);
         if (old && appd_instance(m, old)) { app_free(next); continue; }
         changed |= !old || g_strcmp0(old->name, next->name) || g_strcmp0(old->icon, next->icon)
             || !g_strv_equal((const char *const *)old->argv, (const char *const *)next->argv)
-            || old->paths != next->paths || old->single != next->single;
+            || old->paths != next->paths || old->single != next->single || g_strcmp0(old->digest, next->digest);
         if (old) {
             g_free(next->state); next->state = g_strdup(old->state);
             g_free(next->error); next->error = g_strdup(old->error);
         }
+        if (!old || g_strcmp0(old->digest, next->digest)) appd_services_event(m, "ApplicationRegistered", next, NULL);
         g_hash_table_replace(m->apps, next->id, next);
     }
     GHashTableIter iter; gpointer key, value;
     g_hash_table_iter_init(&iter, m->apps);
     while (g_hash_table_iter_next(&iter, &key, &value))
-        if (!g_hash_table_contains(found, key) && !appd_instance(m, value)) { g_hash_table_iter_remove(&iter); changed = TRUE; }
-    g_hash_table_unref(found); g_dir_close(directory);
+        if (!g_hash_table_contains(found, key) && !appd_instance(m, value)) {
+            appd_services_event(m, "ApplicationRemoved", value, NULL);
+            g_hash_table_iter_remove(&iter); changed = TRUE;
+        }
+    g_hash_table_unref(found); g_hash_table_unref(candidates);
     if (changed) appd_emit(m, "RegistryChanged", NULL);
 }
 
@@ -183,6 +148,7 @@ static gboolean rescan(gpointer data)
 {
     Manager *m = data; m->scan_timer = 0; appd_registry_scan(m); return G_SOURCE_REMOVE;
 }
+static gboolean poll_registry(gpointer data) { appd_registry_scan(data); return G_SOURCE_CONTINUE; }
 static void changed(GFileMonitor *monitor, GFile *file, GFile *other, GFileMonitorEvent event, gpointer data)
 {
     (void)monitor; (void)file; (void)other; (void)event;
@@ -191,10 +157,16 @@ static void changed(GFileMonitor *monitor, GFile *file, GFile *other, GFileMonit
 }
 void appd_registry_watch(Manager *m)
 {
-    GFile *directory = g_file_new_for_path(m->desktop_dir);
-    m->monitor = g_file_monitor_directory(directory, 0, NULL, NULL);
-    g_object_unref(directory);
-    if (m->monitor) g_signal_connect(m->monitor, "changed", G_CALLBACK(changed), m);
+    const char *roots[] = {"/System/Applications", "/Applications", NULL};
+    m->monitors = g_ptr_array_new_with_free_func(g_object_unref);
+    for (guint i = 0; roots[i]; ++i) {
+        GFile *directory = g_file_new_for_path(roots[i]);
+        GFileMonitor *monitor = g_file_monitor_directory(directory, 0, NULL, NULL);
+        g_object_unref(directory);
+        if (monitor) { g_signal_connect(monitor, "changed", G_CALLBACK(changed), m); g_ptr_array_add(m->monitors, monitor); }
+    }
+    // Nested manifest updates are not reported by every filesystem watcher.
+    g_timeout_add_seconds(2, poll_registry, m);
 }
 
 GVariant *appd_info(Manager *m, App *a, Instance *instance)
@@ -203,12 +175,19 @@ GVariant *appd_info(Manager *m, App *a, Instance *instance)
     GVariantBuilder info;
     g_variant_builder_init(&info, G_VARIANT_TYPE("a{sv}"));
     g_variant_builder_add(&info, "{sv}", "appId", g_variant_new_string(a->id));
+    g_variant_builder_add(&info, "{sv}", "manifestDigest", g_variant_new_string(a->digest));
+    g_variant_builder_add(&info, "{sv}", "declaredPermissions", g_variant_new_strv((const char *const *)a->permissions, -1));
     g_variant_builder_add(&info, "{sv}", "name", g_variant_new_string(a->name));
     g_variant_builder_add(&info, "{sv}", "icon", g_variant_new_string(a->icon));
+    g_variant_builder_add(&info, "{sv}", "bundlePath", g_variant_new_string(a->bundle));
+    g_variant_builder_add(&info, "{sv}", "isolationProfile", g_variant_new_string(appd_trusted_app(a) ? "trusted-system" : "bubblewrap-landlock-uid-cgroup"));
+    g_variant_builder_add(&info, "{sv}", "namespaceSandboxed", g_variant_new_boolean(instance && instance->namespace_sandboxed));
+    g_variant_builder_add(&info, "{sv}", "seccompFiltered", g_variant_new_boolean(instance && !appd_trusted_app(a)));
     g_variant_builder_add(&info, "{sv}", "executable", g_variant_new_string(a->argv[0]));
     g_variant_builder_add(&info, "{sv}", "state", g_variant_new_string(a->state));
     g_variant_builder_add(&info, "{sv}", "error", g_variant_new_string(a->error));
     g_variant_builder_add(&info, "{sv}", "pid", g_variant_new_uint32(instance ? instance->pid : 0));
+    g_variant_builder_add(&info, "{sv}", "trusted", g_variant_new_boolean(appd_trusted_app(a)));
     g_variant_builder_add(&info, "{sv}", "singleInstance", g_variant_new_boolean(a->single));
     return g_variant_builder_end(&info);
 }

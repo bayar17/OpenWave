@@ -5,8 +5,6 @@
 #include <QLocalServer>
 #include <functional>
 
-// appd owns launching. PID endpoints retain the existing activation/quit wire
-// protocol so applications can migrate without changing their handlers.
 namespace OpenWaveApplications {
 QString launcherAddress();
 QString instanceAddress(qint64 pid);

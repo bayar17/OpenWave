@@ -9,6 +9,9 @@ Item {
     property var connectivityBackend: null
     property var timeBackend: null
     property var promptClient: null
+    property var permissionClient: null
+    property var applicationsBackend: null
+    property bool permissionsOpen: false
     property Item wallpaper
     property real renderScale: 1
     property real topInset: 0
@@ -50,6 +53,7 @@ Item {
     property int pendingTab: -1
     property string selectedWifiSsid: ""
     property string generalPromptAction: ""
+    property var pendingSearchEntry: null
     property bool wifiPasswordVisible: false
     readonly property var wifiInfo: connectivityBackend && connectivityBackend.savedWifiInfo
                                     ? connectivityBackend.savedWifiInfo : ({})
@@ -58,22 +62,28 @@ Item {
     property int wifiRefreshIntervalMs: 1500
     readonly property bool largeText: backend ? backend.largeText : false
     readonly property string deviceName: backend ? backend.deviceName : "KB Phone"
-    readonly property var tabs: ["wifi", "bluetooth", "general", "accessibility", "wallpaper"]
+    readonly property var tabs: ["wifi", "bluetooth", "general", "accessibility", "wallpaper", "apps"]
     readonly property var searchEntries: [
         {title: "Wi-Fi", detail: "Wireless networks", tab: 0, key: "wifi"},
         {title: "Bluetooth", detail: "Nearby devices", tab: 1, key: "bluetooth"},
         {title: "Device name", detail: deviceName, tab: 2, key: "name"},
         {title: "Time zone", detail: timeBackend ? timeBackend.timezone : "", tab: 2, key: "timezone"},
-        {title: "About OpenWave", detail: "System, kernel and storage", tab: 2, key: "about"},
+        {title: qsTr("About"), detail: qsTr("Operating system, architecture, kernel and processors"), tab: 2, key: "about"},
+        {title: qsTr("Storage"), detail: qsTr("Available space and file permissions"), tab: 2, key: "storage"},
+        {title: qsTr("Locale & Languages"), detail: qsTr("Time zone"), tab: 2, key: "locale"},
+        {title: qsTr("Power options"), detail: qsTr("Restart or shut down"), tab: 2, key: "power"},
+        {title: qsTr("Permissions"), detail: qsTr("Application access to files and folders"), tab: 2, key: "permissions"},
         {title: "Reduce motion", detail: "Launcher and drawer animations", tab: 3, key: "motion"},
         {title: "Larger text", detail: "Increase text size in Settings", tab: 3, key: "text"},
-        {title: "Wallpaper", detail: "Choose and crop a background", tab: 4, key: "wallpaper"}
+        {title: "Wallpaper", detail: "Choose and crop a background", tab: 4, key: "wallpaper"},
+        {title: qsTr("Apps"), detail: qsTr("Installed apps and application permissions"), tab: 5, key: "apps"}
     ]
     readonly property var searchResults: searchEntries.filter(entry =>
         (entry.title + " " + entry.detail).toLowerCase().includes(searchField.text.trim().toLowerCase()))
     signal closed()
     onCurrentTabChanged: {
         if (currentTab !== 0 && wifiPromptAction.length && promptClient && promptClient.busy) promptClient.cancel()
+        if (currentTab !== 2) permissionsOpen = false
         if (currentTab !== 2 && generalPromptAction.length && promptClient && promptClient.busy) promptClient.cancel()
         if (currentTab !== 0 && addNetworkPending && promptClient && promptClient.busy) promptClient.cancel()
         if (currentTab !== 1) closeBluetoothInfo()
@@ -109,6 +119,7 @@ Item {
     }
     onSearchingChanged: {
         if (searching) {
+            if (generalPromptAction.length && promptClient && promptClient.busy) promptClient.cancel()
             if (wifiPromptAction.length && promptClient && promptClient.busy) promptClient.cancel()
             closeBluetoothInfo()
             stopWifiScan(true)
@@ -152,8 +163,6 @@ Item {
         repeat: true
         running: root.visible && root.currentTab === 0 && !root.searching
                  && root.connectivityBackend
-        // RequestWifiScan completes when NetworkManager accepts the request;
-        // access points and connection state can arrive afterward.
         onTriggered: root.connectivityBackend.refresh()
     }
 
@@ -227,6 +236,7 @@ Item {
     }
 
     function resetTabTransition() {
+        pendingSearchEntry = null
         ++tabCaptureToken
         tabCapturePending = false
         pendingTab = -1
@@ -250,6 +260,25 @@ Item {
                 tabStrip.contentX = item.x + item.width - tabStrip.width
         }
         root.forceActiveFocus()
+        const entry = pendingSearchEntry
+        pendingSearchEntry = null
+        if (entry && entry.tab === index && index === 2) {
+            const category = entry.key === "name" ? "about"
+                : entry.key === "timezone" ? "locale"
+                : entry.key === "permissions" ? "storage" : entry.key
+            generalPage.openCategory(category)
+            if (entry.key === "name") editName()
+            if (entry.key === "timezone") editTimezone()
+            if (entry.key === "permissions") {
+                permissionsOpen = true
+                if (permissionClient) permissionClient.refreshApplications()
+            }
+        }
+    }
+
+    function openSearchResult(entry) {
+        pendingSearchEntry = entry
+        selectTab(entry.tab, true)
     }
 
     ParallelAnimation {
@@ -269,6 +298,8 @@ Item {
     }
 
     function back() {
+        if (currentTab === 5 && appsPage.back()) return true
+        if (permissionsOpen) { permissionsOpen = false; return true }
         if (wifiPromptAction.length && promptClient && promptClient.busy) { promptClient.cancel(); return true }
         if (generalPromptAction.length && promptClient && promptClient.busy) { promptClient.cancel(); return true }
         if (addNetworkPending && promptClient && promptClient.busy) { promptClient.cancel(); return true }
@@ -276,10 +307,10 @@ Item {
             promptClient.cancel(); return true
         }
         if (wallpaperCropDialog.visible) { wallpaperCropDialog.beginClose(); return true }
-        if (ipConfigDialog.visible) { ipConfigDialog.close(); return true }
         if (bluetoothInfoOpen) { closeBluetoothInfo(); return true }
         if (wifiInfoOpen) { closeSavedWifiInfo(); return true }
         if (searching) { selectTab(currentTab); return true }
+        if (currentTab === 2 && generalPage.back()) return true
         return false
     }
 
@@ -357,7 +388,8 @@ Item {
         if (!wifiInfoOpen)
             return
         wifiInfoOpen = false
-        if (wifiPromptAction === "forget" && promptClient && promptClient.busy) promptClient.cancel()
+        if ((wifiPromptAction === "forget" || wifiPromptAction === "ipConfig")
+                && promptClient && promptClient.busy) promptClient.cancel()
         wifiPasswordVisible = false
         wifiInfoClearTimer.restart()
     }
@@ -404,6 +436,18 @@ Item {
                 root.closeSavedWifiInfo()
             }
         }
+        function onFieldsFinished(requestId, result, values) {
+            if (root.wifiPromptAction !== "ipConfig") return
+            const ssid = root.wifiPromptSsid
+            root.wifiPromptAction = ""
+            root.wifiPromptSsid = ""
+            if (result !== "accepted" || !root.visible || root.searching
+                    || root.currentTab !== 0 || !root.wifiInfoOpen
+                    || ssid !== root.selectedWifiSsid || root.wifiInfo.ssid !== ssid
+                    || !root.connectivityBackend || root.connectivityBackend.busy
+                    || root.connectivityBackend.savedWifiInfoLoading) return
+            root.saveIpConfig(ssid, values)
+        }
     }
 
     Timer {
@@ -439,6 +483,16 @@ Item {
             choices: choices, initialText: choices[timeBackend.timezone] ? timeBackend.timezone : "",
             placeholder: qsTr("Search city or region"), acceptLabel: qsTr("Save"), cancelLabel: qsTr("Cancel")})
     }
+    function requestPowerAction(action) {
+        if (!["restart", "shutdown"].includes(action) || !backend || !backend.powerActionsAvailable
+                || generalPromptAction.length || (promptClient && promptClient.busy)) return
+        if (!promptClient) { showMessage(qsTr("The prompt service is unavailable.")); return }
+        generalPromptAction = action
+        promptClient.confirmation(action === "restart" ? qsTr("Restart OpenWave?") : qsTr("Shut down OpenWave?"),
+            qsTr("Open applications will close. Save your work before continuing."), {
+                acceptLabel: action === "restart" ? qsTr("Restart") : qsTr("Shut down"), cancelLabel: qsTr("Cancel")
+            })
+    }
     Connections {
         target: root.promptClient
         function onFinished(requestId, result, text) {
@@ -449,6 +503,7 @@ Item {
                 if (root.connectivityBackend) root.connectivityBackend.setDeviceName(root.backend.deviceName)
             } else if (action === "timezone" && root.timeBackend && root.timeBackend.serviceAvailable
                     && root.timeBackend.zones.indexOf(text) >= 0) root.timeBackend.setTimezone(text)
+            else if (["restart", "shutdown"].includes(action) && root.backend) root.backend.requestPowerAction(action)
         }
     }
 
@@ -525,48 +580,67 @@ Item {
         return halves.length === 2 ? count < 8 : count === 8
     }
 
-    function openIpConfig() {
-        ipConfigDialog.manualIp = !!wifiInfo.ipManual
-        ipConfigDialog.manualDns = !!wifiInfo.dnsManual
-        ipAddressField.text = wifiInfo.configuredAddress || ""
-        ipPrefixField.text = String(wifiInfo.configuredPrefix === undefined
-                                    ? 24 : wifiInfo.configuredPrefix)
-        ipGatewayField.text = wifiInfo.configuredGateway || ""
-        dnsServerRows.clear()
-        const servers = wifiInfo.configuredDns || []
-        for (const server of servers)
-            dnsServerRows.append({address: server})
-        if (dnsServerRows.count === 0)
-            dnsServerRows.append({address: ""})
-        ipConfigDialog.open()
+    function openIpConfig(values, error) {
+        if (!connectivityBackend || connectivityBackend.busy || !wifiInfoOpen
+                || connectivityBackend.savedWifiInfoLoading || !selectedWifiSsid
+                || wifiInfo.ssid !== selectedWifiSsid || currentTab !== 0 || searching
+                || !visible || (promptClient && promptClient.busy)) return
+        if (!promptClient) { showMessage(qsTr("The prompt service is unavailable.")); return }
+        const initial = values || {
+            ipMode: wifiInfo.ipManual ? "manual" : "automatic",
+            address: wifiInfo.configuredAddress || "",
+            prefix: String(wifiInfo.configuredPrefix === undefined ? 24 : wifiInfo.configuredPrefix),
+            gateway: wifiInfo.configuredGateway || "",
+            dnsMode: wifiInfo.dnsManual ? "manual" : "automatic",
+            dnsServers: (wifiInfo.configuredDns || []).join(", ")
+        }
+        wifiPromptSsid = selectedWifiSsid
+        wifiPromptAction = "ipConfig"
+        promptClient.form(qsTr("IP and DNS settings"),
+            (error ? error + "\n\n" : "") + selectedWifiSsid + "\n"
+                + qsTr("Changing the active network may briefly interrupt Wi-Fi."), {
+            fieldOrder: "ipMode,address,prefix,gateway,dnsMode,dnsServers",
+            fields: {
+                ipMode: {label: qsTr("IP configuration"), initialText: initial.ipMode,
+                    choices: {automatic: qsTr("Automatic (DHCP)"), manual: qsTr("Manual")}},
+                address: {label: qsTr("IPv4 address"), placeholder: qsTr("e.g. 192.168.1.50"),
+                    initialText: initial.address, minLength: 1, maxLength: 15,
+                    activeWhenField: "ipMode", activeWhenValue: "manual"},
+                prefix: {label: qsTr("Subnet prefix (0–32)"), placeholder: qsTr("e.g. 24"),
+                    initialText: initial.prefix, minLength: 1, maxLength: 2,
+                    activeWhenField: "ipMode", activeWhenValue: "manual"},
+                gateway: {label: qsTr("Gateway (optional)"), placeholder: qsTr("e.g. 192.168.1.1"),
+                    initialText: initial.gateway, maxLength: 15,
+                    activeWhenField: "ipMode", activeWhenValue: "manual"},
+                dnsMode: {label: qsTr("DNS configuration"), initialText: initial.dnsMode,
+                    choices: {automatic: qsTr("Automatic"), manual: qsTr("Manual")}},
+                dnsServers: {label: qsTr("DNS servers"), placeholder: qsTr("IPv4 or IPv6 addresses, separated by commas"),
+                    initialText: initial.dnsServers, minLength: 1, maxLength: 512,
+                    activeWhenField: "dnsMode", activeWhenValue: "manual"}
+            }, acceptLabel: qsTr("Save"), cancelLabel: qsTr("Cancel")})
     }
 
-    function saveIpConfig() {
-        const manualIp = ipConfigDialog.manualIp
-        const manualDns = ipConfigDialog.manualDns
-        const address = manualIp ? ipAddressField.text.trim() : ""
-        const prefixText = ipPrefixField.text.trim()
+    function saveIpConfig(ssid, values) {
+        const manualIp = values.ipMode === "manual"
+        const manualDns = values.dnsMode === "manual"
+        if (!["automatic", "manual"].includes(values.ipMode)
+                || !["automatic", "manual"].includes(values.dnsMode)) return
+        const address = manualIp ? (values.address || "").trim() : ""
+        const prefixText = (values.prefix || "").trim()
         const prefix = manualIp ? Number(prefixText) : 0
-        const gateway = manualIp ? ipGatewayField.text.trim() : ""
-        const dns = []
-        if (manualDns) {
-            for (let i = 0; i < dnsServerRows.count; ++i) {
-                const server = dnsServerRows.get(i).address.trim()
-                if (server.length)
-                    dns.push(server)
-            }
-        }
-        if (manualIp && (!validIpv4(address) || !Number.isInteger(prefix)
-                || !prefixText.length || prefix < 0 || prefix > 32
-                || (gateway && !validIpv4(gateway)))) {
-            showMessage("Enter a valid IPv4 address, prefix (0–32), and gateway.")
+        const gateway = manualIp ? (values.gateway || "").trim() : ""
+        const dns = manualDns ? (values.dnsServers || "").trim().split(/[\s,;]+/).filter(value => value.length) : []
+        let error = ""
+        if (manualIp && (!validIpv4(address) || !/^\d{1,2}$/.test(prefixText)
+                || prefix < 0 || prefix > 32 || (gateway && !validIpv4(gateway))))
+            error = qsTr("Enter a valid IPv4 address, prefix (0–32), and gateway.")
+        else if (manualDns && (!dns.length || dns.some(value => !validIpAddress(value))))
+            error = qsTr("Enter at least one valid IPv4 or IPv6 DNS server.")
+        if (error) {
+            openIpConfig(values, error)
             return
         }
-        if (manualDns && (!dns.length || dns.some(value => !validIpAddress(value)))) {
-            showMessage("Enter at least one valid IPv4 or IPv6 DNS server.")
-            return
-        }
-        connectivityBackend.saveSavedWifiIpConfig(selectedWifiSsid, manualIp,
+        connectivityBackend.saveSavedWifiIpConfig(ssid, manualIp,
                                                    address, prefix, gateway, manualDns, dns)
     }
 
@@ -707,7 +781,6 @@ Item {
             root.showMessage("Connecting to network…")
         }
         function onConfigurationSaved(applied) {
-            ipConfigDialog.close()
             root.showMessage(applied ? "Network settings applied." : "Saved. Reconnect to apply.")
         }
         function onScanDeferred() { root.wifiScanRequested = false }
@@ -834,7 +907,7 @@ Item {
             background: Item {}
             onAccepted: {
                 if (root.searchResults.length === 1)
-                    root.selectTab(root.searchResults[0].tab, true)
+                    root.openSearchResult(root.searchResults[0])
             }
         }
 
@@ -849,8 +922,9 @@ Item {
             id: content
             objectName: "settingsMainPane"
             opacity: root.tabIncomingOpacity
-            x: root.wifiInfoOpen || root.bluetoothInfoOpen ? -paneViewport.width : 0
-            enabled: !root.wifiInfoOpen && !root.bluetoothInfoOpen && !contentSlide.running
+            visible: (root.currentTab !== 5 && root.currentTab !== 2) || root.searching
+            x: root.wifiInfoOpen || root.bluetoothInfoOpen || root.permissionsOpen ? -paneViewport.width : 0
+            enabled: !root.wifiInfoOpen && !root.bluetoothInfoOpen && !root.permissionsOpen && !contentSlide.running
             y: 0; width: paneViewport.width
             height: paneViewport.height - (root.currentTab === 0 && !root.searching ? 106 : 0)
             contentHeight: body.implicitHeight
@@ -880,12 +954,7 @@ Item {
                             heading: modelData.title
                             detail: modelData.detail
                             largeText: root.largeText
-                            onClicked: {
-                                const key = modelData.key
-                                root.selectTab(modelData.tab, true)
-                                if (key === "name") root.editName()
-                                if (key === "timezone") root.editTimezone()
-                            }
+                            onClicked: root.openSearchResult(modelData)
                         }
                     }
                     Text {
@@ -1121,49 +1190,6 @@ Item {
                 }
 
                 Column {
-                    visible: !root.searching && root.currentTab === 2
-                    width: parent.width
-                    SettingsRow {
-                        objectName: "settingsDeviceName"
-                        heading: "Device name"
-                        detail: root.deviceName
-                        largeText: root.largeText
-                        onClicked: root.editName()
-                    }
-                    SettingsRow {
-                        objectName: "settingsTimezone"
-                        heading: "Time zone"
-                        detail: root.timeBackend && root.timeBackend.serviceAvailable
-                            ? root.timeBackend.timezone : "Time service unavailable"
-                        largeText: root.largeText
-                        enabled: root.timeBackend && root.timeBackend.serviceAvailable
-                        onClicked: root.editTimezone()
-                    }
-                    Repeater {
-                        model: {
-                            const info = root.backend ? root.backend.systemInfo : {}
-                            return [
-                                {title: "Operating system", value: info.os || "OpenWave"},
-                                {title: "Architecture", value: info.architecture || "Unavailable"},
-                                {title: "Kernel", value: info.kernel || "Unavailable"},
-                                {title: "Processors", value: info.processors > 0 ? String(info.processors) : "Unavailable"},
-                                {title: "Storage", value: info.storageTotal > 0
-                                    ? (info.storageAvailable / 1073741824).toFixed(1) + " GB available of "
-                                      + (info.storageTotal / 1073741824).toFixed(1) + " GB"
-                                    : "Unavailable"}
-                            ]
-                        }
-                        SettingsRow {
-                            required property var modelData
-                            heading: modelData.title
-                            detail: modelData.value
-                            largeText: root.largeText
-                            enabled: false
-                        }
-                    }
-                }
-
-                Column {
                     visible: !root.searching && root.currentTab === 3
                     width: parent.width
                     SettingsRow {
@@ -1334,6 +1360,54 @@ Item {
             }
         }
 
+        AppsPage {
+            id: appsPage
+            objectName: "settingsAppsPage"
+            anchors.fill: parent
+            visible: root.currentTab === 5 && !root.searching
+            opacity: root.tabIncomingOpacity
+            backend: root.applicationsBackend
+            permissions: root.permissionClient
+            prompts: root.promptClient
+            largeText: root.largeText
+            reducedMotion: root.backend ? root.backend.reduceMotion : false
+        }
+        GeneralSettingsPage {
+            id: generalPage
+            objectName: "settingsGeneralPage"
+            x: root.permissionsOpen ? -paneViewport.width : 0
+            width: paneViewport.width; height: paneViewport.height
+            visible: root.currentTab === 2 && !root.searching
+            enabled: !root.permissionsOpen
+            opacity: root.tabIncomingOpacity
+            backend: root.backend; timeBackend: root.timeBackend
+            largeText: root.largeText
+            reducedMotion: root.backend ? root.backend.reduceMotion : false
+            onEditDeviceNameRequested: root.editName()
+            onEditTimezoneRequested: root.editTimezone()
+            onPermissionsRequested: {
+                root.permissionsOpen = true
+                if (root.permissionClient) root.permissionClient.refreshApplications()
+            }
+            onPowerRequested: action => root.requestPowerAction(action)
+            Behavior on x {
+                NumberAnimation {
+                    duration: root.backend && root.backend.reduceMotion ? 0 : 240
+                    easing.type: Easing.OutCubic
+                }
+            }
+        }
+        PermissionsPage {
+            x: root.permissionsOpen ? 0 : paneViewport.width
+            y: 0; width: paneViewport.width; height: paneViewport.height
+            visible: root.currentTab === 2 && !root.searching
+            enabled: root.permissionsOpen
+            client: root.permissionClient
+            prompts: root.promptClient
+            largeText: root.largeText
+            onBackRequested: root.permissionsOpen = false
+            Behavior on x { NumberAnimation { duration: root.backend && root.backend.reduceMotion ? 0 : 240; easing.type: Easing.OutCubic } }
+        }
         Flickable {
             id: bluetoothInfoPane
             objectName: "settingsBluetoothInfoPane"
@@ -1539,7 +1613,10 @@ Item {
                     detail: (root.wifiInfo.ipManual ? "Manual IPv4" : "Automatic IP")
                             + " • " + (root.wifiInfo.dnsManual ? "Manual DNS" : "Automatic DNS")
                     largeText: root.largeText
-                    enabled: !!root.connectivityBackend && !root.connectivityBackend.savedWifiInfoLoading
+                    enabled: !!root.connectivityBackend && !root.connectivityBackend.busy
+                             && !root.connectivityBackend.savedWifiInfoLoading
+                             && root.wifiInfo.ssid === root.selectedWifiSsid
+                             && !(root.promptClient && root.promptClient.busy)
                     onClicked: root.openIpConfig()
                 }
                 SettingsRow {
@@ -1588,157 +1665,6 @@ Item {
             z: 10
             MouseArea { anchors.fill: parent }
         }
-        }
-
-        Popup {
-            id: ipConfigDialog
-            objectName: "settingsIpConfigDialog"
-            property bool manualIp: false
-            property bool manualDns: false
-            property alias dnsServers: dnsServerRows
-            property alias dnsRepeater: dnsRepeater
-            property alias scrollView: ipConfigScroll
-            ListModel { id: dnsServerRows }
-            anchors.centerIn: parent
-            width: parent.width - 100
-            height: Math.min(parent.height - 180, 950)
-            modal: true
-            padding: 24
-            background: Rectangle { color: "#34434c"; radius: 12; border.color: "#71828b" }
-            contentItem: Flickable {
-                id: ipConfigScroll
-                clip: true
-                contentHeight: ipConfigFields.implicitHeight
-                boundsBehavior: Flickable.StopAtBounds
-                Column {
-                    id: ipConfigFields
-                    width: parent.width
-                    spacing: 12
-                    Text {
-                        width: parent.width
-                        text: "IP and DNS • " + root.selectedWifiSsid
-                        textFormat: Text.PlainText
-                        wrapMode: Text.Wrap
-                        color: "white"; font.family: "Inter"; font.pixelSize: 34
-                    }
-                    Text {
-                        width: parent.width
-                        text: "IP Configuration"
-                        color: "white"; font.family: "Inter"; font.pixelSize: 30
-                    }
-                    ActionButton {
-                        objectName: "settingsIpMode"
-                        width: parent.width
-                        text: "Mode: " + (ipConfigDialog.manualIp ? "Manual" : "Automatic (DHCP)") + " ▾"
-                        onClicked: ipConfigDialog.manualIp = !ipConfigDialog.manualIp
-                    }
-                    TextField {
-                        id: ipAddressField
-                        objectName: "settingsIpAddress"
-                        visible: ipConfigDialog.manualIp
-                        width: parent.width; height: 62
-                        placeholderText: "IPv4 address, e.g. 192.168.1.50"
-                        inputMethodHints: Qt.ImhPreferNumbers
-                        color: "white"; font.family: "Inter"; font.pixelSize: 27
-                        background: Rectangle { color: "#23323b"; radius: 5 }
-                    }
-                    TextField {
-                        id: ipPrefixField
-                        objectName: "settingsIpPrefix"
-                        visible: ipConfigDialog.manualIp
-                        width: parent.width; height: 62
-                        placeholderText: "Subnet prefix (0–32), e.g. 24"
-                        inputMethodHints: Qt.ImhDigitsOnly
-                        color: "white"; font.family: "Inter"; font.pixelSize: 27
-                        background: Rectangle { color: "#23323b"; radius: 5 }
-                    }
-                    TextField {
-                        id: ipGatewayField
-                        objectName: "settingsIpGateway"
-                        visible: ipConfigDialog.manualIp
-                        width: parent.width; height: 62
-                        placeholderText: "Gateway (optional)"
-                        inputMethodHints: Qt.ImhPreferNumbers
-                        color: "white"; font.family: "Inter"; font.pixelSize: 27
-                        background: Rectangle { color: "#23323b"; radius: 5 }
-                    }
-                    Text {
-                        width: parent.width
-                        text: "DNS"
-                        color: "white"; font.family: "Inter"; font.pixelSize: 30
-                    }
-                    ActionButton {
-                        objectName: "settingsDnsMode"
-                        width: parent.width
-                        text: "Mode: " + (ipConfigDialog.manualDns ? "Manual" : "Automatic") + " ▾"
-                        onClicked: ipConfigDialog.manualDns = !ipConfigDialog.manualDns
-                    }
-                    Column {
-                        visible: ipConfigDialog.manualDns
-                        width: parent.width
-                        spacing: 8
-                        Text {
-                            text: "DNS Servers"
-                            color: "white"; font.family: "Inter"; font.pixelSize: 26
-                        }
-                        Repeater {
-                            id: dnsRepeater
-                            model: dnsServerRows.count
-                            Row {
-                                id: dnsRow
-                                property int rowIndex: index
-                                property alias field: dnsAddressField
-                                property alias removeButton: removeDns
-                                objectName: "settingsDnsRow" + rowIndex
-                                width: parent.width
-                                spacing: 8
-                                TextField {
-                                    id: dnsAddressField
-                                    objectName: "settingsDnsServer" + dnsRow.rowIndex
-                                    width: dnsRow.width - removeDns.width - dnsRow.spacing
-                                    height: 62
-                                    text: dnsServerRows.get(dnsRow.rowIndex).address
-                                    placeholderText: "IPv4 or IPv6 DNS server"
-                                    color: "white"; font.family: "Inter"; font.pixelSize: 27
-                                    background: Rectangle { color: "#23323b"; radius: 5 }
-                                    onTextChanged: {
-                                        if (dnsRow.rowIndex < dnsServerRows.count
-                                                && dnsServerRows.get(dnsRow.rowIndex).address !== text)
-                                            dnsServerRows.setProperty(dnsRow.rowIndex, "address", text)
-                                    }
-                                }
-                                ActionButton {
-                                    id: removeDns
-                                    objectName: "settingsRemoveDnsServer" + dnsRow.rowIndex
-                                    text: "−"
-                                    onClicked: dnsServerRows.remove(dnsRow.rowIndex)
-                                }
-                            }
-                        }
-                        ActionButton {
-                            objectName: "settingsAddDnsServer"
-                            text: "+ Add DNS Server"
-                            onClicked: dnsServerRows.append({address: ""})
-                        }
-                    }
-                    Text {
-                        width: parent.width
-                        text: "Changing the active network may briefly interrupt Wi-Fi."
-                        wrapMode: Text.Wrap
-                        color: "#d4dadd"; font.family: "Inter"; font.pixelSize: 24
-                    }
-                    Row {
-                        spacing: 18
-                        ActionButton { text: "Cancel"; onClicked: ipConfigDialog.close() }
-                        ActionButton {
-                            objectName: "settingsSaveIpConfig"
-                            text: "Save"
-                            enabled: root.connectivityBackend && !root.connectivityBackend.busy
-                            onClicked: root.saveIpConfig()
-                        }
-                    }
-                }
-            }
         }
 
         Popup {

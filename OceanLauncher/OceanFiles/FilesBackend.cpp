@@ -513,8 +513,6 @@ bool FilesBackend::replaceFile(const QString &name, const QString &expectedDirec
         setError(QStringLiteral("The file or folder changed. Please try again."));
         return false;
     }
-    // Commit a new empty file atomically. Never truncate the original, even
-    // when the temporary file cannot be created or committed.
     QSaveFile replacement(itemPath(cleaned));
     replacement.setDirectWriteFallback(false);
     if (!replacement.open(QIODevice::WriteOnly) || !fileExists(cleaned)
@@ -556,8 +554,6 @@ bool FilesBackend::renameItem(const QString &oldName, const QString &newName,
         setError(QStringLiteral("The folder changed. Please try again."));
         return false;
     }
-    // Rename relative to one directory handle, and atomically refuse any
-    // existing destination. Neither files nor folders may be overwritten.
     const int directory = ::open(QFile::encodeName(m_currentPath).constData(),
                                  O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     struct stat source;

@@ -16,7 +16,10 @@ struct App {
     char *id;
     char *name;
     char *icon;
-    char *desktop;
+    char *manifest;
+    char *bundle;
+    char *digest;
+    char **permissions;
     char **argv;
     gboolean paths;
     gboolean single;
@@ -32,6 +35,13 @@ struct Instance {
     gboolean stopping;
     guint64 start_time;
     char *cgroup;
+    uid_t uid;
+    gid_t render_gid;
+    char *runtime;
+    char *data;
+    gboolean storage_changed;
+    gboolean namespace_sandboxed;
+    int namespace_fds[4];
 };
 
 struct Manager {
@@ -46,20 +56,28 @@ struct Manager {
     char *user;
     char *home;
     char *runtime;
-    char *desktop_dir;
     char *state_dir;
     char *launcher_exe;
     char *cgroup_root;
     guint shutdown_ms;
+    guint pids_max;
     gboolean ready;
     gboolean quitting;
-    GFileMonitor *monitor;
+    GPtrArray *monitors;
     guint scan_timer;
     guint registration;
     guint owner;
     guint subscription;
+    guint services_registration;
+    char *permission_peer;
+    char *permission_correlation;
+    guint64 services_sequence;
     GHashTable *pending;
+    char *session;
+    char *public_preferences;
 };
+
+G_BEGIN_DECLS
 
 gboolean appd_configuration(Manager *manager, const char *path, GError **error);
 gboolean appd_verified_file(const char *path, gboolean executable, GError **error);
@@ -79,5 +97,28 @@ void appd_recover(Manager *manager);
 gboolean appd_watch_children(Manager *manager, GError **error);
 gboolean appd_register_bus(Manager *manager, GError **error);
 gboolean appd_credentials(Manager *manager, const char *sender, guint *uid, guint *pid);
+Instance *appd_caller(Manager *manager, guint uid, guint pid);
+GVariant *appd_identity(Manager *manager, Instance *instance, guint pid);
+gboolean appd_trusted_app(App *app);
+void appd_revoke(Manager *manager, App *app);
 
+gboolean appd_prepare_isolation(Manager *manager, Instance *instance, GError **error);
+int appd_enforce_isolation(Instance *instance);
+void appd_release_isolation(Instance *instance);
+gboolean appd_publish_preferences(gpointer manager);
+gboolean appd_publish_sockets(Manager *manager);
+
+App *appd_read_bundle(const char *directory);
+gboolean appd_validate_bundle(App *app, GError **error);
+
+const char *appd_legacy_id(App *app);
+gboolean appd_prepare_storage(Manager *manager, Instance *instance, GError **error);
+gboolean appd_prepare_namespace(Instance *instance, GError **error);
+int appd_enter_namespace(Instance *instance);
+void appd_close_namespace(Instance *instance);
+gboolean appd_register_services(Manager *manager, GError **error);
+void appd_services_event(Manager *manager, const char *event, App *app, Instance *instance);
+int appd_install_seccomp(void);
+
+G_END_DECLS
 #endif

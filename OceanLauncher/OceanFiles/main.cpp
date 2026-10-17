@@ -1,4 +1,5 @@
 #include <QGuiApplication>
+#include <OpenWave/FontManager.h>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QIcon>
@@ -14,6 +15,7 @@
 int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
+    OpenWave::FontManager::initialize();
     QCoreApplication::setApplicationName(QStringLiteral("Ocean Files"));
     QCoreApplication::setOrganizationName(QStringLiteral("OpenWave"));
     QGuiApplication::setDesktopFileName(QStringLiteral("ocean-files"));

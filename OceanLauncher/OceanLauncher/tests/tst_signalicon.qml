@@ -10,7 +10,7 @@ Item {
         id: wifi
         width: 45
         height: 34
-        assetBase: Qt.resolvedUrl("../../OceanTopbard/assets/TopBar/")
+        assetBase: Qt.resolvedUrl("../assets/topbar/TopBar/")
     }
 
     SignalIcon {
@@ -19,7 +19,7 @@ Item {
         width: 82
         height: 20
         kind: "cellular"
-        assetBase: Qt.resolvedUrl("../../OceanTopbard/assets/TopBar/")
+        assetBase: Qt.resolvedUrl("../assets/topbar/TopBar/")
     }
 
     TestCase {

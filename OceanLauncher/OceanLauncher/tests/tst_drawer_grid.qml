@@ -80,8 +80,6 @@ Item {
                 verifyRows()
             }
         }
-        // Run wheel input before synthetic touch: QtTest maintains separate
-        // mouse/touch clocks, which can otherwise give wheel events old times.
         function test_a_scroll_and_click() {
             grid.apps = apps(20); verifyRows()
             verify(grid.contentHeight > grid.height)

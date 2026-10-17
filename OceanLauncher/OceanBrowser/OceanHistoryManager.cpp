@@ -88,11 +88,11 @@ public:
         post([](auto *owner) { owner->setState(true, {}); owner->reload(); emit owner->historyChanged(); });
     }
     void initialize() {
-        if (m_path.isEmpty() || !safeDirectory(m_path) || !safeDirectory(m_path + "/Browser")
+        if (m_path.isEmpty() || !safeDirectory(m_path) || !safeDirectory(m_path + "/Data/Browser")
             || !safeDirectory(m_path + "/Cache") || !safeDirectory(m_path + "/Cache/Favicons")) {
             fail(tr("The private profile directory is unavailable.")); return;
         }
-        const QString file = m_path + "/Browser/History.sqlite";
+        const QString file = m_path + "/Data/Browser/History.sqlite";
         const int fd = ::open(QFile::encodeName(file).constData(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
         if (fd >= 0) ::close(fd);
         if (!safeFile(file)) { fail(tr("The history file is not private or is unsafe.")); return; }
@@ -121,7 +121,7 @@ public:
         QSqlQuery version(m_db);
         if (!version.exec("PRAGMA user_version") || !version.next()) { fail(version.lastError().text()); return false; }
         if (version.value(0).toInt() >= 1) return true;
-        QFile legacy(m_path + "/history.json");
+        QFile legacy(m_path + "/Data/history.json");
         QVariantList entries;
         if (legacy.exists()) {
             if (!safeFile(legacy.fileName()) || !legacy.open(QIODevice::ReadOnly)) {

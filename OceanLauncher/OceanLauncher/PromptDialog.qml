@@ -1,4 +1,5 @@
 import QtQuick
+import OpenWave.Fonts 1.0
 import QtQuick.Controls
 import QtQuick.Effects
 
@@ -12,7 +13,6 @@ FocusScope {
     property real dimOpacity: 0.38
     property Item backdrop: null
     property color panelTint: "#b37b7d7e"
-    property url fontSource: "qrc:/OceanPortal/assets/fonts/SourceSansPro-ExtraLight.otf"
     property var shownRequest: ({})
     property string phase: "hidden"
     readonly property real unfold: transition.progress
@@ -41,7 +41,6 @@ FocusScope {
     visible: phase !== "hidden"
     focus: visible
 
-    FontLoader { id: lightFont; source: root.fontSource }
     Connections {
         target: root.backend
         function onChanged() { root.synchronize() }
@@ -66,6 +65,7 @@ FocusScope {
         selectionSearchText = ""
         passwordVisible = false
         shownRequest = request
+        formViewport.contentY = 0
         input.text = request.initialText || ""
         phase = "opening"
         transition.open()
@@ -107,7 +107,16 @@ FocusScope {
         items.push(cancelAction, acceptAction)
         const current = items.findIndex(item => item.activeFocus)
         const next = (current + (backwards ? -1 : 1) + items.length) % items.length
-        if (items.length) items[next].forceActiveFocus()
+        if (items.length) {
+            const item = items[next]
+            item.forceActiveFocus()
+            if (item !== cancelAction && item !== acceptAction) {
+                const top = item.mapToItem(formContent, 0, 0).y
+                if (top < formViewport.contentY) formViewport.contentY = top
+                else if (top + item.height > formViewport.contentY + formViewport.height)
+                    formViewport.contentY = top + item.height - formViewport.height
+            }
+        }
     }
     function closeChoices() {
         let closed = false
@@ -196,8 +205,6 @@ FocusScope {
         x: (root.width - width) / 2
         y: root.safeTop + (root.height - root.safeTop - root.safeBottom - height) / 2
         opacity: transition.alpha
-        // Container and contents share one transform and fade, so every part
-        // unfolds around the same center on the same animation frame.
         transform: Scale {
             origin.x: panel.width / 2; origin.y: panel.height / 2
             xScale: 1; yScale: transition.verticalScale
@@ -212,8 +219,6 @@ FocusScope {
                 maskEnabled: true
                 maskSource: frostMask
             }
-            // Capture only the app beneath the panel, with a blur margin so
-            // the panel edges do not repeat or smear the cropped edge pixels.
             ShaderEffectSource {
                 id: frostSource
                 width: panel.width + 2 * frost.blurRadius
@@ -263,7 +268,7 @@ FocusScope {
                 text: root.shownRequest.title || ""
                 textFormat: Text.PlainText
                 color: "white"
-                font.family: lightFont.name; font.weight: Font.ExtraLight; font.pixelSize: Math.max(1, Math.round(36 * root.uiScale))
+                font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: Math.max(1, Math.round(36 * root.uiScale))
                 wrapMode: Text.Wrap
                 maximumLineCount: Math.max(1, Math.min(3, Math.floor((root.height - root.safeTop
                     - root.safeBottom - (32 + 54 + (root.inputPrompt ? 66 : 0) + 78 + 24) * root.uiScale)
@@ -271,6 +276,7 @@ FocusScope {
                 elide: Text.ElideRight
             }
             Flickable {
+                id: messageViewport
                 visible: message.text.length > 0
                 width: parent.width
                 height: Math.min(message.implicitHeight,
@@ -287,7 +293,7 @@ FocusScope {
                     text: root.shownRequest.message || ""
                     textFormat: Text.PlainText
                     color: "white"
-                    font.family: lightFont.name; font.weight: Font.ExtraLight; font.pixelSize: Math.max(1, Math.round(26 * root.uiScale))
+                    font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: Math.max(1, Math.round(26 * root.uiScale))
                     wrapMode: Text.Wrap
                 }
             }
@@ -305,7 +311,7 @@ FocusScope {
                     : Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
                 color: "white"; placeholderTextColor: "#99ffffff"
                 leftPadding: 0; rightPadding: 0
-                font.family: lightFont.name; font.weight: Font.ExtraLight; font.pixelSize: Math.max(1, Math.round(26 * root.uiScale))
+                font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: Math.max(1, Math.round(26 * root.uiScale))
                 validator: RegularExpressionValidator {
                     regularExpression: new RegExp(root.shownRequest.validationPattern || "[\\s\\S]*")
                 }
@@ -328,7 +334,7 @@ FocusScope {
                     maximumLength: 128
                     color: "white"; placeholderTextColor: "#99ffffff"
                     leftPadding: 0; rightPadding: 0
-                    font.family: lightFont.name; font.weight: Font.ExtraLight
+                    font.family: Fonts.family; font.weight: Font.ExtraLight
                     font.pixelSize: Math.max(1, Math.round(26 * root.uiScale))
                     background: Item {}
                     Rectangle { anchors.bottom: parent.bottom; width: parent.width
@@ -356,7 +362,7 @@ FocusScope {
                         contentItem: Text {
                             text: parent.text; textFormat: Text.PlainText
                             color: root.selectedChoice === parent.modelData ? "#00b7f0" : "white"
-                            font.family: lightFont.name; font.weight: Font.ExtraLight
+                            font.family: Fonts.family; font.weight: Font.ExtraLight
                             font.pixelSize: Math.max(1, Math.round(26 * root.uiScale))
                             verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
                         }
@@ -369,67 +375,95 @@ FocusScope {
                     Text {
                         anchors.centerIn: parent; visible: selectionList.count === 0
                         text: qsTr("No matches"); color: "#99ffffff"
-                        font.family: lightFont.name; font.weight: Font.ExtraLight
+                        font.family: Fonts.family; font.weight: Font.ExtraLight
                         font.pixelSize: Math.max(1, Math.round(26 * root.uiScale))
                     }
                 }
             }
-            Column {
+            Flickable {
+                id: formViewport
+                objectName: "systemPromptFormViewport"
                 visible: root.formPrompt
-                width: parent.width; spacing: 8 * root.uiScale
-                Repeater {
-                    id: formRows
-                    model: root.formKeys
-                    delegate: Item {
-                        id: fieldRow
-                        required property string modelData
-                        readonly property var field: (root.shownRequest.fields || {})[modelData] || ({})
-                        readonly property bool dropdown: !!field.choices
-                        readonly property var control: dropdown ? choice : fieldInput
-                        property alias choice: choice
-                        width: parent.width; height: 66 * root.uiScale
-                        visible: root.fieldActive(modelData)
-                        TextField {
-                            id: fieldInput
-                            objectName: fieldRow.dropdown ? "" : "systemPromptField_" + fieldRow.modelData
-                            anchors.fill: parent; visible: !fieldRow.dropdown
-                            enabled: root.interactive && fieldRow.visible
-                            text: root.formValues[fieldRow.modelData] || ""
-                            onTextEdited: root.setField(fieldRow.modelData, text)
-                            maximumLength: fieldRow.field.maxLength || 256
-                            placeholderText: fieldRow.field.placeholder || fieldRow.field.label || ""
-                            echoMode: fieldRow.field.secret ? TextInput.Password : TextInput.Normal
-                            inputMethodHints: fieldRow.field.secret ? Qt.ImhSensitiveData | Qt.ImhNoPredictiveText | Qt.ImhHiddenText
-                                : Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
-                            color: "white"; placeholderTextColor: "#99ffffff"
-                            leftPadding: 0; rightPadding: 0
-                            font.family: lightFont.name; font.weight: Font.ExtraLight
-                            font.pixelSize: Math.max(1, Math.round(26 * root.uiScale))
-                            background: Item {}
-                            onAccepted: root.respond("accepted")
-                        }
-                        Rectangle {
-                            visible: !fieldRow.dropdown
-                            anchors.bottom: parent.bottom; width: parent.width
-                            height: 2 * root.uiScale; color: "#aaffffff"; antialiasing: true
-                        }
-                        PromptDropdown {
-                            id: choice
-                            objectName: fieldRow.dropdown ? "systemPromptField_" + fieldRow.modelData : ""
-                            anchors.fill: parent; visible: fieldRow.dropdown
-                            enabled: root.interactive && fieldRow.visible
-                            choices: fieldRow.field.choices || ({})
-                            value: root.formValues[fieldRow.modelData] || ""
-                            label: fieldRow.field.label || ""
-                            uiScale: root.uiScale; reduceMotion: root.reduceMotion
-                            font.family: lightFont.name; font.weight: Font.ExtraLight
-                            font.pixelSize: Math.max(1, Math.round(26 * root.uiScale))
-                            onSelected: value => root.setField(fieldRow.modelData, value)
+                width: parent.width
+                height: Math.min(formContent.implicitHeight, Math.max(0,
+                    root.height - root.safeTop - root.safeBottom - promptTitle.height
+                    - (messageViewport.visible ? messageViewport.height : 0)
+                    - footer.height - 110 * root.uiScale))
+                contentWidth: width; contentHeight: formContent.implicitHeight
+                clip: true; boundsBehavior: Flickable.StopAtBounds
+                flickableDirection: Flickable.VerticalFlick
+                Column {
+                    id: formContent
+                    width: parent.width; spacing: 8 * root.uiScale
+                    Repeater {
+                        id: formRows
+                        model: root.formKeys
+                        delegate: Item {
+                            id: fieldRow
+                            required property string modelData
+                            readonly property var field: (root.shownRequest.fields || {})[modelData] || ({})
+                            readonly property bool dropdown: !!field.choices
+                            readonly property var control: dropdown ? choice : fieldInput
+                            property alias choice: choice
+                            width: parent.width; height: 66 * root.uiScale + fieldLabel.height
+                            visible: root.fieldActive(modelData)
+                            Text {
+                                id: fieldLabel
+                                objectName: "systemPromptFieldLabel_" + fieldRow.modelData
+                                width: parent.width
+                                height: visible ? implicitHeight : 0
+                                visible: !fieldRow.dropdown && !!fieldRow.field.label
+                                text: fieldRow.field.label || ""
+                                textFormat: Text.PlainText; wrapMode: Text.Wrap
+                                color: "#ccffffff"
+                                font.family: Fonts.family; font.weight: Font.ExtraLight
+                                font.pixelSize: Math.max(1, Math.round(22 * root.uiScale))
+                            }
+                            TextField {
+                                id: fieldInput
+                                objectName: fieldRow.dropdown ? "" : "systemPromptField_" + fieldRow.modelData
+                                anchors.left: parent.left; anchors.right: parent.right
+                                anchors.top: fieldLabel.bottom; anchors.bottom: parent.bottom
+                                visible: !fieldRow.dropdown
+                                enabled: root.interactive && fieldRow.visible
+                                text: root.formValues[fieldRow.modelData] || ""
+                                onTextEdited: root.setField(fieldRow.modelData, text)
+                                maximumLength: fieldRow.field.maxLength || 256
+                                placeholderText: fieldRow.field.placeholder || fieldRow.field.label || ""
+                                echoMode: fieldRow.field.secret ? TextInput.Password : TextInput.Normal
+                                inputMethodHints: fieldRow.field.secret ? Qt.ImhSensitiveData | Qt.ImhNoPredictiveText | Qt.ImhHiddenText
+                                    : Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
+                                color: "white"; placeholderTextColor: "#99ffffff"
+                                leftPadding: 0; rightPadding: 0
+                                font.family: Fonts.family; font.weight: Font.ExtraLight
+                                font.pixelSize: Math.max(1, Math.round(26 * root.uiScale))
+                                background: Item {}
+                                onAccepted: root.respond("accepted")
+                            }
+                            Rectangle {
+                                visible: !fieldRow.dropdown
+                                anchors.bottom: parent.bottom; width: parent.width
+                                height: 2 * root.uiScale; color: "#aaffffff"; antialiasing: true
+                            }
+                            PromptDropdown {
+                                id: choice
+                                objectName: fieldRow.dropdown ? "systemPromptField_" + fieldRow.modelData : ""
+                                anchors.fill: parent; visible: fieldRow.dropdown
+                                enabled: root.interactive && fieldRow.visible
+                                choices: fieldRow.field.choices || ({})
+                                value: root.formValues[fieldRow.modelData] || ""
+                                label: fieldRow.field.label || ""
+                                uiScale: root.uiScale; reduceMotion: root.reduceMotion
+                                font.family: Fonts.family; font.weight: Font.ExtraLight
+                                font.pixelSize: Math.max(1, Math.round(26 * root.uiScale))
+                                onSelected: value => root.setField(fieldRow.modelData, value)
+                            }
                         }
                     }
                 }
             }
             Item {
+                id: footer
                 width: parent.width; height: (root.compactInput ? 54 : 78) * root.uiScale
                 Button {
                     id: revealPasswordAction
@@ -442,7 +476,7 @@ FocusScope {
                     width: Math.min(implicitWidth, Math.max(0, parent.width - actions.width - 12 * root.uiScale))
                     height: Math.max(44 * root.uiScale, implicitHeight)
                     text: root.passwordVisible ? qsTr("Hide password") : qsTr("Show password")
-                    font.family: lightFont.name; font.weight: Font.ExtraLight
+                    font.family: Fonts.family; font.weight: Font.ExtraLight
                     font.pixelSize: Math.max(1, Math.round(22 * root.uiScale))
                     Accessible.name: text
                     contentItem: Text {
@@ -464,7 +498,7 @@ FocusScope {
                         width: Math.min(implicitWidth, (content.width - actions.spacing - (root.canRevealPassword ? 164 * root.uiScale : 0)) / 2)
                         enabled: root.interactive
                         text: root.shownRequest.cancelLabel || qsTr("Cancel")
-                        font.family: lightFont.name; font.weight: Font.ExtraLight; font.pixelSize: Math.max(1, Math.round(34 * root.uiScale))
+                        font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: Math.max(1, Math.round(34 * root.uiScale))
                         contentItem: Text {
                             text: cancelAction.text; textFormat: Text.PlainText; color: "white"
                             font: cancelAction.font; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
@@ -478,10 +512,8 @@ FocusScope {
                         enabled: root.interactive && root.inputValid
                         width: Math.min(implicitWidth, root.messagePrompt ? content.width : (content.width - actions.spacing - (root.canRevealPassword ? 164 * root.uiScale : 0)) / 2)
                         text: root.shownRequest.acceptLabel || (root.messagePrompt ? qsTr("OK") : qsTr("Yes"))
-                        // Input gating must not introduce a second fade or a
-                        // brightness jump at the opening/closing phase boundary.
                         opacity: root.inputValid ? 1 : 0.5
-                        font.family: lightFont.name; font.weight: Font.ExtraLight; font.pixelSize: Math.max(1, Math.round(34 * root.uiScale))
+                        font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: Math.max(1, Math.round(34 * root.uiScale))
                         contentItem: Text {
                             text: acceptAction.text; textFormat: Text.PlainText; color: "white"
                             font: acceptAction.font; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight

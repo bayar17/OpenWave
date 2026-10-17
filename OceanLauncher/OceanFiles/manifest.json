@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "com.openwave.files",
+  "name": "Files",
+  "version": "0.1.0",
+  "type": "system",
+  "executable": "bin/ocean-files",
+  "runtime": "openwave-qt",
+  "sandbox": {
+    "enabled": true,
+    "profile": "standard"
+  },
+  "permissions": [],
+  "singleInstance": true,
+  "acceptsPaths": true,
+  "icon": "resources/icon.svg"
+}

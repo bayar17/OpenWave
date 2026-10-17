@@ -14,7 +14,8 @@ class HistoryTests : public QObject {
         return history.data(history.index(row), role);
     }
     static void legacy(const QString &path, const QVariantList &rows) {
-        QFile file(path + "/history.json");
+        QVERIFY(QDir().mkpath(path + "/Data"));
+        QFile file(path + "/Data/history.json");
         QVERIFY(file.open(QIODevice::WriteOnly));
         file.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
         file.write(QJsonDocument::fromVariant(rows).toJson());
@@ -51,7 +52,7 @@ private slots:
         QCOMPARE(QSqlDatabase::connectionNames(), connections);
         OceanHistoryManager restored(directory.path());
         QTRY_VERIFY(restored.ready()); QTRY_COMPARE(restored.count(), 2);
-        const auto permissions = QFileInfo(directory.path() + "/Browser/History.sqlite").permissions();
+        const auto permissions = QFileInfo(directory.path() + "/Data/Browser/History.sqlite").permissions();
         QVERIFY(!(permissions & (QFile::ReadGroup | QFile::ReadOther | QFile::WriteGroup | QFile::WriteOther)));
         restored.clearHistory(); QTRY_COMPARE(restored.count(), 0);
     }
@@ -134,8 +135,8 @@ private slots:
             history.fetchMore({}); QTRY_COMPARE(history.rowCount(), 205); QVERIFY(!history.canFetchMore({}));
         }
         QTemporaryDir bad;
-        QDir().mkpath(bad.path() + "/Browser");
-        QFile file(bad.path() + "/Browser/History.sqlite"); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("corrupt database"); file.close();
+        QDir().mkpath(bad.path() + "/Data/Browser");
+        QFile file(bad.path() + "/Data/Browser/History.sqlite"); QVERIFY(file.open(QIODevice::WriteOnly)); file.write("corrupt database"); file.close();
         OceanHistoryManager history(bad.path()); QTRY_VERIFY(!history.error().isEmpty()); QVERIFY(!history.ready());
         QCOMPARE(history.count(), 0);
     }

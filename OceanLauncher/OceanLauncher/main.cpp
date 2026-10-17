@@ -1,4 +1,5 @@
 #include <QGuiApplication>
+#include <OpenWave/FontManager.h>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include "AppController.h"
@@ -8,10 +9,14 @@
 #include <OpenWave/TimeBackend.h>
 #include <OpenWave/WallpaperClient.h>
 #include <OpenWave/PromptRendererBackend.h>
+#ifdef OPENWAVE_PERMISSION_TESTS
+#include "../../userspace/permissiond/tests/ShellHarness.h"
+#endif
 
 int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
+    OpenWave::FontManager::initialize();
     QCoreApplication::setApplicationName(QStringLiteral("Ocean Launcher"));
     QCoreApplication::setOrganizationName(QStringLiteral("OpenWave"));
 
@@ -42,6 +47,9 @@ int main(int argc, char *argv[])
         []() { QCoreApplication::exit(-1); },
         Qt::QueuedConnection);
     engine.loadFromModule("OceanLauncher", "Main");
+#ifdef OPENWAVE_PERMISSION_TESTS
+    installPermissionHarness(&app, &controller, &promptBackend, &portalBackend);
+#endif
 
     return QGuiApplication::exec();
 }

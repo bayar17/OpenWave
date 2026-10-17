@@ -9,6 +9,7 @@
 #include <QThread>
 #ifdef Q_OS_LINUX
 #include <fcntl.h>
+#include <signal.h>
 #include <unistd.h>
 #endif
 
@@ -51,6 +52,32 @@ void SettingsBackend::closeApp(bool home)
     QCoreApplication::quit();
 }
 
+bool SettingsBackend::powerActionsAvailable() const
+{
+#ifdef Q_OS_LINUX
+    return geteuid() == 0 && QFileInfo(QStringLiteral("/proc/1/exe")).symLinkTarget() == QStringLiteral("/init");
+#else
+    return false;
+#endif
+}
+
+bool SettingsBackend::requestPowerAction(const QString &action)
+{
+    if (action != QStringLiteral("restart") && action != QStringLiteral("shutdown")) {
+        emit errorOccurred(tr("Unknown power action."));
+        return false;
+    }
+    if (!powerActionsAvailable()) {
+        emit errorOccurred(tr("Power controls are unavailable in this session."));
+        return false;
+    }
+#ifdef Q_OS_LINUX
+    if (kill(1, action == QStringLiteral("restart") ? SIGUSR1 : SIGUSR2) == 0) return true;
+#endif
+    emit errorOccurred(tr("Could not request the power action. Please try again."));
+    return false;
+}
+
 bool SettingsBackend::reduceMotion() const
 {
     return m_settings.value(QStringLiteral("accessibility/reduceMotion"), false).toBool();
@@ -71,8 +98,6 @@ bool SettingsBackend::save(const QString &key, const QVariant &value)
     bool saved = update.status() == QSettings::NoError;
 #ifdef Q_OS_LINUX
     if (saved) {
-        // QSettings atomically replaces the file. Commit the directory entry
-        // too, so the most recent preference survives an immediate restart.
         const QByteArray directory = QFile::encodeName(QFileInfo(update.fileName()).absolutePath());
         const int fd = ::open(directory.constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
         saved = fd >= 0 && ::fsync(fd) == 0;

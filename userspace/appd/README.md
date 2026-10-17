@@ -1,30 +1,16 @@
 # appd — application management
 
-PID 1 starts `/usr/libexec/appd` before Ocean and supervises it. The daemon uses
-C, GLib/GIO and `OpenWave::Xml`; it has no Qt dependency. Applications are its
-children. Ocean retains the compositor, focus, dock, drawer, recent cards,
-loading animations and previews, using a client controller instead of QProcess.
+PID 1 supervises `/System/Services/appd`. C/GLib manages identity, lifecycle,
+processes and IPC; a small C++/Qt Core reader validates JSON bundle manifests.
+Ocean owns the compositor, dock, drawer, recent cards, and visual handoff.
 
 ## Registry and metadata
 
-The single registry comes from `/usr/share/applications/*.desktop`, monitored for
-changes. Entries require `Type=Application`, a localized `Name`,
-`X-OpenWave-AppId`, and an absolute `Exec` under `/usr/bin` or `/usr/libexec`.
-IDs are at most 128 ASCII letters/digits/dots/underscores/hyphens, starting with
-a letter or digit. Hidden/terminal entries and unsupported Exec field codes are
-excluded. Root must own resolved executables/metadata and every ancestor; none
-may be writable by group or others. Metadata is bounded to 64 KiB. Duplicate IDs
-are logged; installers must ensure uniqueness.
-
-`Icon` is an absolute trusted image or a name in `/usr/share/pixmaps`. Missing
-icons do not prevent launch. Ocean obtains names/icons from the registry and
-places new applications in the unpinned drawer, preserving saved favorite order.
-`X-OpenWave-SingleInstance` defaults to true. `X-OpenWave-AcceptsPaths=true` allows
-up to 16 absolute file-path arguments. Whole `%f`, `%F`, `%u`, `%U` tokens also
-enable path arguments; they are removed from fixed Exec arguments. URI dispatch
-and other field codes are unsupported. Execution parses argv without a shell.
-Files receives one path and still enforces user-root confinement. Running
-entries retain launch metadata until exit, when definitions are rescanned.
+`/System/Applications` and `/Applications` contain the authoritative manifest
+registry. Full application IDs replace the previous short IDs. Desktop entries
+call `/System/Services/openwave-launch` with an ID and are not launch metadata.
+See [the native bundle contract](../../docs/APPLICATION-BUNDLES.md) for validation,
+installation, migration, Qt paths, and enforcement status.
 
 ## D-Bus and public SDK
 
@@ -46,7 +32,8 @@ canonical contract lives in `userspace/dbus/interfaces/org.openwave.Applications
 | CancelLaunch | ticket | discard handoff |
 
 Dictionaries contain `appId`, `name`, `icon` (file URL), `executable`, `pid`,
-`state`, `error`, `singleInstance`. States are `Stopped`, `Starting`, `Running`,
+`state`, `error`, `singleInstance`, `bundlePath`, `isolationProfile`, and
+`namespaceSandboxed` (true for a running regular app after namespace setup). States are `Stopped`, `Starting`, `Running`,
 `Stopping`, `Crashed`. Running means execution started; Ocean separately waits
 for the first rendered frame.
 
@@ -59,7 +46,7 @@ Qt applications link `OpenWave::Applications` and include
 `<OpenWave/ApplicationsClient.h>`. Async queries, launch/activate/terminate and
 lifecycle signals run through a dedicated GLib context/thread, keeping RPC off
 the UI thread. `call()` exposes compositor operations. The SDK verifies appd's
-root bus credentials, supervised PID file and `/usr/libexec/appd` executable.
+root bus credentials, supervised PID and the supervisor-recorded process start time.
 
 The existing `OpenWaveApplications::launch()` now calls appd. For app-originated
 launches, appd sends a targeted ticket to Ocean, which crossfades into the loading
@@ -79,8 +66,42 @@ Each launch creates a session/process group. Its environment explicitly selects
 Qt Wayland, `/run/ocean`, the existing buses and application data convention
 `/Data/Users/<user>/.DataLocation/Applications/<appId>`. Only locale settings are
 inherited; EGLFS, TZ, LD_PRELOAD and arbitrary variables are excluded. Inherited
-descriptors are closed, umask is 0077, supplementary groups are cleared, the
-configured UID/GID is applied, and `PR_SET_NO_NEW_PRIVS` is enabled.
+descriptors are closed and umask is 0077. Trusted components retain the session
+UID/GID; regular apps receive a private UID/GID and only the render group.
+`PR_SET_NO_NEW_PRIVS` is enabled.
+
+Regular applications use their persistent application directory as `HOME` and
+its `Data`, `Config`, and `Cache` children as the XDG data, configuration, and
+cache directories. appd creates standard folder links such as `Pictures` and
+`Downloads` in that private home, pointing to the current session user's real
+folders beneath `/Data/Users/<user>`. `Music` and `Musics` both point to OpenWave's
+existing `Musics` folder. `Config/user-dirs.dirs` makes those aliases available
+through Qt's standard paths. Existing app files, directories, and user overrides
+are preserved. Link provisioning never follows app-controlled directory symlinks.
+The aliases do not change Landlock, UID, or SELinux permissions: apps continue
+to use the File Chooser broker for protected user files. Private application
+storage persists; only each launch's runtime directory is removed on exit.
+
+Regular apps use the `bubblewrap-landlock-uid-cgroup` isolation profile. appd
+uses the root-owned, non-setuid `/usr/bin/bwrap` to construct separate mount,
+IPC and UTS namespaces. A minimal root-only namespace keeper reports readiness;
+appd pins the namespace and root descriptors, then terminates that setup process.
+The actual application remains a direct appd child. Before execution it selects
+its SELinux application domain, joins the prepared namespaces, changes root,
+closes the setup descriptors, drops to its private UID/render group, and applies
+the existing Landlock policy and no-new-privileges setting. Neither Bubblewrap
+nor the namespace keeper remains as an application supervisor.
+
+The filesystem contains read-only runtime libraries, configuration and the
+app's own bundle. Its private persistent data and launch runtime are writable;
+`/tmp` and `/dev/shm` are private to that launch. Only the required device nodes,
+service sockets and public supervision records are exposed. Other app profiles,
+private service state and user folders remain outside the mounted view. File
+Chooser access continues through brokered descriptors. PID and network namespaces
+are shared to preserve trusted process credentials, Wayland identity, lifecycle
+endpoints and browser networking. Trusted Settings and Files retain their existing
+launch path. Missing Bubblewrap or failed namespace construction rejects launch;
+there is no fallback to running an ordinary app without its namespace sandbox.
 
 Shutdown requests graceful Qt quit, falls back to SIGTERM when unavailable, and
 forces SIGKILL after `ShutdownTimeoutMs` (2500 by default, bounded 100–30000).
@@ -91,8 +112,7 @@ adopted helpers together, avoiding competing waitpid owners.
 PID 1 mounts cgroup v2. Each launch enters
 `/sys/fs/cgroup/openwave-apps/app-<uuid>` before exec. `cgroup.kill` also removes
 helpers that change process groups. On restart appd cleans leftover cgroups.
-Without cgroup v2, cleanup falls back to process groups and cannot guarantee
-cleanup of helpers escaping their group. `/run/openwave/appd` records PID,
+Without cgroup v2, only trusted components may launch; regular apps fail closed. `/run/openwave/appd` records PID,
 executable and start time for verified fallback recovery. Leaders also receive a
 parent-death signal.
 
@@ -103,22 +123,14 @@ handoffs and shuts down app groups: old Wayland connections cannot be adopted by
 a replacement compositor. Ocean then re-registers/reconciles state and launches
 fresh instances, avoiding invisible orphaned processes or duplicate ownership.
 
-## Security limitations
+## Trust boundary
 
-The installed config explicitly selects `User=root` for compatibility. appd
-requires a configured user, logs root mode, supports UID/GID transitions and
-never silently changes existing data ownership. This prepares non-root execution;
-it does **not** sandbox applications.
-
-Changing the user alone is insufficient. Blockers include Ocean's root session,
-private runtime/PID-file permissions, promptd's renderer/session credential
-checks, root-only connectivity/time/audio mutation policies, and existing
-root-owned app/preferences data and the current image creator's all-root
-ownership policy. A session migration must deliberately update
-these policies and ownership. Non-root app directories must already be
-provisioned to the configured UID with private permissions. Apps sharing a UID
-are not isolated. appd stays privileged for identity transitions, signaling and
-cgroup management; capability reduction and sandbox policy are future work.
+The configured session user remains root for the compositor and trusted Settings
+and Files components. This does not grant that UID to regular applications.
+Regular apps receive the isolation described below. Trusted system components,
+the kernel, compositor, and privileged service implementations remain part of
+the system trust boundary. File permissions are enforced through the file broker;
+other permission categories are not yet advertised as mediated services.
 
 The daemon can track multiple instances if metadata disables single-instance
 mode, but Ocean currently represents one primary surface/recent card per app ID.
@@ -152,3 +164,26 @@ Run the reproducible suite with a new image path:
 ```
 
 The helper refuses existing images and keeps QA binaries out of rootfs.
+
+## Application isolation and permission identity
+
+Settings and Files remain trusted system components, pinned by installed ID and
+executable. Other applications now use distinct persistent unprivileged UIDs,
+private runtime/TMPDIR storage, no-new-privileges, and inherited Landlock rules.
+Application data keeps its established on-device path. Kernel Landlock ABI 6 and
+cgroup v2 are mandatory; launch fails closed when either is unavailable.
+
+`GetOwnIdentity` reports the calling managed application's identity. The
+privileged `ResolveCaller`/`ResolveProcess` operations are limited to supervised
+system consumers and resolve kernel credentials against live launch cgroups and
+start times. Executing Settings from another app does not change its identity.
+`RevokeAccess` is permissiond-only and kills all instances/helpers in the affected
+regular application's cgroups. See [permissiond](../permissiond/README.md).
+
+Application Services coordination uses the private, supervised-permissiond-only
+`org.openwave.ApplicationServices1` interface. Its snapshot and sequenced unicast
+events include verified declarations, manifest digests and live launch identities.
+Regular apps also receive a seccomp syscall filter and a cgroup task limit
+(default 512, including threads). See
+[Application Services](../application-services/README.md) for the security and
+compatibility details.

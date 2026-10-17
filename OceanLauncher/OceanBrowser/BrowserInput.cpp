@@ -173,6 +173,16 @@ private:
 
 BrowserInput::BrowserInput(QObject *parent) : QObject(parent) {}
 
+bool BrowserInput::reloadView(QObject *object, const QUrl &url)
+{
+    WebKitWebView *view = nullptr;
+    if (!object || url.isEmpty() || !url.isValid()
+            || !QMetaObject::invokeMethod(object, "webView", Qt::DirectConnection,
+                QGenericReturnArgument("WebKitWebView*", &view)) || !view) return false;
+    webkit_web_view_load_uri(view, url.toEncoded().constData());
+    return true;
+}
+
 void BrowserInput::attachView(QObject *object)
 {
     auto *item = qobject_cast<QQuickItem *>(object);

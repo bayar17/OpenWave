@@ -8,6 +8,7 @@
 #include <unistd.h>
 #undef signals
 #include <gio/gio.h>
+#include "OpenWaveIdentity.h"
 #include <gio/gunixfdlist.h>
 
 namespace {
@@ -31,9 +32,11 @@ GVariant *call(GDBusConnection *bus, const char *method, GVariant *parameters,
                QString *error)
 {
     GError *failure = nullptr;
-    GVariant *reply = g_dbus_connection_call_sync(bus, busName, objectPath,
+    char *owner = openwave_service_owner(bus, busName, "/run/openwave/portal.pid", &failure);
+    GVariant *reply = owner ? g_dbus_connection_call_sync(bus, owner, objectPath,
         interfaceName, method, parameters, nullptr, G_DBUS_CALL_FLAGS_NONE,
-        5000, nullptr, &failure);
+        5000, nullptr, &failure) : nullptr;
+    g_free(owner);
     if (failure) {
         *error = QString::fromUtf8(failure->message);
         g_clear_error(&failure);
@@ -50,7 +53,7 @@ GVariant *requestOptions(const QVariantMap &options)
         {"primaryTitle", "primary_title"},
         {"initialDirectory", "initial_directory"},
         {"suggestedFilename", "suggested_filename"},
-        {"parentWindow", "parent_window"}, {"requestIdentifier", "request_identifier"}
+        {"directoryToken", "directory_token"}, {"parentWindow", "parent_window"}, {"requestIdentifier", "request_identifier"}
     };
     for (const auto &field : strings) {
         const QString value = options.value(QString::fromLatin1(field.qml)).toString();
@@ -68,11 +71,15 @@ GVariant *requestOptions(const QVariantMap &options)
 }
 }
 
+PortalGrant::PortalGrant(QString name, int descriptor, bool writable, bool directory, QObject *parent)
+    : PortalGrant(std::move(name), descriptor, writable, directory, parent, {}) {}
+
 PortalGrant::PortalGrant(QString name, int descriptor, bool writable,
-                         bool directory, QObject *parent)
+                         bool directory, QObject *parent, QString directoryToken)
     : QObject(parent), m_name(std::move(name)), m_descriptor(descriptor),
       m_writable(writable), m_directory(directory)
 {
+    setProperty("_openwaveDirectoryToken", directoryToken);
 }
 
 PortalGrant::~PortalGrant()
@@ -115,7 +122,7 @@ QUrl PortalGrant::temporaryCopy()
 {
     if (m_descriptor < 0 || m_writable || m_directory) return {};
     if (!m_temporaryUrl.isEmpty()) return m_temporaryUrl;
-    m_temporaryDir = new QTemporaryDir(QStringLiteral("/tmp/openwave-portal-XXXXXX"));
+    m_temporaryDir = new QTemporaryDir(QDir::tempPath() + QStringLiteral("/openwave-portal-XXXXXX"));
     if (!m_temporaryDir->isValid()) return {};
     const QString filename = QFileInfo(m_name).fileName();
     const QString path = m_temporaryDir->filePath(filename.isEmpty()
@@ -157,6 +164,7 @@ OpenWavePortals::~OpenWavePortals()
 void OpenWavePortals::openFile(const QVariantMap &options) { start(QStringLiteral("OpenFile"), options); }
 void OpenWavePortals::openFiles(const QVariantMap &options) { start(QStringLiteral("OpenFiles"), options); }
 void OpenWavePortals::saveFile(const QVariantMap &options) { start(QStringLiteral("SaveFile"), options); }
+void OpenWavePortals::createFile(const QString &token, const QString &name) { start(QStringLiteral("CreateFile"), {{"directoryToken", token}, {"suggestedFilename", name}}); }
 void OpenWavePortals::selectDirectory(const QVariantMap &options) { start(QStringLiteral("SelectDirectory"), options); }
 
 void OpenWavePortals::start(const QString &method, const QVariantMap &options)
@@ -226,18 +234,25 @@ void OpenWavePortals::cancelRequest()
 }
 
 OpenWavePortals::Result OpenWavePortals::takeResult(const QString &requestId,
-                                                  void *connection)
+                                                  void *connection, bool directory)
 {
     Result result;
     auto *bus = static_cast<GDBusConnection *>(connection);
     if (!bus) return result;
+    if (directory) {
+        GVariant *token = call(bus, "DirectoryToken", g_variant_new("(o)", requestId.toUtf8().constData()), &result.error);
+        if (token) { const char *text; g_variant_get(token, "(&s)", &text); result.directoryToken = QString::fromUtf8(text); g_variant_unref(token); }
+        if (!result.error.isEmpty()) return result;
+    }
     GError *failure = nullptr;
     GUnixFDList *fdList = nullptr;
-    GVariant *reply = g_dbus_connection_call_with_unix_fd_list_sync(bus,
-        busName, objectPath, interfaceName, "TakeResult",
+    char *owner = openwave_service_owner(bus, busName, "/run/openwave/portal.pid", &failure);
+    GVariant *reply = owner ? g_dbus_connection_call_with_unix_fd_list_sync(bus,
+        owner, objectPath, interfaceName, "TakeResult",
         g_variant_new("(o)", requestId.toUtf8().constData()),
         G_VARIANT_TYPE("(uasah)"), G_DBUS_CALL_FLAGS_NONE, 5000,
-        nullptr, &fdList, nullptr, &failure);
+        nullptr, &fdList, nullptr, &failure) : nullptr;
+    g_free(owner);
     if (!reply) {
         result.error = failure ? QString::fromUtf8(failure->message)
                                : QStringLiteral("Could not retrieve the selected file.");
@@ -278,7 +293,8 @@ void OpenWavePortals::poll()
     m_polling = true;
     const QString id = m_requestId;
     void *connection = m_bus;
-    m_pool.start([this, id, connection] {
+    const bool directory = m_method == QStringLiteral("SelectDirectory");
+    m_pool.start([this, id, connection, directory] {
         Result result;
         auto *bus = static_cast<GDBusConnection *>(connection);
         if (bus) {
@@ -291,7 +307,7 @@ void OpenWavePortals::poll()
                     result.error = QString::fromUtf8(message);
                 g_variant_unref(reply);
                 if (result.status != 0) {
-                    Result taken = takeResult(id, connection);
+                    Result taken = takeResult(id, connection, directory && result.status == 1);
                     if (taken.error.isEmpty()) {
                         taken.error = result.error;
                         result = taken;
@@ -325,11 +341,11 @@ void OpenWavePortals::finish(const Result &result)
         return;
     }
     QVariantList grants;
-    const bool writable = m_method == QStringLiteral("SaveFile");
+    const bool writable = m_method == QStringLiteral("SaveFile") || m_method == QStringLiteral("CreateFile");
     const bool directory = m_method == QStringLiteral("SelectDirectory");
     for (qsizetype i = 0; i < result.descriptors.size(); ++i) {
         auto *grant = new PortalGrant(result.names[i], result.descriptors[i],
-                                      writable, directory, this);
+                                      writable, directory, this, result.directoryToken);
         m_grants.append(grant);
         grants.append(QVariant::fromValue(static_cast<QObject *>(grant)));
     }

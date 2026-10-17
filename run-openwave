@@ -558,8 +558,7 @@ run_openwave() {
         -device usb-tablet,bus=openwave-usb.0 \
         "${usb_device_args[@]}" \
         -serial stdio \
-        -monitor none \
-        -no-reboot
+        -monitor none
 }
 
 case "$MODE" in

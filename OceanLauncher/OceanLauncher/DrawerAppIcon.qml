@@ -56,14 +56,10 @@ Item {
         }
     }
 
-    // A normal finger swipe scrolls the drawer; holding an icon first lets
-    // the same drag gesture move the app between the drawer and favorites.
     DragHandler {
         id: touchDragHandler
         acceptedDevices: PointerDevice.TouchScreen | PointerDevice.TouchPad
         enabled: root.draggable
-        // Observe the press from the start, but leave ordinary swipes to the
-        // Flickable until TapHandler recognizes a held icon.
         dragThreshold: root.scrollable && !root.touchDragArmed
                        ? 32767 : Qt.styleHints.startDragDistance
         target: null

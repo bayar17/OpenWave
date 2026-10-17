@@ -24,8 +24,6 @@ Item {
     signal cancelled()
 
     visible: active
-    // Composite the loading screen as one image for a true crossfade over
-    // the outgoing application's opaque surface.
     opacity: crossfade ? progress : 1
     layer.enabled: crossfade && active
 

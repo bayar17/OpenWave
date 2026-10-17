@@ -3,8 +3,6 @@
 #include <QHash>
 class BrowserPreferences;
 
-// WebKit owns cookie parsing, security policy, and persistence. No cookie values
-// are copied into this object, and no cookie management UI is exposed.
 class OceanCookieManager : public QObject {
     Q_OBJECT
 public:

@@ -202,7 +202,7 @@ int main(int argc, char **argv) {
     pump.start(8);
     InputTests tests;
     const int result = QTest::qExec(&tests, argc, argv);
-    QFile report(QStringLiteral("/tmp/browser-input-result"));
+    QFile report(qEnvironmentVariable("HOME") + QStringLiteral("/Data/input-result"));
     if (report.open(QIODevice::WriteOnly)) report.write(QByteArray::number(result));
     return result;
 }

@@ -23,6 +23,14 @@ Item {
             anchors.fill: parent
             preferredRendererType: Shape.CurveRenderer
             ShapePath {
+                strokeColor: root.kind === "chevron" ? root.color : "transparent"
+                strokeWidth: 2
+                fillColor: "transparent"
+                startX: 16; startY: 4
+                PathLine { x: 36; y: 24 }
+                PathLine { x: 16; y: 44 }
+            }
+            ShapePath {
                 strokeColor: root.kind === "search" ? root.color : "transparent"
                 strokeWidth: 2.5
                 fillColor: "transparent"

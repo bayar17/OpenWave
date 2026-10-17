@@ -1,6 +1,8 @@
 <?xml version='1.0' encoding='utf-8'?>
 <node>
   <interface name="org.openwave.portal.FileChooser">
+    <method name="CreateFile"><arg type="a{sv}" direction="in"/><arg type="o" direction="out"/></method>
+    <method name="DirectoryToken"><arg type="o" direction="in"/><arg type="s" direction="out"/></method>
     <method name="OpenFile">
       <arg type="a{sv}" direction="in" />
       <arg type="o" direction="out" />

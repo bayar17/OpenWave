@@ -1,7 +1,7 @@
 # OpenWave promptd
 
 `promptd` is a supervised process on the OpenWave user session bus. `/init`
-starts and restarts `/usr/libexec/promptd` independently of Ocean and its apps.
+starts and restarts `/System/Services/promptd` independently of Ocean and its apps.
 The shell renders dialogs; the daemon validates requests and owns their lifetime.
 It does not grant permissions. Secret form values are returned only to the
 requesting connection and are never persisted or broadcast.
@@ -78,6 +78,14 @@ map (1–8 named string labels) renders a dropdown, with `initialText` naming it
 initial choice. `activeWhenField` and `activeWhenValue` show a field only for
 that choice; inactive fields return empty strings. Unknown fields, invalid
 choices, and length/UTF-8 byte limits are validated again by the daemon.
+Settings' saved-network IP/DNS editor also uses this shared form. Independent
+IP and DNS dropdowns reveal the appropriate manual fields; DNS addresses are
+entered as a comma-separated IPv4/IPv6 list. Text field labels remain visible
+when values are filled in, and long forms scroll within the safe area. Save
+validates addresses before calling the connectivity service. Invalid input
+returns to the populated form with an explanation; Cancel, leaving the page,
+or switching networks cannot apply a stale result.
+
 Accepted form results use a GVariant `a{ss}` dictionary serialized into the
 existing result text; the Qt client decodes it into a `QVariantMap`.
 

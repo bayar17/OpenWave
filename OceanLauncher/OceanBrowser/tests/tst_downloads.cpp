@@ -12,10 +12,10 @@ class DownloadTests : public QObject {
         return model.data(model.index(row), role);
     }
     static void seed(const QString &root, const QString &payload) {
-        QVERIFY(QDir().mkpath(root + "/Downloads"));
+        QVERIFY(QDir().mkpath(root + "/Data/Downloads"));
         {
             auto db = QSqlDatabase::addDatabase("QSQLITE", "seed");
-            db.setDatabaseName(root + "/Downloads/Downloads.sqlite");
+            db.setDatabaseName(root + "/Data/Downloads/Downloads.sqlite");
             QVERIFY(db.open());
             QSqlQuery query(db);
             // The original schema must migrate without losing existing records.
@@ -66,7 +66,7 @@ private slots:
         OceanDownloadManager restored(dir.path(), dir.path(), &restoredPreferences); QTRY_VERIFY(restored.ready());
         QCOMPARE(restored.rowCount(), 2); QVERIFY(QFile::exists(payload));
         QFile original(payload); QVERIFY(original.open(QIODevice::ReadOnly)); QCOMPARE(original.readAll(), QByteArray("keep payload"));
-        const auto permissions = QFileInfo(dir.path() + "/Downloads/Downloads.sqlite").permissions();
+        const auto permissions = QFileInfo(dir.path() + "/Data/Downloads/Downloads.sqlite").permissions();
         QVERIFY(!(permissions & (QFile::ReadGroup | QFile::ReadOther | QFile::WriteGroup | QFile::WriteOther)));
     }
     void missingPayloadAndUnsafeStorage() {
@@ -81,7 +81,8 @@ private slots:
         }
         QTemporaryDir unsafe;
         const auto permissions = QFileInfo(outside.path()).permissions();
-        QVERIFY(QFile::link(outside.path(), unsafe.path() + "/Downloads"));
+        QVERIFY(QDir().mkpath(unsafe.path() + "/Data"));
+        QVERIFY(QFile::link(outside.path(), unsafe.path() + "/Data/Downloads"));
         BrowserPreferences downloadsPreferences(unsafe.path(), unsafe.path());
         OceanDownloadManager downloads(unsafe.path(), unsafe.path(), &downloadsPreferences);
         QTRY_VERIFY(!downloads.error().isEmpty()); QVERIFY(!downloads.ready());
@@ -90,18 +91,19 @@ private slots:
     }
     void cookieMigrationAndUnsafeStorage() {
         QTemporaryDir dir;
-        QVERIFY(QDir().mkpath(dir.path() + "/cookies"));
-        QFile existing(dir.path() + "/cookies/cookies.sqlite");
+        QVERIFY(QDir().mkpath(dir.path() + "/Data/cookies"));
+        QFile existing(dir.path() + "/Data/cookies/cookies.sqlite");
         QVERIFY(existing.open(QIODevice::WriteOnly)); existing.write("engine-owned-store"); existing.close();
         BrowserPreferences cookiesPreferences(dir.path(), dir.path());
         OceanCookieManager cookies(dir.path(), &cookiesPreferences); QVERIFY(cookies.ready());
-        QCOMPARE(cookies.profilePath(), dir.path() + "/WebEngine");
+        QCOMPARE(cookies.profilePath(), dir.path() + "/Data/WebEngine");
         QFile moved(cookies.profilePath() + "/cookies/cookies.sqlite");
         QVERIFY(moved.open(QIODevice::ReadOnly)); QCOMPARE(moved.readAll(), QByteArray("engine-owned-store"));
-        QVERIFY(!QFile::exists(dir.path() + "/cookies"));
+        QVERIFY(!QFile::exists(dir.path() + "/Data/cookies"));
         QTemporaryDir unsafe, outside;
         const auto permissions = QFileInfo(outside.path()).permissions();
-        QVERIFY(QFile::link(outside.path(), unsafe.path() + "/WebEngine"));
+        QVERIFY(QDir().mkpath(unsafe.path() + "/Data"));
+        QVERIFY(QFile::link(outside.path(), unsafe.path() + "/Data/WebEngine"));
         BrowserPreferences rejectedPreferences(unsafe.path(), unsafe.path());
         OceanCookieManager rejected(unsafe.path(), &rejectedPreferences); QVERIFY(!rejected.ready());
         QCOMPARE(QFileInfo(outside.path()).permissions(), permissions);
