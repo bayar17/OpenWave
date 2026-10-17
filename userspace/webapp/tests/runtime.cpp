@@ -76,6 +76,7 @@ int main(int argc, char **argv)
                 if (url.path() == "/report") {
                     reports.append(QUrlQuery(url));
                     QTextStream(stdout) << "WEBAPP_QA_REPORT " << reports.size() << Qt::endl;
+                    QTextStream(stdout) << "WEBAPP_QA_VIEWPORT " << url.toString() << Qt::endl;
                     body = "OK";
                 } else body = R"HTML(<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OpenWave Web App QA</title><link rel="icon" href="/favicon.ico"><link rel="manifest" href="/site.webmanifest">
@@ -83,7 +84,7 @@ int main(int argc, char **argv)
 <header style="height:80px;padding:16px;box-sizing:border-box">Website header</header>
 <button style="margin:24px;font-size:24px" onclick="document.body.style.background='#18212b';document.body.style.color='white'">Change background</button>
 <h1 style="margin:24px">Web app fixture</h1><p>WPE WebKit and persistent application storage.</p><script>
-fetch('/report?stored='+encodeURIComponent(localStorage.getItem('ow-webapp-qa'))+'&cookie='+encodeURIComponent(document.cookie))
+fetch('/report?stored='+encodeURIComponent(localStorage.getItem('ow-webapp-qa'))+'&cookie='+encodeURIComponent(document.cookie)+'&width='+innerWidth+'&height='+innerHeight)
 .then(()=>{localStorage.setItem('ow-webapp-qa','saved');document.cookie='ow_webapp=present;max-age=3600;path=/';});
 </script></body></html>)HTML";
                 socket->write("HTTP/1.1 200 OK\r\nContent-Type: " + type + "\r\nContent-Length: "
@@ -130,6 +131,11 @@ fetch('/report?stored='+encodeURIComponent(localStorage.getItem('ow-webapp-qa'))
         if (reports.size() > before) {
             check(reports.last().queryItemValue("stored") == "null"
                 && reports.last().queryItemValue("cookie").isEmpty(), "web app does not inherit Browser cookies or local storage");
+            check(reports.last().queryItemValue("width").toInt() == 500,
+                "web app uses the readable mobile viewport width");
+            check(reports.last().queryItemValue("height").toInt() > 750
+                && reports.last().queryItemValue("height").toInt() < 900,
+                "web app mobile viewport fits below the status bar");
         }
         const auto running = info(client, id);
         const auto pid = running.value("pid").toUInt();

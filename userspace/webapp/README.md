@@ -20,6 +20,10 @@ updates its background four times per second while a web app is foreground and
 visible; a median rejects small header glyphs. Foreground icons switch between
 dark and light using relative luminance. Sampling stops during transitions, when
 hidden, and for other apps. Website controls are not shifted using injected CSS.
+The quick-menu chevron stays above the status-bar background and uses black on
+light pages and white on dark pages. Website apps use the Browser's mobile
+viewport sizing, capped at 500 CSS pixels, so content remains readable while
+the page fills the space below the bar.
 
 Icon discovery checks favicon links, Apple touch icons, and web manifest icons.
 Asynchronous, bounded requests select the largest decodable image, including ICO

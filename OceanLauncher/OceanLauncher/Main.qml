@@ -1273,6 +1273,12 @@ ApplicationWindow {
             z: 45
         }
 
+        Item {
+            id: quickMenuHandleLayer
+            anchors.fill: parent
+            z: 75
+        }
+
         QuickMenu {
             id: quickMenu
             objectName: "quickMenu"
@@ -1287,6 +1293,8 @@ ApplicationWindow {
             dateText: root.currentDate
             reduceMotion: root.reduceMotion
             appVisible: root.applicationVisible
+            handleLayer: quickMenuHandleLayer
+            handleColor: pageEdge.enabled && pageEdge.darkForeground ? "black" : "white"
             showDisabledHandle: root.promptModal && root.applicationVisible
             canOpen: (root.applicationVisible || (!drawerSheet.open
                      && drawerSheet.progress < 0.02)) && !loadingView.active

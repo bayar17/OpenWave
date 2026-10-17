@@ -14,6 +14,8 @@ Item {
     property bool canOpen: true
     property bool showDisabledHandle: false
     property bool appVisible: false
+    property Item handleLayer: null
+    property color handleColor: "white"
     property bool open: false
     property real progress: 0
     readonly property real bottomY: 1145
@@ -212,6 +214,7 @@ Item {
     Item {
         id: chevronHandle
         objectName: "quickMenuHandle"
+        parent: menu.handleLayer || menu
         width: 170
         height: 76
         x: (menu.width - width) / 2
@@ -222,6 +225,7 @@ Item {
 
         Chevron {
             objectName: "topChevron"
+            color: menu.handleColor
             anchors.centerIn: parent
             rotation: 180 * (1 - menu.arrival)
         }

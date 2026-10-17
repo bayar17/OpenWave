@@ -12,6 +12,8 @@ Window {
     flags: Qt.Window | Qt.FramelessWindowHint
     title: appName
     color: "white"
+    readonly property real cssViewportWidth: Math.min(500, width * Math.min(
+        Screen.width / Math.max(1, width), Screen.height / Math.max(1, height)))
 
     function goBack() {
         if (page.canGoBack) page.goBack()
@@ -26,6 +28,12 @@ Window {
         onLoadFinished: (success, address, error) => {
             if (success) page.runJavaScript(WebApp.iconScript, result => WebApp.refreshIcon(String(result)))
         }
+    }
+    Binding {
+        target: page
+        property: "zoomLevel"
+        value: root.width / Math.max(1, root.cssViewportWidth)
+        when: page.ready
     }
     Rectangle {
         anchors.fill: parent

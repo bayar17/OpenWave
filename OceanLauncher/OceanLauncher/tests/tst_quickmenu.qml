@@ -42,9 +42,59 @@ Item {
         lightFont: lightFont.name
     }
 
+    Rectangle {
+        id: statusBackground
+        width: parent.width
+        height: 70
+        z: 1
+        color: "white"
+        visible: false
+    }
+    Item {
+        id: handleLayer
+        anchors.fill: parent
+        z: 2
+    }
+
     TestCase {
         name: "QuickMenuGesture"
         when: windowShown
+
+        function test_lightPageHandlePaintsAboveStatusBackground() {
+            const handle = findChild(menu, "quickMenuHandle")
+            const chevron = findChild(menu, "topChevron")
+            try {
+                menu.reduceMotion = true
+                menu.settle(false)
+                menu.appVisible = true
+                menu.handleLayer = handleLayer
+                menu.handleColor = "black"
+                statusBackground.visible = true
+                compare(handle.parent, handleLayer)
+                compare(Math.round(handle.y + handle.height / 2), 35)
+                compare(chevron.color, Qt.color("black"))
+                waitForRendering(handle)
+                const image = grabImage(window)
+                let darkPixels = 0
+                for (let y = 27; y < 44; y++) {
+                    for (let x = 370; x < 399; x++) {
+                        const pixel = image.pixel(x, y)
+                        if (pixel.r < 0.2 && pixel.g < 0.2 && pixel.b < 0.2)
+                            darkPixels++
+                    }
+                }
+                verify(darkPixels > 15, "The black chevron must paint above the white status bar")
+                mouseClick(handle, handle.width / 2, handle.height / 2)
+                tryCompare(menu, "progress", 1)
+                compare(Math.round(handle.y + handle.height / 2), 1112)
+            } finally {
+                menu.settle(false)
+                menu.appVisible = false
+                menu.handleColor = "white"
+                menu.handleLayer = null
+                statusBackground.visible = false
+            }
+        }
 
         function test_disabled_handle_stays_visible() {
             const handle = findChild(menu, "quickMenuHandle")
