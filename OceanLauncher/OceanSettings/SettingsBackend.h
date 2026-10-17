@@ -35,6 +35,7 @@ public:
     Q_INVOKABLE bool requestPowerAction(const QString &action);
 
 signals:
+    void homeRequested();
     void preferencesChanged();
     void radiosChanged();
     void errorOccurred(const QString &message);

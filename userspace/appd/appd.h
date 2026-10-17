@@ -23,6 +23,7 @@ struct App {
     char **argv;
     gboolean paths;
     gboolean single;
+    gboolean removing;
     char *state;
     char *error;
 };
@@ -109,7 +110,14 @@ gboolean appd_publish_preferences(gpointer manager);
 gboolean appd_publish_sockets(Manager *manager);
 
 App *appd_read_bundle(const char *directory);
+char *appd_create_webapp(Manager *manager, Instance *caller, guint pid,
+    const char *name, const char *url, const guint8 *icon, gsize icon_size, GError **error);
+gboolean appd_update_webapp_icon(Manager *manager, Instance *caller, guint pid, const guint8 *icon, gsize icon_size, GError **error);
 gboolean appd_validate_bundle(App *app, GError **error);
+gboolean appd_is_webapp(App *app);
+gboolean appd_webapp_pending(App *app);
+void appd_uninstall_webapp(Manager *manager, Instance *caller, guint pid, const char *id, GDBusMethodInvocation *call);
+void appd_recover_uninstalls(Manager *manager);
 
 const char *appd_legacy_id(App *app);
 gboolean appd_prepare_storage(Manager *manager, Instance *instance, GError **error);

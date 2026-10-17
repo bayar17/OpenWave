@@ -357,6 +357,7 @@ int main(void)
     setenv("DBUS_SYSTEM_BUS_ADDRESS",
            "unix:path=/run/dbus/system_bus_socket", 1);
     setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/ocean/bus", 1);
+    setenv("XDG_CURRENT_DESKTOP", "OpenWave", 1);
 
 
     mkdir("/run/openwave", 0711);
@@ -400,6 +401,7 @@ int main(void)
         { "wallpaperagentd", "/System/Services/wallpaperagentd", NULL, NULL, -1, 0 },
         { "openwave-portal", "/System/Services/openwave-portal", NULL, NULL, -1, 0 },
         { "promptd", "/System/Services/promptd", NULL, NULL, -1, 0 },
+        { "XDG settings portal", "/System/Services/xdg-desktop-portal-openwave", NULL, NULL, -1, 0 },
         { "PipeWire", "/usr/bin/pipewire", NULL, NULL, -1, 0 },
         { "WirePlumber", "/usr/bin/wireplumber", "-p", "main-systemwide", -1, 0 },
         { "audiod", "/System/Services/audiod", NULL, NULL, -1, 0 },

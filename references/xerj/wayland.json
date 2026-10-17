@@ -1,0 +1,36 @@
+{
+  "corpus": "openwave-wayland",
+  "cloned_at": "2026-10-17T04:15:37Z",
+  "repos": [
+    {
+      "repo": "lipstick",
+      "url": "https://github.com/sailfishos/lipstick.git",
+      "licence": "LGPL",
+      "sha": "28f86bd5b77282324e8208baa52a5893d3ffff4b",
+      "files": 244,
+      "bytes": 1373464,
+      "review": {
+        "spdx": "LGPL-2.1-only",
+        "use": "approach-only",
+        "by": "OpenWave local setup",
+        "at": "2026-10-17",
+        "note": "Read license text and source headers: LICENSE.LGPL; src/vpnagent.cpp. Read designs; do not paste implementation."
+      }
+    },
+    {
+      "repo": "qtwayland",
+      "url": "https://github.com/qt/qtwayland.git",
+      "licence": "NONE-FOUND",
+      "sha": "512ab34ec219a21e09b6988b2f87e3708d853482",
+      "files": 702,
+      "bytes": 2935763,
+      "review": {
+        "spdx": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+        "use": "approach-only",
+        "by": "OpenWave local setup",
+        "at": "2026-10-17",
+        "note": "Read license text and source headers: LICENSES/ and per-file SPDX headers; commercial alternative not granted by this setup. Read designs; do not paste implementation."
+      }
+    }
+  ]
+}

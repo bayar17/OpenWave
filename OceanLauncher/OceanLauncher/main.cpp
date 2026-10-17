@@ -3,6 +3,7 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include "AppController.h"
+#include "PageEdgeColor.h"
 #include <OpenWave/QuickMenuBackend.h>
 #include "PortalFileChooserBackend.h"
 #include "../OceanFiles/FilesBackend.h"
@@ -28,6 +29,7 @@ int main(int argc, char *argv[])
     TimeBackend timeBackend;
     WallpaperClient wallpaper;
     QQmlApplicationEngine engine;
+    qmlRegisterType<PageEdgeColor>("OpenWave.Shell", 1, 0, "PageEdgeColor");
     engine.rootContext()->setContextProperty(QStringLiteral("Wallpaper"), &wallpaper);
     engine.setInitialProperties({
         {QStringLiteral("appController"), QVariant::fromValue(&controller)},

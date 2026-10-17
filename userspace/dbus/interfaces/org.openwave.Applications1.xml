@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <node>
   <interface name="org.openwave.Applications1">
+    <method name="CreateWebApp"><arg name="name" type="s" direction="in"/><arg name="url" type="s" direction="in"/><arg name="appId" type="s" direction="out"/></method>
+    <method name="CreateWebAppWithIcon"><arg name="name" type="s" direction="in"/><arg name="url" type="s" direction="in"/><arg name="icon" type="ay" direction="in"/><arg name="appId" type="s" direction="out"/></method>
+    <method name="UpdateWebAppIcon"><arg name="icon" type="ay" direction="in"/></method>
+    <method name="UninstallWebApp"><arg name="appId" type="s" direction="in"/></method>
     <method name="GetSessionIdentity"><arg name="userId" type="u" direction="out"/><arg name="session" type="s" direction="out"/></method>
     <method name="GetOwnIdentity"><arg name="identity" type="a{sv}" direction="out"/></method>
     <method name="ResolveCaller"><arg name="connection" type="s" direction="in"/><arg name="identity" type="a{sv}" direction="out"/></method>

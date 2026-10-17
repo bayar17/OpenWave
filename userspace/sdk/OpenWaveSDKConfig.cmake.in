@@ -1,6 +1,9 @@
 @PACKAGE_INIT@
 include(CMakeFindDependencyMacro)
 find_dependency(Qt6 6.10 COMPONENTS Core Gui Network Qml)
+if(@OPENWAVE_BUILD_WEB@)
+    find_dependency(Qt6 6.10 COMPONENTS Quick)
+endif()
 set(_openwave_triple "${CMAKE_CXX_COMPILER_TARGET}")
 if(NOT _openwave_triple)
     set(_openwave_triple "${OPENWAVE_TARGET_TRIPLE}")
@@ -13,6 +16,13 @@ endif()
 include("${CMAKE_CURRENT_LIST_DIR}/${_openwave_triple}/OpenWaveSDKTargets.cmake")
 get_filename_component(OpenWaveSDK_QML_IMPORT_PATH
     "${CMAKE_CURRENT_LIST_DIR}/../../../sysroot/${_openwave_triple}/usr/qml" ABSOLUTE)
+if(TARGET OpenWave::Web)
+    set(OpenWaveSDK_Web_FOUND TRUE)
+    get_filename_component(_openwave_wpe_import_path
+        "${CMAKE_CURRENT_LIST_DIR}/../../../sysroot/${_openwave_triple}/usr/lib64/qt6/qml" ABSOLUTE)
+    list(APPEND OpenWaveSDK_QML_IMPORT_PATH "${_openwave_wpe_import_path}")
+    unset(_openwave_wpe_import_path)
+endif()
 foreach(_component IN ITEMS Fonts Prompts FileChooser Applications Wallpaper Time Connectivity SystemControls ApplicationData Xml Identity Permissions ApplicationServices)
     set(OpenWaveSDK_${_component}_FOUND TRUE)
 endforeach()

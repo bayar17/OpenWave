@@ -133,6 +133,7 @@ Item {
 
     Item {
         id: visual
+        objectName: "recentCardVisual"
         width: card.width
         height: card.height
         transformOrigin: Item.Center

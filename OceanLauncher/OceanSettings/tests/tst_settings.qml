@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 import QtTest
 import ".." as Ocean
 
@@ -16,11 +17,12 @@ Item {
         property var systemInfo: ({os: "OpenWave", architecture: "x86_64", kernel: "test-kernel",
                                     processors: 4, storageTotal: 2147483648, storageAvailable: 1073741824})
         signal errorOccurred(string message)
+        signal homeRequested()
         function saveDeviceName(name) { deviceName = name.trim(); return true }
         function setReduceMotion(value) { reduceMotion = value; return true }
         function setLargeText(value) { largeText = value; return true }
         function refreshRadios() {}
-        function closeApp(home) {}
+        function closeApp(home) { homeRequested() }
         function requestPowerAction(action) { powerActions = powerActions.concat([action]); return true }
     }
     QtObject {
@@ -161,6 +163,7 @@ Item {
             waitForRendering(app.contentItem)
         }
         function init() {
+            app.showNormal()
             app.width = 768
             app.height = 1366
             app.connectivityBackend = null
@@ -209,6 +212,20 @@ Item {
             findChild(page, "settingsTabs").contentX = 0
             exitSpy.clear()
             wait(50)
+        }
+
+        function test_root_back_minimizes_and_keeps_settings_alive() {
+            page.selectTab(0)
+            app.requestActivate()
+            wait(30)
+            try {
+                keyClick(Qt.Key_Back)
+                tryCompare(app, "visibility", Window.Minimized)
+                compare(page.currentTab, 0)
+                compare(backend.deviceName, "KB Phone")
+            } finally {
+                app.showNormal()
+            }
         }
         function test_appsTabAndBackNavigation() {
             page.selectTab(5)

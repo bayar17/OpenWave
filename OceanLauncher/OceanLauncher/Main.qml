@@ -1,5 +1,7 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Effects
+import OpenWave.Shell 1.0
 import QtWayland.Compositor
 import QtWayland.Compositor.XdgShell
 
@@ -82,6 +84,7 @@ ApplicationWindow {
         }
     }
     onForegroundSurfaceChanged: {
+        edgeNavigation.close()
         const request = promptBackend ? promptBackend.request : ({})
         if (systemPrompt.visible && request.id === systemPrompt.shownRequest.id && request.ownerPid
             && foregroundSurface && foregroundSurface.surface
@@ -221,6 +224,18 @@ ApplicationWindow {
         noticeTimer.stop()
         appNotice.visible = false
         drawerSheet.closeDrawer()
+    }
+
+    function navigateBack() {
+        if (transitionBusy || appLoading || promptModal || portalFileChooser.phase !== "hidden") return
+        if (applicationVisible && foregroundSurface && foregroundSurface.surface
+            && foregroundSurface.surface.hasContent) {
+            foregroundSurface.takeFocus(compositor.defaultSeat)
+            compositor.defaultSeat.sendKeyEvent(Qt.Key_Back, true)
+            compositor.defaultSeat.sendKeyEvent(Qt.Key_Back, false)
+        } else if (drawerSheet.open) {
+            drawerSheet.closeDrawer()
+        }
     }
 
     function requestAppLaunch(app) {
@@ -487,8 +502,7 @@ ApplicationWindow {
             finishAppLaunch("com.openwave.settings", "The application surface could not be displayed.")
             return
         }
-        // The app paints behind the system bar; its controls use a top inset.
-        toplevel.sendMaximized(Qt.size(applicationLayer.width, applicationLayer.height))
+        item.configureSize()
         if (item.surface && item.surface.hasContent)
             item.showFirstFrame()
     }
@@ -678,87 +692,109 @@ ApplicationWindow {
             height: 70
             z: 70
 
-            IconImage {
-                id: battery
-                renderScale: root.contentScale
-
-                source: "assets/status/battery.svg"
-
-                width: 54
-                height: 30
-
-                anchors.left: parent.left
-                anchors.leftMargin: 22
-                anchors.verticalCenter: parent.verticalCenter
-
-                fillMode: Image.PreserveAspectFit
+            Rectangle {
+                anchors.fill: parent
+                visible: pageEdge.enabled
+                color: pageEdge.color
             }
+            Item {
+                anchors.fill: parent
+                layer.enabled: pageEdge.enabled
+                layer.effect: MultiEffect {
+                    colorization: 1
+                    colorizationColor: pageEdge.darkForeground ? "#202124" : "white"
+                }
 
-            Text {
-                id: clock
+                IconImage {
+                    id: battery
+                    renderScale: root.contentScale
 
-                text: root.currentTime
-                color: "white"
-                opacity: 1 - Math.min(1, quickMenu.progress * 5)
+                    source: "assets/status/battery.svg"
 
-                font.pixelSize: 34
-                font.family: root.font.family
-                font.weight: Font.Light
+                    width: 54
+                    height: 30
 
-                property real centeredX:
-                    (statusBar.width - width) / 2
+                    anchors.left: parent.left
+                    anchors.leftMargin: 22
+                    anchors.verticalCenter: parent.verticalCenter
 
-                property real besideBatteryX:
-                    battery.x + battery.width + 18
+                    fillMode: Image.PreserveAspectFit
+                }
 
-                property real morphProgress:
-                    Math.max(drawerSheet.statusBarMorphProgress, loadingView.progress,
-                             recentTransition.expansion,
-                             root.exitingSurface ? 1 - root.exitProgress : 0,
-                             root.applicationVisible ? 1 : 0)
+                Text {
+                    id: clock
 
-                x: centeredX +
-                   (besideBatteryX - centeredX) * morphProgress
+                    text: root.currentTime
+                    color: "white"
+                    opacity: 1 - Math.min(1, quickMenu.progress * 5)
 
-                anchors.verticalCenter: parent.verticalCenter
+                    font.pixelSize: 34
+                    font.family: root.font.family
+                    font.weight: Font.Light
+
+                    property real centeredX:
+                        (statusBar.width - width) / 2
+
+                    property real besideBatteryX:
+                        battery.x + battery.width + 18
+
+                    property real morphProgress:
+                        Math.max(drawerSheet.statusBarMorphProgress, loadingView.progress,
+                                 recentTransition.expansion,
+                                 root.exitingSurface ? 1 - root.exitProgress : 0,
+                                 root.applicationVisible ? 1 : 0)
+
+                    x: centeredX +
+                       (besideBatteryX - centeredX) * morphProgress
+
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                SignalIcon {
+                    id: networkIndicators
+
+                    kind: "cellular"
+                    connected: root.quickMenuBackend
+                               ? root.quickMenuBackend.cellularAvailable : false
+                    strength: root.quickMenuBackend
+                              ? root.quickMenuBackend.cellularStrength : 0
+                    renderScale: root.contentScale
+                    width: 82
+                    height: 20
+
+                    anchors.right: wifi.left
+                    anchors.rightMargin: 12
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                SignalIcon {
+                    id: wifi
+                    kind: "wifi"
+                    connected: root.quickMenuBackend
+                               ? root.quickMenuBackend.wifiConnected : false
+                    strength: root.quickMenuBackend
+                              ? root.quickMenuBackend.wifiStrength : 0
+                    renderScale: root.contentScale
+
+                    width: 45
+                    height: 34
+
+                    anchors.right: parent.right
+                    anchors.rightMargin: 18
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    fillMode: Image.PreserveAspectFit
+                }
+
             }
+        }
 
-            SignalIcon {
-                id: networkIndicators
-
-                kind: "cellular"
-                connected: root.quickMenuBackend
-                           ? root.quickMenuBackend.cellularAvailable : false
-                strength: root.quickMenuBackend
-                          ? root.quickMenuBackend.cellularStrength : 0
-                renderScale: root.contentScale
-                width: 82
-                height: 20
-
-                anchors.right: wifi.left
-                anchors.rightMargin: 12
-                anchors.verticalCenter: parent.verticalCenter
-            }
-
-            SignalIcon {
-                id: wifi
-                kind: "wifi"
-                connected: root.quickMenuBackend
-                           ? root.quickMenuBackend.wifiConnected : false
-                strength: root.quickMenuBackend
-                          ? root.quickMenuBackend.wifiStrength : 0
-                renderScale: root.contentScale
-
-                width: 45
-                height: 34
-
-                anchors.right: parent.right
-                anchors.rightMargin: 18
-                anchors.verticalCenter: parent.verticalCenter
-
-                fillMode: Image.PreserveAspectFit
-            }
-
+        PageEdgeColor {
+            id: pageEdge
+            source: root.foregroundSurface
+            enabled: root.visible && root.applicationVisible && !root.transitionBusy && !loadingView.active
+                && quickMenu.progress === 0 && root.foregroundSurface !== null
+                && root.foregroundSurface.topInset > 0
         }
 
         Item {
@@ -803,9 +839,7 @@ ApplicationWindow {
                     )
                 )
 
-            property bool dragging:
-                edgeDrag.active ||
-                handleDrag.active
+            property bool dragging: handleDrag.active
 
             onClosedYChanged: Qt.callLater(function() {
                 if (!drawerSheet.dragging)
@@ -861,7 +895,7 @@ ApplicationWindow {
                 if (draggedAppId !== app.appId) return
                 updateAppDrag(app, x, y)
                 const validDrop = dragPointerX >= 0 && dragPointerX <= width
-                    && dragPointerY >= 0 && dragPointerY <= height - bottomEdgeGesture.height
+                    && dragPointerY >= 0 && dragPointerY <= height
                 const destination = dragOverFavorites
                 const index = dragInsertionIndex
                 draggedAppId = ""
@@ -1071,7 +1105,7 @@ ApplicationWindow {
                 anchors.left: divider.left
                 anchors.right: divider.right
                 anchors.bottom: parent.bottom
-                anchors.bottomMargin: bottomEdgeGesture.height
+                anchors.bottomMargin: 16
 
                 apps: root.unpinnedApps
                 artwork: root.appArtwork
@@ -1182,6 +1216,14 @@ ApplicationWindow {
                 id: clientSurface
                 property var toplevel: null
                 property string appId: ""
+                readonly property real topInset: appId.startsWith("org.openwave.webapp.h") ? statusBar.height : 0
+                function configureSize() {
+                    if (toplevel && width > 0 && height > 0)
+                        toplevel.sendMaximized(Qt.size(Math.round(width), Math.round(height)))
+                }
+                transform: Translate { y: clientSurface.topInset }
+                onWidthChanged: configureSize()
+                onHeightChanged: configureSize()
                 property int captureGeneration: 0
                 property bool firstPresentationPending: true
                 function showFirstFrame() {
@@ -1193,7 +1235,7 @@ ApplicationWindow {
                     root.presentApplication(clientSurface)
                 }
                 width: applicationLayer.width
-                height: applicationLayer.height
+                height: applicationLayer.height - topInset
                 opacity: loadingView.active && loadingView.handingOff
                     && root.foregroundSurface === clientSurface
                     ? loadingView.handoffProgress : 1
@@ -1210,6 +1252,10 @@ ApplicationWindow {
                 Connections {
                     target: clientSurface.toplevel
                     function onAppIdChanged() { root.registerApplication(clientSurface) }
+                    function onSetMinimized() {
+                        if (root.applicationVisible && root.foregroundSurface === clientSurface)
+                            root.goHome()
+                    }
                 }
                 Connections {
                     target: root.appController
@@ -1248,6 +1294,24 @@ ApplicationWindow {
                      && !root.promptModal
         }
 
+        EdgeNavigationMenu {
+            id: edgeNavigation
+            objectName: "edgeNavigation"
+            anchors.fill: parent
+            z: 95
+            backdrop: root.applicationVisible ? applicationLayer : wallpaperImage
+            renderScale: root.contentScale
+            reduceMotion: root.reduceMotion
+            safeTop: statusBar.height
+            safeBottom: 0
+            backAvailable: root.applicationVisible || drawerSheet.open
+            canOpen: !root.transitionBusy && !root.appLoading && !root.promptModal
+                && !recentTransition.active && portalFileChooser.phase === "hidden"
+                && quickMenu.progress === 0
+            onBackRequested: root.navigateBack()
+            onHomeRequested: root.goHome()
+        }
+
         PortalBackdrop {
             anchors.fill: parent
             z: 65
@@ -1284,7 +1348,7 @@ ApplicationWindow {
                     && root.promptOwnerSurface && root.promptOwnerSurface.surface.hasContent
                     && !root.transitionBusy && !root.appLoading)
             safeTop: statusBar.height
-            safeBottom: bottomEdgeGesture.height
+            safeBottom: 0
             onVisibleChanged: {
                 if (!visible) {
                     if (root.applicationVisible && root.foregroundSurface)
@@ -1301,62 +1365,6 @@ ApplicationWindow {
             opacity: visible ? (100 - root.quickMenuBackend.brightness) / 100 * 0.65 : 0
             color: "black"
             Behavior on opacity { NumberAnimation { duration: 150 } }
-        }
-
-        Item {
-            id: bottomEdgeGesture
-            objectName: "homeControl"
-
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-
-            height: 55
-
-            z: 80
-
-            TapHandler {
-                enabled: !root.transitionBusy && !root.promptModal
-                onTapped: root.goHome()
-            }
-
-            DragHandler {
-                id: edgeDrag
-                enabled: !drawerSheet.open && !loadingView.active && !root.promptModal
-                         && !root.applicationVisible && !root.transitionBusy
-                         && quickMenu.progress === 0
-
-                target: drawerSheet
-
-                xAxis.enabled: false
-
-                yAxis.minimum: drawerSheet.openY
-                yAxis.maximum: drawerSheet.closedY
-
-                onActiveChanged: {
-                    if (edgeDrag.active)
-                        snapAnimation.stop()
-                    else
-                        Qt.callLater(drawerSheet.settle)
-                }
-            }
-        }
-
-        Rectangle {
-            id: homeIndicator
-            opacity: 1 - loadingView.progress
-
-            width: 235
-            height: 9
-            radius: 4.5
-
-            color: "white"
-
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.bottom: parent.bottom
-            anchors.bottomMargin: 6
-
-            z: 100
         }
 
         Rectangle {

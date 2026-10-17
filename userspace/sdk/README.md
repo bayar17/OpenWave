@@ -69,6 +69,7 @@ Use headers such as `<OpenWave/OpenWavePromptClient.h>`. Available components:
 | ApplicationData | application-data.h, preferences.h | Existing per-user data conventions |
 | Xml | OpenWaveXml.h | Local XML parsing with libxml2; external D-Bus interface files |
 | Fonts | FontManager.h; `OpenWave.Fonts` QML module | Shared system fonts and Qt's font database |
+| Web | WebRuntime.h, WebInput.h; `OpenWave.Web` QML module | Existing WPE WebKit engine, embedded in the app |
 
 These are the existing asynchronous clients, not mock services. File chooser
 results grant file descriptors; callers should use PortalGrant rather than
@@ -140,6 +141,11 @@ Call `OpenWave::FontManager::initialize()` after constructing `QGuiApplication`,
 link `OpenWave::Fonts`, and import `OpenWave.Fonts 1.0` in QML. Use
 `font.family: Fonts.family` or `font: Fonts.font(28, Font.Light)`.
 `Fonts.families` and `Fonts.styles(family)` expose Qt's live font catalog.
+For embedded web content, link `OpenWave::Web` and import `OpenWave.Web 1.0`.
+Call `WebRuntime::configureGraphics()` before creating Qt Quick windows, then
+`WebRuntime::initialize(&engine)` before loading QML. See
+[`userspace/web`](../web/README.md) for usage, private-session defaults, and
+a standalone SDK example. This module is separate from the desktop Settings portal.
 Pass `OpenWaveSDK_QML_IMPORT_PATH` as the `IMPORT_PATH` argument to
 `qt_add_qml_module` so QML tooling can resolve the installed module.
 
@@ -147,3 +153,9 @@ Pass `OpenWaveSDK_QML_IMPORT_PATH` as the `IMPORT_PATH` argument to
 permission API and Qt model. File Chooser grants remain the enforcement path;
 a permission check by itself conveys no ambient access. See
 [permissiond](../permissiond/README.md) for supported permissions and trust rules.
+
+`ApplicationsClient::createWebApp(name, url, callback)` installs an isolated
+website shortcut through appd. The operation is restricted to the authenticated
+leader of the installed Ocean Browser; other clients receive an authorization
+error. See [website apps](../webapp/README.md) for the native prompt workflow,
+bundle format, shared WPE host, and independent persistent website storage.

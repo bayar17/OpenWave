@@ -122,7 +122,7 @@ void appd_registry_scan(Manager *m)
         g_hash_table_add(found, g_strdup(next->id));
         g_hash_table_iter_steal(&candidates_iter); g_free(candidate_key);
         App *old = g_hash_table_lookup(m->apps, next->id);
-        if (old && appd_instance(m, old)) { app_free(next); continue; }
+        if (old && (old->removing || appd_instance(m, old))) { app_free(next); continue; }
         changed |= !old || g_strcmp0(old->name, next->name) || g_strcmp0(old->icon, next->icon)
             || !g_strv_equal((const char *const *)old->argv, (const char *const *)next->argv)
             || old->paths != next->paths || old->single != next->single || g_strcmp0(old->digest, next->digest);
@@ -136,7 +136,7 @@ void appd_registry_scan(Manager *m)
     GHashTableIter iter; gpointer key, value;
     g_hash_table_iter_init(&iter, m->apps);
     while (g_hash_table_iter_next(&iter, &key, &value))
-        if (!g_hash_table_contains(found, key) && !appd_instance(m, value)) {
+        if (!g_hash_table_contains(found, key) && !((App *)value)->removing && !appd_instance(m, value)) {
             appd_services_event(m, "ApplicationRemoved", value, NULL);
             g_hash_table_iter_remove(&iter); changed = TRUE;
         }
@@ -188,6 +188,7 @@ GVariant *appd_info(Manager *m, App *a, Instance *instance)
     g_variant_builder_add(&info, "{sv}", "error", g_variant_new_string(a->error));
     g_variant_builder_add(&info, "{sv}", "pid", g_variant_new_uint32(instance ? instance->pid : 0));
     g_variant_builder_add(&info, "{sv}", "trusted", g_variant_new_boolean(appd_trusted_app(a)));
+    g_variant_builder_add(&info, "{sv}", "canUninstall", g_variant_new_boolean(!a->removing && appd_is_webapp(a)));
     g_variant_builder_add(&info, "{sv}", "singleInstance", g_variant_new_boolean(a->single));
     return g_variant_builder_end(&info);
 }

@@ -17,6 +17,10 @@ public:
     void getApplicationInfo(const QString &appId, Completion completion);
     void getRunningApplications(Completion completion);
     void launch(const QString &appId, const QStringList &arguments, Completion completion);
+    void createWebApp(const QString &name, const QString &url, Completion completion);
+    void createWebApp(const QString &name, const QString &url, const QByteArray &icon, Completion completion);
+    void updateWebAppIcon(const QByteArray &icon, Completion completion);
+    void uninstallWebApp(const QString &appId, Completion completion);
     void activate(const QString &appId, Completion completion);
     void terminate(const QString &appId, Completion completion);
     void call(const QString &method, const QVariantList &arguments, Completion completion);

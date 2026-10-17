@@ -17,7 +17,14 @@ ApplicationWindow {
     property var applicationsBackend: null
     readonly property real contentScale: Math.min(width / 768, height / 1366)
     signal exitRequested(bool home)
-    onExitRequested: home => { if (settingsBackend) settingsBackend.closeApp(home) }
+    onExitRequested: home => {
+        if (settingsBackend) settingsBackend.closeApp(home)
+        else root.showMinimized()
+    }
+    Connections {
+        target: root.settingsBackend
+        function onHomeRequested() { root.showMinimized() }
+    }
 
     FontLoader { id: regularFont; source: "assets/fonts/Inter-Regular.otf" }
     FontLoader { source: "assets/fonts/Inter-Light.otf" }

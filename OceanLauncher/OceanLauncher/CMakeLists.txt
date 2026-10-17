@@ -14,7 +14,7 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/importedcontent/CMakeLists.txt")
     add_subdirectory(importedcontent)
 endif()
 
-qt_add_executable(appOceanLauncher main.cpp AppController.cpp AppController.h
+qt_add_executable(appOceanLauncher main.cpp AppController.cpp AppController.h PageEdgeColor.cpp PageEdgeColor.h
     PortalFileChooserBackend.cpp PortalFileChooserBackend.h
     ../OceanFiles/FilesBackend.cpp ../OceanFiles/FilesBackend.h
 )
@@ -38,6 +38,7 @@ qt_add_qml_module(appOceanLauncher
         RecentAppCard.qml
         RecentAppGrid.qml
         RecentAppTransition.qml
+        EdgeNavigationMenu.qml
         QuickMenu.qml
         QuickMenuTile.qml
         QuickMenuSlider.qml
@@ -49,6 +50,8 @@ qt_add_qml_module(appOceanLauncher
         assets/icons/Files.svg
         assets/icons/Settings.png
         assets/icons/Browser.svg
+        assets/navigation/back.svg
+        assets/navigation/home.svg
         assets/status/battery.svg
         assets/status/cellular.svg
         assets/status/wifi.svg

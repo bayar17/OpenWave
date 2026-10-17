@@ -1,5 +1,10 @@
 # OpenWave SDK and runtime filesystem
 
+Embedded web content is available through `OpenWave::Web` and the
+`OpenWave.Web 1.0` QML module, using the installed WPE WebKit engine. See
+[WebView usage and example](userspace/web/README.md). It is separate from the
+desktop Settings portal.
+
 Development and deployment are separate. The existing modified LLVM compiler and
 Qt 6.11.2 configuration are preserved. No application UI was redesigned.
 
@@ -201,6 +206,16 @@ lifecycle operations. The existing `OpenWaveApplications::launch()` API routes
 through the versioned system-bus service; Ocean retains visual handoffs and
 Wayland surfaces, while appd owns processes. See
 [appd architecture and security limitations](userspace/appd/README.md).
+
+### System navigation
+
+The Shell's right-edge navigation menu sends the standard `Qt.Key_Back` key to
+the foreground Wayland window. Qt Quick apps should handle it with a `Shortcut`
+and return through their existing navigation stack. The Home action backgrounds
+the current app through the Shell; it does not terminate the application.
+At the root of an app's navigation stack, call `Window.showMinimized()` rather
+than quitting. The compositor uses the same Home animation and retains the app
+in recent applications, including its current process and navigation state.
 
 ### Permissions
 

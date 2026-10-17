@@ -3,6 +3,9 @@
 OpenWave is a Linux phone operating system with the Ocean Qt Quick shell and
 system applications. The current target is `x86_64-unknown-openwave` in QEMU.
 
+Source search and pinned upstream references are set up with XERJ. See
+[reference coding](references/README.md) for searches, indexing, and Codex MCP setup.
+
 ## LLVM sources
 
 `llvm-project/` is an upstream Git submodule pinned to the base of the OpenWave
@@ -113,5 +116,8 @@ runtime staging, and rootfs separation.
 
 SELinux policy, boot configuration and recovery options are documented in
 [docs/SELINUX.md](docs/SELINUX.md).
+
+OpenWave's read-only [desktop settings portal](userspace/xdg-desktop-portal-openwave/README.md)
+exports system font and accessibility preferences through the XDG Settings API.
 
 Native application installation and migration: [application bundles](docs/APPLICATION-BUNDLES.md).

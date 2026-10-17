@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 import QtTest
 import ".." as Files
 
@@ -143,6 +144,7 @@ Item {
         function row(index) { return findChild(findChild(files, "filesList"), "filesRow_" + index) }
 
         function init() {
+            files.showNormal()
             files.menuOpen = false
             if (files.naming) files.back()
             files.namingAction = ""
@@ -544,6 +546,32 @@ Item {
             tryCompare(backend, "currentPath", backend.rootPath)
             tryCompare(files, "navigating", false)
             compare(backend.navigations, 2)
+        }
+
+        function test_system_back_key_returns_to_parent_folder() {
+            files.activateRow(0, true)
+            tryCompare(files, "navigating", false)
+            compare(backend.currentPath, backend.rootPath + "/folder-0")
+            files.requestActivate()
+            wait(30)
+            keyClick(Qt.Key_Back)
+            tryCompare(backend, "currentPath", backend.rootPath)
+            tryCompare(files, "navigating", false)
+            compare(backend.navigations, 2)
+        }
+
+        function test_root_back_minimizes_and_preserves_state() {
+            backend.searchQuery = "keep this search"
+            files.requestActivate()
+            wait(30)
+            try {
+                keyClick(Qt.Key_Back)
+                tryCompare(files, "visibility", Window.Minimized)
+                compare(backend.currentPath, backend.rootPath)
+                compare(backend.searchQuery, "keep this search")
+            } finally {
+                files.showNormal()
+            }
         }
 
         function test_file_activation_and_selection_do_not_navigate() {

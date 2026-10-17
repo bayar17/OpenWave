@@ -49,7 +49,7 @@ QString SettingsBackend::localHostname() const
 void SettingsBackend::closeApp(bool home)
 {
     Q_UNUSED(home);
-    QCoreApplication::quit();
+    emit homeRequested();
 }
 
 bool SettingsBackend::powerActionsAvailable() const

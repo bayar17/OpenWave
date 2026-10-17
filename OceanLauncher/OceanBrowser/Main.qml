@@ -18,6 +18,7 @@ ApplicationWindow {
     property bool settingsOpen: false
     property string initialUrl: ""
     property bool menuOpen: false
+    property bool moreMenu: false
     property bool menuClosingForTabs: false
     property bool webAvailable: false
     property var webView: null
@@ -145,7 +146,7 @@ ApplicationWindow {
         if (tab.view) return true
         try {
             const view = Qt.createQmlObject(
-                'import QtQuick; import org.wpewebkit.qtwpe 1.0; WPEView { property bool navigationLoading: false; userScripts: '
+                'import QtQuick; import OpenWave.Web 1.0; WebView { userScripts: '
                     + JSON.stringify([SearchCompatibility.imagePaintScript])
                     + '; anchors.fill: parent; zoomLevel: parent.width / parent.cssViewportWidth; visible: false; privateBrowsing: '
                     + (tab.privateTab ? 'true' : 'false') + ' }', webHost, "OceanWPEView")
@@ -170,9 +171,6 @@ ApplicationWindow {
             })
             view.titleChanged.connect(function() { tab.title = view.title; root.saveTabs() })
             view.loadingChanged.connect(function(request) {
-                if (request.status === 0) view.navigationLoading = true
-                else if (request.status === 1 || request.status === 2 || request.status === 3)
-                    view.navigationLoading = false
                 tab.error = request.status === 3 ? request.errorString || qsTr("Unable to load this page.") : ""
                 tab.failedUrl = request.status === 3 ? String(request.url || tab.url) : ""
                 if (root.tabs[root.activeTab] === tab) root.engineError = tab.error
@@ -316,10 +314,12 @@ ApplicationWindow {
         if (pageMode !== "web" || (webView && String(webView.url) !== "about:overview")) {
             navigate("about:overview"); return
         }
-        Qt.quit()
+        root.showMinimized()
     }
     function menuAction(label) {
         if (transitionBusy) return
+        if (label === "More") { moreMenu = true; return }
+        if (label === "Back") { moreMenu = false; return }
         // The menu reverses its opening scale before the page moves into its card.
         menuClosingForTabs = label === "Show all tabs" && !overviewOpen
         menuOpen = false
@@ -330,6 +330,12 @@ ApplicationWindow {
                 activateTab(appendTab(label === "New Private Tab", "about:overview"))
                 returnToPage(activeTab)
             } else captureThen(label === "New Private Tab" ? "private" : "new")
+        } else if (label === "Install as web app") {
+            if (webView) {
+                const address = String(webView.url)
+                const title = String(webView.title)
+                webView.runJavaScript(WebApps.iconScript, result => WebApps.install(address, title, String(result)))
+            }
         } else if (label === "History") {
             overviewOpen = false
             overviewProgress = 0
@@ -343,6 +349,7 @@ ApplicationWindow {
         }
     }
     function finishMenuClose() {
+        if (!menuOpen && menu.reveal === 0) moreMenu = false
         if (!menuClosingForTabs || menuOpen || menu.reveal !== 0) return
         menuClosingForTabs = false
         captureThen("overview")
@@ -641,7 +648,7 @@ ApplicationWindow {
                     TapHandler { onTapped: {
                         addressInput.focus = false
                         if (root.historyActive) historyContent.openMenu()
-                        else root.menuOpen = !root.menuOpen
+                        else { root.moreMenu = false; root.menuOpen = !root.menuOpen }
                     } }
                 }
             }
@@ -660,7 +667,7 @@ ApplicationWindow {
                     anchors.right: parent.right; anchors.rightMargin: 12
                     width: menuButton.width; height: parent.height
                     BrowserGlyph { anchors.centerIn: parent; width: 45; height: 45; kind: "menu" }
-                    TapHandler { onTapped: root.menuOpen = !root.menuOpen }
+                    TapHandler { onTapped: { root.moreMenu = false; root.menuOpen = !root.menuOpen } }
                 }
             }
 
@@ -701,22 +708,29 @@ ApplicationWindow {
                     anchors.left: parent.left; anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     Repeater {
-                        model: ["Show all tabs", "New Tab", "New Private Tab", "History", "Downloads", "Settings", "About"]
+                        model: root.moreMenu ? ["Back", "Install as web app"]
+                            : ["Show all tabs", "New Tab", "New Private Tab", "History", "Downloads", "Settings", "More", "About"]
                         delegate: Column {
                             id: menuRow
                             required property string modelData
+                            readonly property bool available: modelData !== "Install as web app"
+                                || (!root.overviewOpen && root.pageMode === "web" && root.webView
+                                    && !WebApps.busy && WebApps.canInstall(String(root.webView.url)))
                             width: menu.width
                             Item {
                                 width: parent.width; height: 70
                                 Text {
                                     anchors.fill: parent
+                                    anchors.leftMargin: 16; anchors.rightMargin: 16
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
                                     text: menuRow.modelData
                                     color: "white"; font.family: Fonts.family; font.pixelSize: 43
+                                    opacity: menuRow.available ? 1 : 0.4
+                                    fontSizeMode: Text.HorizontalFit; minimumPixelSize: 30
                                     font.preferTypoLineMetrics: true
                                 }
-                                TapHandler { onTapped: root.menuAction(menuRow.modelData) }
+                                TapHandler { enabled: menuRow.available; onTapped: root.menuAction(menuRow.modelData) }
                             }
                             Item {
                                 visible: menuRow.modelData === "New Private Tab"
@@ -752,6 +766,11 @@ ApplicationWindow {
         }
     }
 
+    Connections {
+        target: WebApps
+        function onCreated(appId, name) { root.downloadNotice = qsTr("Created %1").arg(name); downloadNoticeTimer.restart() }
+        function onErrorOccurred(message) { root.downloadNotice = message; downloadNoticeTimer.restart() }
+    }
     Connections {
         target: Downloads
         function onCompleted(filename) { root.downloadNotice = qsTr("Downloaded %1").arg(filename); downloadNoticeTimer.restart() }

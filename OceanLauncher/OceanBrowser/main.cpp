@@ -1,5 +1,6 @@
 #include <QGuiApplication>
 #include <OpenWave/FontManager.h>
+#include <OpenWave/WebRuntime.h>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QIcon>
@@ -7,10 +8,10 @@
 #include <QSGRendererInterface>
 #include <QTimer>
 #include <QDir>
-#include <glib.h>
 #include "BrowserData.h"
 #include "BrowserInput.h"
 #include "BrowserPreferences.h"
+#include "BrowserWebApps.h"
 #include "OceanHistoryManager.h"
 #include "OceanCookieManager.h"
 #include "OceanDownloadManager.h"
@@ -19,8 +20,7 @@
 
 int main(int argc, char *argv[])
 {
-    // WPEQtView shares an OpenGL scene graph with the Qt Quick chrome.
-    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+    OpenWave::WebRuntime::configureGraphics();
     QGuiApplication app(argc, argv);
     OpenWave::FontManager::initialize();
     QFont browserFont = QGuiApplication::font();
@@ -61,28 +61,23 @@ int main(int argc, char *argv[])
     qputenv("MESA_SHADER_CACHE_DIR", (browserData.dataPath() + QStringLiteral("/Cache/GPUCache")).toUtf8());
     WallpaperClient wallpaper;
     BrowserInput input;
+    BrowserWebApps webApps;
     QQmlApplicationEngine engine;
+    if (!OpenWave::WebRuntime::initialize(&engine)) return 1;
     engine.addImageProvider(QStringLiteral("browserpreviews"), previews);
     engine.rootContext()->setContextProperty(QStringLiteral("BrowserData"), &browserData);
     engine.rootContext()->setContextProperty(QStringLiteral("BrowserInput"), &input);
+    engine.rootContext()->setContextProperty(QStringLiteral("WebApps"), &webApps);
     engine.rootContext()->setContextProperty(QStringLiteral("BrowserPreferences"), &preferences);
     engine.rootContext()->setContextProperty(QStringLiteral("History"), &history);
     engine.rootContext()->setContextProperty(QStringLiteral("Cookies"), &cookies);
     engine.rootContext()->setContextProperty(QStringLiteral("Downloads"), &downloads);
     engine.rootContext()->setContextProperty(QStringLiteral("Wallpaper"), &wallpaper);
-    engine.addImportPath(QStringLiteral("/usr/lib64/qt6/qml"));
     const QStringList arguments = QCoreApplication::arguments();
     if (arguments.size() > 1)
         engine.setInitialProperties(QVariantMap{{QStringLiteral("initialUrl"), arguments.at(1)}});
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
                      &app, [] { QCoreApplication::exit(-1); }, Qt::QueuedConnection);
     engine.loadFromModule("OceanBrowser", "Main");
-    QTimer glibPump;
-    glibPump.setInterval(8);
-    QObject::connect(&glibPump, &QTimer::timeout, &app, [] {
-        for (int i = 0; i < 64 && g_main_context_pending(nullptr); ++i)
-            g_main_context_iteration(nullptr, FALSE);
-    });
-    glibPump.start();
     return app.exec();
 }

@@ -46,7 +46,7 @@ int main(void)
     g_signal_connect(m.bus, "closed", G_CALLBACK(closed), &m);
     appd_registry_scan(&m);
     if (!appd_register_bus(&m, &error)) goto failure;
-    appd_recover(&m); appd_registry_watch(&m);
+    appd_recover(&m); appd_recover_uninstalls(&m); appd_registry_watch(&m);
     appd_publish_preferences(&m); g_timeout_add(500, appd_publish_preferences, &m);
     char *ready = g_build_filename(m.state_dir, "ready", NULL);
     char *pid = g_strdup_printf("%d\n", getpid());

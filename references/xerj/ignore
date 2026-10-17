@@ -1,0 +1,17 @@
+**/po/
+**/translations/
+**/LICENSES/
+**/*.png
+**/*.jpg
+**/*.svg
+**/*.gif
+**/*.po
+**/*.ts
+**/*.json
+**/*.xml
+**/*.html
+**/*.desktop
+**/*.desktop.in
+**/*.conf
+**/*.yaml
+**/*.yml

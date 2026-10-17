@@ -16,9 +16,11 @@ add_subdirectory(timed)
 add_subdirectory(audiod)
 add_subdirectory(wallpaperagentd)
 add_subdirectory(openwave-portal)
+add_subdirectory(xdg-desktop-portal-openwave)
 add_subdirectory(promptd)
 add_subdirectory(appd)
 add_subdirectory(permissiond)
+add_subdirectory(webapp)
 
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../OceanLauncher/OceanLauncher"
                  "OceanLauncher")

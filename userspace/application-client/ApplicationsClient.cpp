@@ -44,6 +44,10 @@ QVariant decode(GVariant *value)
 }
 GVariant *encode(const QVariant &value)
 {
+    if (value.metaType().id() == QMetaType::QByteArray) {
+        const auto bytes = value.toByteArray();
+        return g_variant_new_fixed_array(G_VARIANT_TYPE_BYTE, bytes.constData(), bytes.size(), 1);
+    }
     if (value.metaType().id() == QMetaType::Bool) return g_variant_new_boolean(value.toBool());
     if (value.metaType().id() == QMetaType::QStringList) {
         GVariantBuilder array; g_variant_builder_init(&array, G_VARIANT_TYPE("as"));
@@ -74,7 +78,7 @@ struct ApplicationsClient::Transport {
         GVariant *arguments, QString *error) {
         GError *failure = nullptr;
         GVariant *reply = g_dbus_connection_call_sync(bus, destination, object, iface, method,
-            arguments, nullptr, G_DBUS_CALL_FLAGS_NONE, 2000, nullptr, &failure);
+            arguments, nullptr, G_DBUS_CALL_FLAGS_NONE, !strcmp(method, "UninstallWebApp") ? 120000 : 2000, nullptr, &failure);
         if (failure) { *error = QString::fromUtf8(failure->message); g_clear_error(&failure); }
         return reply;
     }
@@ -168,5 +172,9 @@ void ApplicationsClient::listApplications(Completion c) { call("ListApplications
 void ApplicationsClient::getApplicationInfo(const QString &id, Completion c) { call("GetApplicationInfo", {id}, std::move(c)); }
 void ApplicationsClient::getRunningApplications(Completion c) { call("GetRunningApplications", {}, std::move(c)); }
 void ApplicationsClient::launch(const QString &id, const QStringList &args, Completion c) { call("Launch", {id, args}, std::move(c)); }
+void ApplicationsClient::createWebApp(const QString &name, const QString &url, Completion c) { call("CreateWebApp", {name, url}, std::move(c)); }
+void ApplicationsClient::createWebApp(const QString &name, const QString &url, const QByteArray &icon, Completion c) { call("CreateWebAppWithIcon", {name, url, icon}, std::move(c)); }
+void ApplicationsClient::updateWebAppIcon(const QByteArray &icon, Completion c) { call("UpdateWebAppIcon", {icon}, std::move(c)); }
+void ApplicationsClient::uninstallWebApp(const QString &id, Completion c) { call("UninstallWebApp", {id}, std::move(c)); }
 void ApplicationsClient::activate(const QString &id, Completion c) { call("Activate", {id}, std::move(c)); }
 void ApplicationsClient::terminate(const QString &id, Completion c) { call("Terminate", {id}, std::move(c)); }

@@ -56,7 +56,7 @@ ApplicationWindow {
         if (selecting) { selecting = false; selected = ({}); return }
         if (searching) { searching = false; return }
         if (albumFilter.length) { albumFilter = ""; currentPage = "albums"; return }
-        Qt.quit()
+        root.showMinimized()
     }
     function toggleSelection(index) {
         const changed = Object.assign({}, selected)

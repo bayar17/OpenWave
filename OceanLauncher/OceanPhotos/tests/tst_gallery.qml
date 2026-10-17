@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 import QtTest
 import ".." as Photos
 
@@ -33,6 +34,7 @@ Item {
         name: "GalleryConcept"
         when: windowShown
         function init() {
+            gallery.showNormal()
             gallery.width = 768; gallery.height = 1366
             gallery.captureMode = true; gallery.reducedMotion = false
             gallery.zoom = 1; gallery.selectedIndex = 0
@@ -151,6 +153,25 @@ Item {
             gallery.step(1)
             compare(gallery.photo.title, "Mountain.jpg"); compare(gallery.zoom, 1)
             gallery.back(); compare(gallery.viewerOpen, false)
+        }
+        function test_systemBackKeyReturnsToGallery() {
+            gallery.openPhoto(0)
+            gallery.requestActivate()
+            wait(30)
+            keyClick(Qt.Key_Back)
+            tryCompare(gallery, "viewerOpen", false)
+        }
+        function test_rootBackMinimizesAndPreservesState() {
+            gallery.selectedIndex = 1
+            gallery.requestActivate()
+            wait(30)
+            try {
+                keyClick(Qt.Key_Back)
+                tryCompare(gallery, "visibility", Window.Minimized)
+                compare(gallery.selectedIndex, 1)
+            } finally {
+                gallery.showNormal()
+            }
         }
         function test_searchFiltersPhotosAndDates() {
             gallery.searching = true

@@ -1,9 +1,26 @@
 #include "ApplicationsBackend.h"
 #include <QCollator>
+#include <QPointer>
 #include <algorithm>
 
 ApplicationsBackend::ApplicationsBackend(QObject *parent) : QObject(parent)
 {
+    connect(&m_prompt, &OpenWavePromptClient::busyChanged, this, &ApplicationsBackend::changed);
+    connect(&m_prompt, &OpenWavePromptClient::errorOccurred, this, [this](const QString &error) { m_uninstallError = error; emit changed(); });
+    connect(&m_prompt, &OpenWavePromptClient::finished, this, [this](const QString &, const QString &result, const QString &) {
+        const QString id = m_pendingUninstall;
+        m_pendingUninstall.clear();
+        if (result != "accepted" || id.isEmpty()) return;
+        m_uninstalling = true; m_uninstallError.clear(); emit changed();
+        QPointer<ApplicationsBackend> guard(this);
+        m_client.uninstallWebApp(id, [guard, id](const QVariantList &, const QString &error) {
+            if (!guard) return;
+            guard->m_uninstalling = false;
+            guard->m_uninstallError = error;
+            emit guard->changed();
+            if (error.isEmpty()) { emit guard->uninstalled(id); guard->refresh(); }
+        });
+    });
     connect(&m_client, &ApplicationsClient::registryChanged, this, &ApplicationsBackend::refresh);
     connect(&m_client, &ApplicationsClient::serviceChanged, this, [this](bool) { refresh(); });
 }
@@ -23,4 +40,19 @@ void ApplicationsBackend::refresh()
         m_busy = false; emit changed();
         if (m_again) { m_again = false; refresh(); }
     });
+}
+
+void ApplicationsBackend::requestUninstall(const QString &id)
+{
+    if (uninstallBusy()) return;
+    for (const auto &entry : m_applications) {
+        const auto application = entry.toMap();
+        if (application.value("appId").toString() != id || !application.value("canUninstall").toBool()) continue;
+        m_pendingUninstall = id;
+        m_uninstallError.clear(); emit changed();
+        m_prompt.confirmation(tr("Uninstall %1?").arg(application.value("name").toString()),
+            tr("This will permanently remove the web app, cookies, website data, settings, and cache. Files saved in shared folders will be kept."),
+            {{"acceptLabel", tr("Uninstall")}, {"cancelLabel", tr("Cancel")}});
+        return;
+    }
 }

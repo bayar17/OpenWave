@@ -1,0 +1,20 @@
+[Unit]
+Description=OpenWave local XERJ source and reference search
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/xerj --insecure --bind 127.0.0.1 --port 9200 --embed-mode lexical --data-dir %h/.local/share/openwave-reference/node --disable-feedback
+Environment=XERJ_DISABLE_FEEDBACK=true
+Environment=XERJ_MAX_PROCESS_MEMORY_MB=3072
+Environment=RAYON_NUM_THREADS=2
+WorkingDirectory=%h/.local/share/openwave-reference
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+UMask=0077
+MemoryHigh=3G
+MemoryMax=4G
+
+[Install]
+WantedBy=default.target

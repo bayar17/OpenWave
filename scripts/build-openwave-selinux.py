@@ -13,6 +13,7 @@ DOMAINS = {
     'promptd': ('promptd', '/System/Services/promptd'),
     'permissiond': ('permissiond', '/System/Services/permissiond'),
     'portal': ('openwave-portal', '/System/Services/openwave-portal'),
+    'xdg_portal': ('xdg-desktop-portal-openwave', '/System/Services/xdg-desktop-portal-openwave'),
     'wallpaper': ('wallpaperagentd', '/System/Services/wallpaperagentd'),
     'time': ('timed', '/System/Services/timed'),
     'connectivity': ('connectivityd', '/System/Services/connectivityd'),

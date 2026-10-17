@@ -1,4 +1,5 @@
 #include "../BrowserInput.h"
+#include <OpenWave/WebRuntime.h>
 #include <QtTest>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -7,7 +8,6 @@
 #include <QJsonDocument>
 #include <QWheelEvent>
 #include <QFile>
-#include <glib.h>
 
 class InputTests : public QObject {
     Q_OBJECT
@@ -37,12 +37,12 @@ private:
 private slots:
     void initTestCase() {
         qputenv("OPENWAVE_BROWSER_TOUCH_EMULATION", "0");
-        engine.addImportPath("/usr/lib64/qt6/qml");
+        QVERIFY(OpenWave::WebRuntime::initialize(&engine));
         engine.rootContext()->setContextProperty("BrowserInput", &input);
         engine.loadData(R"QML(
 import QtQuick
 import QtQuick.Window
-import org.wpewebkit.qtwpe 1.0
+import OpenWave.Web 1.0
 Window {
     id: root
     width: 544; height: 900; visible: true; color: "white"
@@ -53,7 +53,7 @@ Window {
         page.runJavaScript("JSON.stringify(eval(" + JSON.stringify(script) + "))",
             function(value) { root.result = JSON.parse(value); root.serial++ })
     }
-    WPEView {
+    WebView {
         id: page; objectName: "page"; anchors.fill: parent; privateBrowsing: true
         zoomLevel: width / 500
         onWebViewCreated: {
@@ -71,7 +71,7 @@ Window {
                 document.addEventListener('wheel',e=>window.lastWheel={delta:e.deltaY,x:e.clientX,y:e.clientY},{passive:true});
                 document.addEventListener('touchcancel',()=>window.cancels++,{passive:true});</script></body></html>`)
         }
-        onLoadingChanged: function(request) { root.loaded = request.status === WPEView.LoadSucceededStatus }
+        onLoadFinished: function(success) { root.loaded = success }
     }
 }
 )QML");
@@ -191,15 +191,9 @@ Window {
 };
 
 int main(int argc, char **argv) {
-    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+    OpenWave::WebRuntime::configureGraphics();
     QGuiApplication app(argc, argv);
     QGuiApplication::setDesktopFileName(QStringLiteral("browser-input-test"));
-    QTimer pump;
-    QObject::connect(&pump, &QTimer::timeout, &app, [] {
-        for (int i = 0; i < 64 && g_main_context_pending(nullptr); ++i)
-            g_main_context_iteration(nullptr, FALSE);
-    });
-    pump.start(8);
     InputTests tests;
     const int result = QTest::qExec(&tests, argc, argv);
     QFile report(qEnvironmentVariable("HOME") + QStringLiteral("/Data/input-result"));

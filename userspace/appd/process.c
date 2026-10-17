@@ -372,6 +372,7 @@ gboolean appd_launch(Manager *m, App *app, char **arguments, GError **error)
     gboolean ready = m->ready && !m->quitting && lstat(socket, &st) == 0 && S_ISSOCK(st.st_mode) && st.st_uid == m->uid;
     g_free(socket);
     if (!ready) { g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_BUSY, "The Wayland session is not ready"); return FALSE; }
+    if (app->removing || appd_webapp_pending(app)) { g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_BUSY, "Application is being uninstalled"); return FALSE; }
     Instance *existing = appd_instance(m, app);
     if (existing && existing->stopping) { g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_BUSY, "Application is stopping"); return FALSE; }
     if (existing && app->single) { appd_activate(m, existing, arguments); return TRUE; }

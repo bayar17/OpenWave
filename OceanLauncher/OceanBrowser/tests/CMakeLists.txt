@@ -30,6 +30,7 @@ set_tests_properties(browser-data browser-history address-loading PROPERTIES ENV
 
 # Native WPE integration is tested against OpenWave's own runtime in QEMU.
 if(CMAKE_CROSSCOMPILING)
+    find_package(OpenWaveSDK REQUIRED COMPONENTS Web)
     add_executable(browser-input-tests tst_input.cpp ../BrowserInput.cpp ../BrowserInput.h)
     target_include_directories(browser-input-tests PRIVATE
         "${CMAKE_SYSROOT}/usr/include/libsoup-3.0"
@@ -38,7 +39,7 @@ if(CMAKE_CROSSCOMPILING)
         "${CMAKE_SYSROOT}/usr/include/wpe-webkit-2.0"
         "${CMAKE_SYSROOT}/usr/include/wpe-webkit-2.0/wpe-platform")
     target_link_libraries(browser-input-tests PRIVATE Qt6::Quick Qt6::Test
-        gio-2.0 gobject-2.0 glib-2.0 WPEWebKit-2.0)
+        OpenWave::Web gio-2.0 gobject-2.0 glib-2.0 WPEWebKit-2.0)
     set_target_properties(browser-input-tests PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE
         INSTALL_RPATH "/usr/lib;/usr/lib64")
     add_test(NAME browser-input COMMAND browser-input-tests)

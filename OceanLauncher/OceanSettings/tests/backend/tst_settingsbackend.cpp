@@ -49,6 +49,11 @@ int main(int argc, char **argv)
         CHECK(reloaded.saveDeviceName(QString::fromUtf8("Çağrı’s Phone")));
     }
     SettingsBackend again(path);
+    int homeRequests = 0;
+    QObject::connect(&again, &SettingsBackend::homeRequested, [&] { ++homeRequests; });
+    again.closeApp(false);
+    again.closeApp(true);
+    CHECK(homeRequests == 2);
     CHECK(!again.reduceMotion());
     CHECK(again.largeText());
     CHECK(again.deviceName() == QString::fromUtf8("Çağrı’s Phone"));

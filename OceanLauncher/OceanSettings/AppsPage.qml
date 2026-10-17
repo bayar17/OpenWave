@@ -22,13 +22,21 @@ Item {
     function back() {
         if (!depth) return false
         if (prompts && prompts.busy) { prompts.cancel(); return true }
+        if (backend) backend.cancelUninstallPrompt()
         depth--
         return true
     }
     onVisibleChanged: {
         if (visible && backend) backend.refresh()
         if (visible && permissions) permissions.refreshApplications()
-        if (!visible) { if (prompts && prompts.busy && depth === 2) prompts.cancel(); depth = 0; selectedApplication = ({}) }
+        if (!visible) { if (backend) backend.cancelUninstallPrompt(); if (prompts && prompts.busy && depth === 2) prompts.cancel(); depth = 0; selectedApplication = ({}) }
+    }
+    Connections {
+        target: page.backend
+        function onUninstalled(appId) {
+            if (page.applicationId === appId) { page.depth = 0; page.selectedApplication = ({}) }
+            if (page.permissions) page.permissions.refreshApplications()
+        }
     }
     Flickable {
         objectName: "settingsAppsList"
@@ -112,6 +120,22 @@ Item {
                     : qsTr("No permissions requested")
                 largeText: page.largeText
                 onClicked: { page.depth = 2; if (page.permissions) page.permissions.refreshApplications() }
+            }
+            SettingsRow {
+                objectName: "settingsAppUninstall"
+                visible: !!page.selectedApplication.canUninstall
+                enabled: !!page.backend && !page.backend.uninstallBusy
+                heading: page.backend && page.backend.uninstallBusy ? qsTr("Uninstalling…") : qsTr("Uninstall")
+                detail: qsTr("Remove this web app and its saved website data")
+                largeText: page.largeText
+                onClicked: page.backend.requestUninstall(page.applicationId)
+            }
+            Text {
+                width: parent.width; wrapMode: Text.Wrap; color: "#ffd1d1"; font.family: "Inter"
+                font.pixelSize: page.largeText ? 30 : 25
+                visible: !!page.backend && page.backend.error.length > 0
+                text: page.backend ? page.backend.error : ""
+                textFormat: Text.PlainText
             }
         }
     }

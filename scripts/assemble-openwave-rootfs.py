@@ -28,8 +28,8 @@ SHARE = {'X11', 'alsa', 'alsa-card-profile', 'applications', 'avahi', 'dbus-1',
          'drirc.d', 'fontconfig', 'fonts', 'glib-2.0', 'gst-plugins-base',
          'gstreamer-1.0', 'icu', 'libdrm', 'licenses', 'locale', 'ocean-browser',
          'pipewire', 'pixmaps', 'spa-0.2', 'wireplumber', 'wpe-webkit-2.0',
-         'xkeyboard-config-2', 'xml', 'zoneinfo'}
-QML = {'OpenWave/Fonts', 'QML', 'QtQml', 'QtQml/Models', 'QtQml/WorkerScript', 'QtQuick',
+         'xkeyboard-config-2', 'xml', 'zoneinfo', 'xdg-desktop-portal'}
+QML = {'OpenWave/Fonts', 'OpenWave/Web', 'QML', 'QtQml', 'QtQml/Models', 'QtQml/WorkerScript', 'QtQuick',
        'QtQuick/Window', 'QtQuick/Controls', 'QtQuick/Controls/impl',
        'QtQuick/Controls/Basic', 'QtQuick/Controls/Basic/impl',
        'QtQuick/Controls/Fusion', 'QtQuick/Controls/Fusion/impl',
@@ -51,7 +51,7 @@ DEVEL_EXT = {'.a', '.o', '.la', '.prl', '.pc', '.cmake', '.h', '.hpp', '.qmltype
 
 
 LEGACY_APPS = {'ocean-launcher', 'ocean-browser', 'ocean-files', 'ocean-settings', 'openwave-shell'}
-SERVICES = {'appd', 'permissiond', 'promptd', 'openwave-portal', 'wallpaperagentd', 'timed', 'connectivityd', 'audiod'}
+SERVICES = {'appd', 'permissiond', 'promptd', 'openwave-portal', 'wallpaperagentd', 'timed', 'connectivityd', 'audiod', 'xdg-desktop-portal-openwave'}
 BUNDLES = {'com.openwave.shell': 'ocean-launcher', 'com.openwave.ocean': 'ocean',
            'com.openwave.files': 'ocean-files', 'com.openwave.settings': 'ocean-settings',
            'com.openwave.photos': 'ocean-photos'}

@@ -84,6 +84,43 @@ install(DIRECTORY "${clients}/fonts/assets/"
     FILES_MATCHING PATTERN "*.otf")
 install(FILES "${clients}/fonts/assets/OFL.txt"
     DESTINATION "sysroot/${OPENWAVE_TARGET_TRIPLE}/usr/share/licenses/SourceSansPro")
+set(openwave_has_wpe OFF)
+if(EXISTS "${CMAKE_SYSROOT}/usr/lib64/qt6/qml/org/wpewebkit/qtwpe/libqtwpe.so")
+    set(openwave_has_wpe ON)
+endif()
+option(OPENWAVE_BUILD_WEB "Build the WPE-backed Qt Quick WebView" ${openwave_has_wpe})
+if(OPENWAVE_BUILD_WEB)
+    if(NOT openwave_has_wpe)
+        message(FATAL_ERROR "OpenWave Web requires the target WPE Qt Quick plugin; build browser dependencies first")
+    endif()
+    find_package(Qt6 6.10 REQUIRED COMPONENTS Quick)
+    openwave_client(Web openwave-web
+        "${clients}/web/WebRuntime.cpp" "${clients}/web/WebRuntime.h"
+        "${clients}/web/WebInput.cpp" "${clients}/web/WebInput.h"
+        "${clients}/web/WebsiteIconFetcher.cpp" "${clients}/web/WebsiteIconFetcher.h")
+    openwave_bus(openwave-web)
+    target_include_directories(openwave-web PUBLIC "$<BUILD_INTERFACE:${clients}/web>")
+    target_include_directories(openwave-web PRIVATE
+        "${CMAKE_SYSROOT}/usr/include/wpe-webkit-2.0"
+        "${CMAKE_SYSROOT}/usr/include/wpe-webkit-2.0/wpe-platform"
+        "${CMAKE_SYSROOT}/usr/include/libsoup-3.0")
+    target_link_libraries(openwave-web PUBLIC Qt6::Quick Qt6::Network PRIVATE WPEWebKit-2.0)
+    set_source_files_properties("${clients}/web/WebView.qml" PROPERTIES QT_RESOURCE_ALIAS WebView.qml)
+    qt_add_qml_module(openwave-web
+        URI OpenWave.Web VERSION 1.0
+        OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/qml/OpenWave/Web"
+        IMPORT_PATH "${CMAKE_SYSROOT}/usr/lib64/qt6/qml"
+        QML_FILES "${clients}/web/WebView.qml")
+    set(web_qmldir "sysroot/${OPENWAVE_TARGET_TRIPLE}/usr/qml/OpenWave/Web")
+    set_target_properties(openwave-webplugin PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE
+        INSTALL_RPATH "$ORIGIN/../../../lib64;$ORIGIN/../../../lib")
+    install(TARGETS openwave-webplugin LIBRARY DESTINATION "${web_qmldir}")
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/qml/OpenWave/Web/qmldir"
+        "${CMAKE_CURRENT_BINARY_DIR}/qml/OpenWave/Web/openwave-web.qmltypes"
+        "${clients}/web/WebView.qml"
+        DESTINATION "${web_qmldir}")
+    install(FILES "${clients}/web/WebRuntime.h" "${clients}/web/WebInput.h" "${clients}/web/WebsiteIconFetcher.h" DESTINATION include/OpenWave)
+endif()
 openwave_client(Prompts openwave-prompts
     "${clients}/prompt-client/OpenWavePromptClient.cpp"
     "${clients}/prompt-client/OpenWavePromptClient.h"

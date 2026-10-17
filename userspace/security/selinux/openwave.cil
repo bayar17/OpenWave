@@ -32,7 +32,7 @@
 (type openwave_sysfs_t)
 (type openwave_cgroup_t)
 (typeattribute openwave_system_domain)
-(typeattributeset openwave_system_domain (openwave_system_t openwave_appd_t openwave_promptd_t openwave_permissiond_t openwave_portal_t openwave_wallpaper_t openwave_time_t openwave_connectivity_t openwave_audio_t openwave_shell_t openwave_settings_t openwave_files_t))
+(typeattributeset openwave_system_domain (openwave_system_t openwave_appd_t openwave_promptd_t openwave_permissiond_t openwave_portal_t openwave_xdg_portal_t openwave_wallpaper_t openwave_time_t openwave_connectivity_t openwave_audio_t openwave_shell_t openwave_settings_t openwave_files_t))
 (policycap open_perms)
 (policycap extended_socket_class)
 (policycap nnp_nosuid_transition)

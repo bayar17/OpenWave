@@ -62,7 +62,7 @@ ApplicationWindow {
             navigateTo("", true)
             return
         }
-        Qt.quit()
+        root.showMinimized()
     }
     onReduceMotionChanged: {
         if (reduceMotion && navigating) {

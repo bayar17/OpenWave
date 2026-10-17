@@ -45,6 +45,32 @@ static void method(GDBusConnection *connection, const char *sender, const char *
         failure(call, "Application session credentials are required"); return;
     }
     Instance *caller = appd_caller(m, uid, pid);
+    if (!strcmp(member, "UninstallWebApp")) {
+        const char *id; g_variant_get(parameters, "(&s)", &id);
+        appd_uninstall_webapp(m, caller, pid, id, call); return;
+    }
+    if (!strcmp(member, "UpdateWebAppIcon")) {
+        GVariant *bytes; gsize size; GError *error = NULL;
+        g_variant_get(parameters, "(@ay)", &bytes);
+        const guint8 *icon = g_variant_get_fixed_array(bytes, &size, 1);
+        if (appd_update_webapp_icon(m, caller, pid, icon, size, &error))
+            g_dbus_method_invocation_return_value(call, NULL);
+        else { failure(call, error ? error->message : "Could not update website icon"); g_clear_error(&error); }
+        g_variant_unref(bytes); return;
+    }
+    if (!strcmp(member, "CreateWebApp") || !strcmp(member, "CreateWebAppWithIcon")) {
+        const char *name, *url; GError *error = NULL;
+        GVariant *bytes = NULL; gsize size = 0; const guint8 *icon = NULL;
+        if (!strcmp(member, "CreateWebAppWithIcon")) {
+            g_variant_get(parameters, "(&s&s@ay)", &name, &url, &bytes);
+            icon = g_variant_get_fixed_array(bytes, &size, 1);
+        } else g_variant_get(parameters, "(&s&s)", &name, &url);
+        char *id = appd_create_webapp(m, caller, pid, name, url, icon, size, &error);
+        if (bytes) g_variant_unref(bytes);
+        if (id) { g_dbus_method_invocation_return_value(call, g_variant_new("(s)", id)); g_free(id); }
+        else { failure(call, error ? error->message : "Could not create web app"); g_clear_error(&error); }
+        return;
+    }
     gboolean privileged = openwave_supervised_process(uid, pid, "/run/openwave/ocean.pid")
         || openwave_supervised_process(uid, pid, "/run/openwave/permissiond.pid");
     if (!strcmp(member, "ResolveCaller") || !strcmp(member, "ResolveProcess") || !strcmp(member, "GetOwnIdentity")) {
