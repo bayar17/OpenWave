@@ -36,6 +36,7 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../OceanLauncher/OceanPhotos"
 install(FILES config/kms.json DESTINATION /etc/openwave)
 install(FILES config/machine-info DESTINATION /etc)
 install(FILES config/avahi-daemon.conf DESTINATION /etc/avahi)
+install(FILES config/99-openwave-pipewire.conf DESTINATION /etc/alsa/conf.d)
 install(FILES config/10-openwave-wireplumber.conf
         DESTINATION /etc/wireplumber/wireplumber.conf.d)
 install(FILES config/openwave-session-bus.conf

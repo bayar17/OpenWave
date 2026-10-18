@@ -40,6 +40,9 @@ website storage in its application data directory under `Data/WebKit`, with
 caches under `Cache/WebKit`. Existing OpenWave data resolvers determine the user
 and application paths. Browser cookies, history, and permissions are not imported.
 Website content loads from the saved network address.
+The private `Cache/WebKit/Media` directory is created before WPE starts so
+GStreamer can buffer streaming media. ALSA playback uses the system PipeWire
+configuration and appd's playback socket without exposing sound hardware.
 
 The Browser remains isolated. `ApplicationsClient::createWebApp(name, url, callback)`
 calls `org.openwave.Applications1.CreateWebApp`. The overload with PNG bytes uses
@@ -73,6 +76,25 @@ installation, chosen name and URL, registry updates, actual WPE rendering,
 Browser storage separation, persistent cookies/local storage, SELinux domain,
 and recovery after appd restarts. It shuts down the test VM after reporting.
 Use it only in a disposable test image with the normal OpenWave init as PID 1.
+
+To test media output, generate a three-second Opus fixture on the development host:
+
+```sh
+gst-launch-1.0 -q audiotestsrc num-buffers=150 samplesperbuffer=960 freq=880 volume=0.2 ! 'audio/x-raw,rate=48000,channels=1' ! opusenc ! webmmux ! filesink location=tone.webm
+```
+
+Copy the fixture and runtime test into a disposable image. Run the test with
+`--audio --audio-fixture /path/to/tone.webm`. After `WEBAPP_QA_APPEARANCE_READY`,
+press **Play media** and **Play stream**, allowing each tone to finish. These test
+PCM HTML media and compressed Opus through MediaSource respectively. Capture
+output using QEMU `-audiodev wav,id=qa-audio,path=playback.wav` and
+`-device virtio-sound-pci,audiodev=qa-audio`, then run
+`python3 userspace/webapp/tests/check_audio.py playback.wav` after shutdown.
+The check requires both frequencies in the output; JavaScript completion alone
+is insufficient. The runtime test also checks that the sandbox has no `/dev/snd`.
+
+Known limitation: synthesized Web Audio still has a separate clocksync/ALSA
+timing problem. This media fix does not change WebKit's Web Audio pipeline.
 
 The runtime design was informed by KDE/Angelfish commit
 `2a82873b85f8b608c3b4c8cbe6244e9bc1396027`, particularly

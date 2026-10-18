@@ -16,6 +16,8 @@
 #include <QTimer>
 #include <QSaveFile>
 #include <QUrlQuery>
+#include <QtEndian>
+#include <cmath>
 #include <csignal>
 #include <unistd.h>
 
@@ -52,8 +54,16 @@ bool waitFor(const std::function<bool()> &condition, int timeout = 15000) {
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
+    const bool testAudio = app.arguments().contains("--audio");
+    const auto fixtureOption = app.arguments().indexOf("--audio-fixture");
+    const QByteArray streamFixture = fixtureOption >= 0 ? read(app.arguments().value(fixtureOption + 1)) : QByteArray();
+    if (testAudio && !streamFixture.startsWith(QByteArray::fromHex("1a45dfa3"))) {
+        QTextStream(stderr) << "--audio requires --audio-fixture with the generated Opus WebM fixture" << Qt::endl;
+        return 2;
+    }
     QTcpServer server;
     QVector<QUrlQuery> reports;
+    QVector<QUrlQuery> audioReports;
     if (!server.listen(QHostAddress::LocalHost, 18081)) return 1;
     QObject::connect(&server, &QTcpServer::newConnection, &app, [&] {
         while (auto *socket = server.nextPendingConnection()) {
@@ -72,6 +82,27 @@ int main(int argc, char **argv)
                     QBuffer buffer(&body); buffer.open(QIODevice::WriteOnly); image.save(&buffer, "PNG"); type = "image/png";
                 } else if (url.path() == "/site.webmanifest") {
                     body = R"({"icons":[{"src":"large.png","sizes":"512x512"}]})"; type = "application/manifest+json";
+                } else if (url.path() == "/tone.wav") {
+                    constexpr int rate = 48000, samples = rate * 3, bytes = samples * 2;
+                    body = QByteArray("RIFF\0\0\0\0WAVEfmt \x10\0\0\0\1\0\1\0", 24);
+                    const auto append32 = [&](quint32 value) {
+                        char data[4]; qToLittleEndian(value, data); body.append(data, 4);
+                    };
+                    append32(rate); append32(rate * 2);
+                    body.append(QByteArray("\2\0\x10\0data", 8)); append32(bytes);
+                    for (int n = 0; n < samples; ++n) {
+                        char data[2];
+                        qToLittleEndian(qint16(6000 * std::sin(n * 2 * 3.141592653589793 * 440 / rate)), data);
+                        body.append(data, 2);
+                    }
+                    qToLittleEndian(quint32(body.size() - 8), body.data() + 4);
+                    type = "audio/wav";
+                } else if (url.path() == "/tone.webm") {
+                    body = streamFixture; type = "audio/webm";
+                } else if (url.path() == "/audio-report") {
+                    audioReports.append(QUrlQuery(url));
+                    QTextStream(stdout) << "WEBAPP_QA_AUDIO " << url.toString() << Qt::endl;
+                    body = "OK";
                 } else
                 if (url.path() == "/report") {
                     reports.append(QUrlQuery(url));
@@ -83,7 +114,30 @@ int main(int argc, char **argv)
 </head><body style="margin:0;font:24px sans-serif;background:white;color:#202124">
 <header style="height:80px;padding:16px;box-sizing:border-box">Website header</header>
 <button style="margin:24px;font-size:24px" onclick="document.body.style.background='#18212b';document.body.style.color='white'">Change background</button>
-<h1 style="margin:24px">Web app fixture</h1><p>WPE WebKit and persistent application storage.</p><script>
+<h1 style="margin:24px">Web app fixture</h1><p>WPE WebKit and persistent application storage.</p>
+<button style="position:absolute;left:24px;top:400px;width:160px;height:50px" onclick="playMedia()">Play media</button>
+<button style="position:absolute;left:220px;top:400px;width:160px;height:50px" onclick="playStream()">Play stream</button><script>
+const reportAudio=(kind,status)=>fetch('/audio-report?kind='+kind+'&status='+encodeURIComponent(status));
+let media,stream,source;
+async function playMedia(){try{
+media=new Audio('/tone.wav');
+media.onended=()=>reportAudio('media','ended');
+media.onerror=()=>reportAudio('media','error:'+media.error.code);
+await media.play();
+}catch(e){reportAudio('media',e.name);}}
+async function playStream(){try{
+stream=new Audio();source=new MediaSource();
+stream.src=URL.createObjectURL(source);
+stream.onended=()=>reportAudio('stream','ended');
+stream.onerror=()=>reportAudio('stream','error:'+stream.error.code);
+source.addEventListener('sourceopen',async()=>{try{
+const buffer=source.addSourceBuffer('audio/webm; codecs="opus"');
+buffer.addEventListener('error',()=>reportAudio('stream','buffer-error'));
+buffer.addEventListener('updateend',()=>source.endOfStream(),{once:true});
+buffer.appendBuffer(await(await fetch('/tone.webm')).arrayBuffer());
+}catch(e){reportAudio('stream',e.name);}} ,{once:true});
+await stream.play();
+}catch(e){reportAudio('stream',e.name);}}
 fetch('/report?stored='+encodeURIComponent(localStorage.getItem('ow-webapp-qa'))+'&cookie='+encodeURIComponent(document.cookie)+'&width='+innerWidth+'&height='+innerHeight)
 .then(()=>{localStorage.setItem('ow-webapp-qa','saved');document.cookie='ow_webapp=present;max-age=3600;path=/';});
 </script></body></html>)HTML";
@@ -141,8 +195,25 @@ fetch('/report?stored='+encodeURIComponent(localStorage.getItem('ow-webapp-qa'))
         const auto pid = running.value("pid").toUInt();
         const auto context = read(QString("/proc/%1/attr/current").arg(pid));
         check(context.contains(":openwave_app_t:"), "web app uses untrusted application SELinux domain");
+        check(!QFileInfo::exists(QString("/proc/%1/root/dev/snd").arg(pid)),
+            "web app has no direct sound hardware access");
+        check(QFileInfo("/Data/Users/root/.DataLocation/Applications/" + id + "/Cache/WebKit/Media").isDir(),
+            "private streaming media cache exists before playback");
         QTextStream(stdout) << "WEBAPP_QA_APPEARANCE_READY" << Qt::endl;
-        delay(14000);
+        if (testAudio) waitFor([&] { return audioReports.size() >= 2; }, 90000);
+        else delay(14000);
+        if (testAudio) {
+            for (const auto &kind : {QStringLiteral("media"), QStringLiteral("stream")}) {
+                bool ended = false, failed = false;
+                for (const auto &report : audioReports) {
+                    if (report.queryItemValue("kind") != kind) continue;
+                    ended |= report.queryItemValue("status") == "ended";
+                    failed |= report.queryItemValue("status") != "ended";
+                }
+                check(ended && !failed, kind + " finishes playback without errors");
+            }
+            delay(14000);
+        }
         rpc(client, "Terminate", {id});
         check(waitFor([&] { return info(client, id).value("state").toString() == "Stopped"; }), "web app stops normally");
         const int previous = reports.size();

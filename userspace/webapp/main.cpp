@@ -34,7 +34,7 @@ int main(int argc, char **argv)
         || QFileInfo(data).ownerId() != geteuid()) return 1;
     const QString profile = data + "/Data/WebKit";
     const QString cache = data + "/Cache/WebKit";
-    for (const QString &directory : {profile, profile + "/cookies", cache, cache + "/cache", cache + "/cache/HTTP"}) {
+    for (const QString &directory : {profile, profile + "/cookies", cache, cache + "/cache", cache + "/cache/HTTP", cache + "/Media"}) {
         if (QFileInfo(directory).isSymLink() || !QDir().mkpath(directory)
             || !QFile::setPermissions(directory, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner)) return 1;
     }

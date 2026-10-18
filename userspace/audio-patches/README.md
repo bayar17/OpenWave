@@ -16,3 +16,9 @@ appd publishes the playback socket only with the matching patched library.
 Rebuild the audio stack and restart OpenWave when updating an older SDK/runtime.
 `build-openwave test-permissions` validates playback and denial using virtual
 devices in a separate QEMU test image.
+
+`/etc/alsa/conf.d/99-openwave-pipewire.conf` activates the installed PipeWire
+ALSA configuration. ALSA playback connects to appd's existing playback socket;
+isolated applications do not need access to `/dev/snd`. Capture remains denied
+by the existing server policy. The configuration reuses PipeWire's installed
+ALSA definitions from commit `fd60e04525f3a04d90bf50085222e0cc9139b4a4`.
