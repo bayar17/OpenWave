@@ -185,25 +185,29 @@ Item {
             font.pixelSize: 17
         }
 
-        Item {
+        Button {
             id: resetAction
             objectName: "waterRougeRestoreDefaults"
-            width: 165; height: 42
+            width: 175; height: 45
             anchors.right: parent.right
             anchors.rightMargin: 21
             y: 95
-
-            Text {
-                anchors.centerIn: parent
+            z: 15
+            onClicked: editor.restoreDefaults()
+            Accessible.name: qsTr("Restore default Quick Menu layout")
+            background: Rectangle {
+                radius: 18
+                color: resetAction.down ? "#4BDAA8B0" : "transparent"
+            }
+            contentItem: Text {
                 text: qsTr("Restore Defaults")
                 color: "#F1A9AF"
                 font.family: editor.fontFamily
                 font.pixelSize: 17
                 font.weight: Font.Normal
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
             }
-            TapHandler { onTapped: editor.restoreDefaults() }
-            Accessible.role: Accessible.Button
-            Accessible.name: qsTr("Restore default Quick Menu layout")
         }
 
         Rectangle {
@@ -399,50 +403,62 @@ Item {
             color: "#446B929D"
         }
 
-        Item {
+        // The action footer sits outside the clipped ListView, and above it in
+        // stacking order. AbstractButton owns the entire pointer/keyboard hit
+        // target; a decorative Rectangle with TapHandler was too fragile when
+        // composed under other pointer-handling Quick Menu items.
+        Button {
             id: cancelButton
             objectName: "waterRougeCancel"
             x: 29
             y: panel.height - 80
             width: 140; height: 58
-            Text {
-                anchors.centerIn: parent
+            z: 30
+            onClicked: editor.cancel()
+            Accessible.name: qsTr("Cancel customization")
+            background: Rectangle {
+                radius: 20
+                color: cancelButton.down ? "#304DC0CF" : "transparent"
+            }
+            contentItem: Text {
                 text: qsTr("Cancel")
                 color: "#C7D8DF"
                 font.family: editor.fontFamily
                 font.pixelSize: 21
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
             }
-            TapHandler { onTapped: editor.cancel() }
-            Accessible.role: Accessible.Button
-            Accessible.name: qsTr("Cancel customization")
         }
 
-        Rectangle {
+        Button {
             id: doneButton
             objectName: "waterRougeDone"
             width: 190; height: 55
             x: panel.width - width - 24
             y: panel.height - 77
-            radius: 27.5
-            gradient: Gradient {
-                orientation: Gradient.Horizontal
-                GradientStop { position: 0.0; color: "#4ED8E7" }
-                GradientStop { position: 1.0; color: "#72DBD8" }
+            z: 31
+            enabled: editor.editing
+            onClicked: editor.accept()
+            Accessible.name: qsTr("Save control arrangement")
+            background: Rectangle {
+                radius: 27.5
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0.0; color: doneButton.down ? "#2DB2C6" : "#4ED8E7" }
+                    GradientStop { position: 1.0; color: doneButton.down ? "#53B7B9" : "#72DBD8" }
+                }
+                border.color: "#A6EFFFF4"
+                border.width: 1
             }
-            border.color: "#A6EFFFF4"
-            border.width: 1
-
-            Text {
-                anchors.centerIn: parent
+            contentItem: Text {
                 text: qsTr("Done")
                 color: "#173642"
                 font.family: editor.fontFamily
                 font.pixelSize: 22
                 font.weight: Font.Medium
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
             }
-            TapHandler { onTapped: editor.accept() }
-            Accessible.role: Accessible.Button
-            Accessible.name: qsTr("Save control arrangement")
         }
     }
 }
