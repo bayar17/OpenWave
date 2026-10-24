@@ -42,6 +42,7 @@ qt_add_qml_module(appOceanLauncher
         QuickMenu.qml
         QuickMenuTile.qml
         QuickMenuSlider.qml
+        WaterRougeQuickMenuEditor.qml
         PortalFileChooser.qml
         PromptDialog.qml
         PromptDropdown.qml
