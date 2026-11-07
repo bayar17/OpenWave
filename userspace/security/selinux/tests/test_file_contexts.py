@@ -76,7 +76,7 @@ class FileContexts(unittest.TestCase):
 
     def test_existing_native_boundaries(self):
         mapping = {
-            "/System/Applications/com.openwave.shell/bin/ocean-launcher": "openwave_app_exec_t",
+            "/System/Applications/com.openwave.shell/bin/ocean-launcher": "openwave_shell_exec_t" if os.environ.get("OPENWAVE_FILE_CONTEXTS") else "openwave_app_exec_t",
             "/Applications/com.example.app/bin/example": "openwave_app_exec_t",
             "/Data/Users/test/.DataLocation/Applications/com.example.app/data": "openwave_app_data_t",
             "/etc/selinux/openwave/policy/policy.35": "openwave_private_t",
