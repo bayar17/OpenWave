@@ -71,9 +71,13 @@
 ; execute on mapped shared objects is required for executable mappings; neither
 ; shared type is an entrypoint for a privileged service transition.
 (allow openwave_app_t openwave_elf_loader_t (file (read open getattr map execute execute_no_trans)))
-(allow openwave_app_t openwave_shared_lib_t (file (read open getattr map execute)))
+(allow openwave_app_t openwave_elf_loader_t (lnk_file (read getattr)))
+(allow openwave_app_t openwave_shared_lib_t (file (read open getattr map execute execute_no_trans)))
+(allow openwave_app_t openwave_shared_lib_t (lnk_file (read getattr)))
 (allow openwave_system_domain openwave_elf_loader_t (file (read open getattr map execute execute_no_trans)))
-(allow openwave_system_domain openwave_shared_lib_t (file (read open getattr map execute)))
+(allow openwave_system_domain openwave_elf_loader_t (lnk_file (read getattr)))
+(allow openwave_system_domain openwave_shared_lib_t (file (read open getattr map execute execute_no_trans)))
+(allow openwave_system_domain openwave_shared_lib_t (lnk_file (read getattr)))
 (allow openwave_app_t openwave_runtime_t (sock_file (read write open getattr)))
 (allow openwave_app_t openwave_default_t (dir (search getattr)))
 (allow openwave_app_t openwave_private_t (dir (search getattr)))
