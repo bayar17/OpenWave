@@ -58,6 +58,7 @@ class FileContexts(unittest.TestCase):
             "/lib64/ld-linux-x86-64.so.2",
             "/usr/lib64/ld-linux-x86-64.so.2",
             "/lib/ld-linux-aarch64.so.1",
+            "/lib64/ld-2.41.so",
         ):
             with self.subTest(path=path):
                 self.assert_type(path, "openwave_elf_loader_t")
