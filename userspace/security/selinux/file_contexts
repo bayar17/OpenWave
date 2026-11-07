@@ -27,3 +27,4 @@
 /(usr/)?lib(64)?(/[^/]+)*/[^/]+\.so(\.[0-9]+)* system_u:object_r:openwave_shared_lib_t:s0
 /(System/Applications|Applications)/[^/]+/(lib|plugins|qml)(/[^/]+)*/[^/]+\.so(\.[0-9]+)* system_u:object_r:openwave_shared_lib_t:s0
 /(usr/)?lib(64)?/ld-[^/]+\.so(\.[0-9]+)* system_u:object_r:openwave_elf_loader_t:s0
+/(usr/)?lib(64)?/ld-[0-9]+(\.[0-9]+)*\.so system_u:object_r:openwave_elf_loader_t:s0
