@@ -21,3 +21,10 @@
 /dev/console system_u:object_r:openwave_console_t:s0
 /dev/dri(/.*)? system_u:object_r:openwave_gpu_t:s0
 /dev/shm(/.*)? system_u:object_r:openwave_app_data_t:s0
+
+# Linker and libraries: keep service entrypoints separate from shared objects.
+# Ordered after the generic runtime mapping so these patterns take precedence.
+/(usr/)?lib(64)?(/[^/]+)*/[^/]+\.so(\.[0-9]+)* system_u:object_r:openwave_shared_lib_t:s0
+/(System/Applications|Applications)/[^/]+/(lib|plugins|qml)(/[^/]+)*/[^/]+\.so(\.[0-9]+)* system_u:object_r:openwave_shared_lib_t:s0
+/(usr/)?lib(64)?/ld-[^/]+\.so(\.[0-9]+)* system_u:object_r:openwave_elf_loader_t:s0
+/(usr/)?lib(64)?/ld-[0-9]+(\.[0-9]+)*\.so system_u:object_r:openwave_elf_loader_t:s0

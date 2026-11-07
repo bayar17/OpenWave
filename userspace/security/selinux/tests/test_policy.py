@@ -26,6 +26,18 @@ class PolicyTests(unittest.TestCase):
         result = self.compile()
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_linker_objects_are_not_writable_by_apps(self):
+        rules = [
+            '(allow openwave_app_t openwave_elf_loader_t (file (write)))',
+            '(allow openwave_app_t openwave_shared_lib_t (file (write)))',
+            '(allow openwave_app_t openwave_shared_lib_t (file (setattr)))',
+        ]
+        for rule in rules:
+            with self.subTest(rule=rule):
+                result = self.compile(rule)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('neverallow', result.stderr)
+
     def test_privileged_grants_are_rejected(self):
         rules = ['(allow openwave_app_t openwave_private_t (file (read)))',
                  '(allow openwave_app_t openwave_security_t (security (load_policy)))',

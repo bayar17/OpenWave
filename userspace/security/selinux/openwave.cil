@@ -18,6 +18,8 @@
 (type openwave_app_t)
 (type openwave_app_exec_t)
 (type openwave_runtime_t)
+(type openwave_elf_loader_t)
+(type openwave_shared_lib_t)
 (type openwave_shared_t)
 (type openwave_app_data_t)
 (type openwave_user_data_t)
@@ -65,6 +67,17 @@
 (allow openwave_app_t openwave_runtime_t (dir (read open search getattr watch)))
 (allow openwave_app_t openwave_runtime_t (file (read open getattr map execute execute_no_trans watch)))
 (allow openwave_app_t openwave_runtime_t (lnk_file (read getattr)))
+; Dynamic linking uses dedicated read-only types instead of generic runtime data.
+; execute on mapped shared objects is required for executable mappings; neither
+; shared type is an entrypoint for a privileged service transition.
+(allow openwave_app_t openwave_elf_loader_t (file (read open getattr map execute execute_no_trans)))
+(allow openwave_app_t openwave_elf_loader_t (lnk_file (read getattr)))
+(allow openwave_app_t openwave_shared_lib_t (file (read open getattr map execute execute_no_trans)))
+(allow openwave_app_t openwave_shared_lib_t (lnk_file (read getattr)))
+(allow openwave_system_domain openwave_elf_loader_t (file (read open getattr map execute execute_no_trans)))
+(allow openwave_system_domain openwave_elf_loader_t (lnk_file (read getattr)))
+(allow openwave_system_domain openwave_shared_lib_t (file (read open getattr map execute execute_no_trans)))
+(allow openwave_system_domain openwave_shared_lib_t (lnk_file (read getattr)))
 (allow openwave_app_t openwave_runtime_t (sock_file (read write open getattr)))
 (allow openwave_app_t openwave_default_t (dir (search getattr)))
 (allow openwave_app_t openwave_private_t (dir (search getattr)))
@@ -121,3 +134,7 @@
 (neverallow openwave_app_t openwave_private_t (file (all)))
 (neverallow openwave_app_t openwave_all_types (capability (all)))
 (neverallow openwave_app_t openwave_all_types (capability2 (all)))
+
+; A native application may map trusted linker files but cannot modify them.
+(neverallow openwave_app_t openwave_elf_loader_t (file (write append create setattr unlink link rename)))
+(neverallow openwave_app_t openwave_shared_lib_t (file (write append create setattr unlink link rename)))
