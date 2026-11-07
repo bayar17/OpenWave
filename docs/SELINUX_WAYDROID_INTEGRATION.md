@@ -131,6 +131,23 @@ existing `out/*.img` file.
    compatibility importer; actually launch an imported Android app from
    Ocean Launcher without treating the desktop file as authoritative.
 
+## Guest-side Waydroid boot probe
+
+Once the local LXC/Waydroid policy is integrated and Waydroid is running,
+copy the included Python acceptance script into the guest and run:
+
+```sh
+python3 check_waydroid_boot.py --container waydroid
+# If the container is installed under a nondefault LXC directory:
+python3 check_waydroid_boot.py --container waydroid --lxc-path /path/to/lxc/configs
+```
+
+It tests enforcing at both ends, `lxc-info` state, Android
+`sys.boot_completed=1`, `logd`, real `logcat` output, and package-manager
+response; it exits nonzero on any failed gate. This script has not been
+run in the OpenWave guest. It does not check SELinux process transitions or
+automate the Ocean Launcher GUI. Those require separate acceptance evidence.
+
 ## Required acceptance evidence
 
 | Gate | Evidence | Status |
