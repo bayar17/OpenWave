@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'userspace/security/selinux'
@@ -76,6 +77,11 @@ def build(sdk, triple, stage, output):
     shutil.copy2(policy, destination / 'policy/policy.35')
     (destination / 'contexts/files/file_contexts').write_text(contexts)
     shutil.copy2(SOURCE / 'config', destination.parent / 'config')
+    # Resolve effective mappings with libselinux, including generated service
+    # entrypoints, before the staged policy is published into an image.
+    context_env = {**env, 'OPENWAVE_FILE_CONTEXTS': str(destination / 'contexts/files/file_contexts')}
+    subprocess.run([sys.executable, str(SOURCE / 'tests/test_file_contexts.py')],
+                   env=context_env, check=True)
     for path in (destination / 'policy/policy.35', destination / 'contexts/files/file_contexts',
                  destination.parent / 'config'):
         path.chmod(0o644)
