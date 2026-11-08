@@ -147,6 +147,30 @@ class PolicyTests(unittest.TestCase):
                 self.assertNotEqual(denied.returncode, 0, denied.stderr)
                 self.assertIn('neverallow', denied.stderr)
 
+    def test_lxc_run_root_traversal_is_search_and_metadata_only(self):
+        # Stage 2O got through the state .cache create denial, then
+        # lxc-start was denied search on /run (openwave_run_t:dir).
+        # This grant does not allow directory enumeration or mutation.
+        allowed = self.compile("""
+            (neverallow openwave_lxc_t openwave_run_t
+                        (dir (read open write create add_name remove_name
+                              setattr mounton relabelfrom relabelto)))
+            (neverallow openwave_lxc_t openwave_run_t
+                        (file (open read write create execute execute_no_trans
+                               append unlink setattr)))
+            (neverallow openwave_lxc_t openwave_run_t
+                        (lnk_file (read write create unlink)))
+        """)
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        for denied in (
+            '(neverallow openwave_lxc_t openwave_run_t (dir (search)))',
+            '(neverallow openwave_lxc_t openwave_run_t (dir (getattr)))',
+        ):
+            with self.subTest(rule=denied):
+                fail = self.compile(denied)
+                self.assertNotEqual(fail.returncode, 0, fail.stderr)
+                self.assertIn('neverallow', fail.stderr)
+
     def test_waydroid_network_authority_is_separate_and_path_scoped(self):
         result = self.compile('''
             (neverallow openwave_waydroid_manager_t self (capability (net_admin net_raw sys_admin)))

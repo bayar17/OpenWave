@@ -1434,7 +1434,12 @@
 ;; and selinuxfs. These do not permit directory enumeration, file
 ;; reads or policy administration. Procfs file/symlink read denials
 ;; remain deferred until narrower proc object labeling is audited.
-(allow openwave_lxc_t openwave_run_t (dir (getattr)))
+;; Stage 2P: LXC's next observed AVC is dir {search} on the
+;; tmpfs /run root labeled openwave_run_t, after Stage 2O granted only
+;; getattr. Permit pathname traversal without listing, opening,
+;; changing, mounting on or accessing files in other /run subtrees.
+;; SELinux type-scoped: all openwave_run_t dirs gain search/getattr.
+(allow openwave_lxc_t openwave_run_t (dir (search getattr)))
 (allow openwave_lxc_t openwave_security_t (filesystem (getattr)))
 
 ;; Stage 2N: /var/lib itself has the generic state-directory label,
