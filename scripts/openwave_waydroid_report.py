@@ -73,5 +73,5 @@ def evaluate(serial):
     return {'diagnostics_complete': complete, 'framework_passed': framework,
             'integration_passed': False, 'stages': stages, 'probes': probes,
             'lxc_failed_library': loader.group(1) if loader else None,
-            'lxc_denied_config_path': denied_config.group(1) if denied_config else None},
-            'lxc_search_denial_types': search_denials
+            'lxc_denied_config_path': denied_config.group(1) if denied_config else None,
+            'lxc_search_denial_types': search_denials}
