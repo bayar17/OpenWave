@@ -296,11 +296,141 @@ static int unmount_image(const struct image_kind *kind)
     printf("waydroid-mount: %s unmounted\n", kind->name);
     return 0;
 }
+
+/* Waydroid 1.6.3 binds the generated per-session property file into vendor.
+ * Stage 2B exposes one fixed file bind, but the SELinux mount authority
+ * remains denied and upstream is deliberately not redirected to this helper.
+ */
+#define PROP_SOURCE WAYDROID_ROOT "/waydroid.prop"
+#define PROP_DEST VENDOR_MOUNT "/waydroid.prop"
+
+static int open_valid_property(int *fd_out)
+{
+    int fd = open_fixed_path(PROP_SOURCE, O_RDONLY | O_NONBLOCK);
+    if (fd == -1)
+        return err("opening fixed Waydroid property source");
+    struct stat st;
+    if (fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_size <= 0 ||
+        st.st_size > 65536 || st.st_uid != 0 || st.st_nlink != 1 ||
+        (st.st_mode & (S_IWGRP | S_IWOTH))) {
+        close(fd);
+        return reject("property source must be a small root-owned regular file");
+    }
+    *fd_out = fd;
+    return 0;
+}
+
+static int open_valid_property_target(int *parent_out, int *target_out)
+{
+    int parent = open_fixed_path(VENDOR_MOUNT, O_PATH | O_DIRECTORY);
+    if (parent == -1)
+        return err("opening vendor directory");
+    struct statfs fs;
+    if (fstatfs(parent, &fs) || (unsigned long)fs.f_type != EXT4_SUPER_MAGIC) {
+        close(parent);
+        return reject("vendor filesystem must be the mounted ext4 image");
+    }
+    int target = open_fixed_path(PROP_DEST, O_PATH);
+    if (target == -1) {
+        close(parent);
+        return err("opening existing vendor property target");
+    }
+    struct stat st;
+    if (fstat(target, &st) || !S_ISREG(st.st_mode) || st.st_uid != 0) {
+        close(parent);
+        close(target);
+        return reject("vendor property target must be an existing root-owned file");
+    }
+    *parent_out = parent;
+    *target_out = target;
+    return 0;
+}
+
+static int bind_property(void)
+{
+    int source = -1;
+    if (open_valid_property(&source))
+        return 1;
+    int parent = -1, target = -1;
+    if (open_valid_property_target(&parent, &target)) {
+        close(source);
+        return 1;
+    }
+    bool is_mounted = false;
+    if (target_is_separate_mount(target, parent, &is_mounted)) {
+        close(target); close(parent); close(source);
+        return err("checking vendor property mount IDs");
+    }
+    if (is_mounted) {
+        close(target); close(parent); close(source);
+        return reject("property target is already a mountpoint");
+    }
+    char source_path[64], target_path[64];
+    if (fd_string(source, source_path) || fd_string(target, target_path)) {
+        close(target); close(parent); close(source);
+        return reject("could not construct pinned property descriptor");
+    }
+    int rc = mount(source_path, target_path, NULL, MS_BIND, NULL);
+    int saved = errno;
+    if (!rc) {
+        /* MS_BIND alone does not impose readonly on the new mount. */
+        rc = mount(NULL, target_path, NULL,
+                   MS_REMOUNT | MS_BIND | MS_RDONLY | MS_NOSUID | MS_NODEV, NULL);
+        saved = errno;
+        if (rc)
+            (void)umount2(target_path, 0);
+    }
+    close(target); close(parent); close(source);
+    errno = saved;
+    if (rc)
+        return err("binding readonly property file");
+    puts("waydroid-mount: property file bound readonly");
+    return 0;
+}
+
+static int unbind_property(void)
+{
+    int source = -1;
+    if (open_valid_property(&source))
+        return 1;
+    int parent = -1, target = -1;
+    if (open_valid_property_target(&parent, &target)) {
+        close(source);
+        return 1;
+    }
+    bool is_mounted = false;
+    if (target_is_separate_mount(target, parent, &is_mounted)) {
+        close(source); close(target); close(parent);
+        return err("checking property mount identity");
+    }
+    struct stat source_st, target_st;
+    if (!is_mounted || fstat(source, &source_st) ||
+        fstat(target, &target_st) || source_st.st_dev != target_st.st_dev ||
+        source_st.st_ino != target_st.st_ino) {
+        close(source); close(target); close(parent);
+        return reject("property target is not a bind of the approved source");
+    }
+    char path[64];
+    if (fd_string(target, path)) {
+        close(source); close(target); close(parent);
+        return reject("could not pin property unmount target");
+    }
+    int rc = umount2(path, 0); /* no lazy or recursive unmount */
+    int saved = errno;
+    close(source); close(target); close(parent);
+    errno = saved;
+    if (rc)
+        return err("unbinding fixed Waydroid property file");
+    puts("waydroid-mount: property file unbound");
+    return 0;
+}
+
 static void usage(void)
 {
     puts("Usage: waydroid-mount --verify-system|--verify-vendor preinstalled|persistent\n"
          "       waydroid-mount --mount-system|--mount-vendor preinstalled|persistent\n"
          "       waydroid-mount --unmount-vendor|--unmount-system\n"
+         "       waydroid-mount --bind-prop|--unbind-prop\n"
          "This Stage 2A helper is not wired into the upstream Waydroid lifecycle.");
 }
 int main(int argc, char **argv)
@@ -355,6 +485,12 @@ int main(int argc, char **argv)
             return rc;
         }
         return mount_image(kind, store);
+    }
+    if (argc == 2 && (!strcmp(argv[1], "--bind-prop") ||
+                      !strcmp(argv[1], "--unbind-prop"))) {
+        if (verify_context())
+            return 1;
+        return !strcmp(argv[1], "--bind-prop") ? bind_property() : unbind_property();
     }
     if (argc == 2 && (!strcmp(argv[1], "--unmount-vendor") ||
                       !strcmp(argv[1], "--unmount-system"))) {

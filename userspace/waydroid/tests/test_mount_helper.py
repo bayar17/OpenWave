@@ -88,6 +88,31 @@ class MountHelperTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn("unmounted", result.stdout)
 
+    def test_fixed_property_bind_requires_confined_guest(self):
+        # Neither operation is allowed on an ordinary host, even as root.
+        for operation in ("--bind-prop", "--unbind-prop"):
+            with self.subTest(operation=operation):
+                result = self.run_helper(operation, test=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("bound readonly", result.stdout)
+                self.assertNotIn("unbound", result.stdout)
+
+    def test_property_bind_rejects_all_caller_supplied_paths(self):
+        for args in (("--bind-prop", "/etc/passwd"),
+                     ("--unbind-prop", "/"),
+                     ("--bind-prop", "preinstalled"),
+                     ("--bind-prop", "--force")):
+            with self.subTest(args=args):
+                result = self.run_helper(*args, test=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("refused", result.stderr)
+
+    def test_property_binding_requires_readonly_remount_in_source(self):
+        source = SOURCE.read_text()
+        self.assertIn("MS_REMOUNT | MS_BIND | MS_RDONLY | MS_NOSUID | MS_NODEV", source)
+        self.assertIn("source_st.st_ino != target_st.st_ino", source)
+        self.assertIn("st.st_size > 65536", source)
+
     def test_generic_mount_cli_is_rejected(self):
         for args in (("-o", "rw", "/dev/sda", "/"),
                      ("--mount-system", "../../etc"),
