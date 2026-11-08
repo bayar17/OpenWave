@@ -72,6 +72,8 @@ class AppControlTests(unittest.TestCase):
         self.assertIn('wait-status=0 stopping=true', guest)
         self.assertIn('control quit-fallback appId=', guest)
         self.assertIn('control quit-timeout appId=', guest)
+        self.assertIn('control quit-noack-exited appId=', guest)
+        self.assertIn('while [ "$ack_attempt" -lt 30 ]', guest)
         self.assertIn("APP_CONTROL_PASS authenticated quit acknowledgements and clean exits", guest)
         self.assertEqual(subprocess.run(
             ["/bin/sh", "-n", str(ROOT / "userspace/openrc/qa/app-launch.start")],
@@ -85,6 +87,11 @@ class AppControlTests(unittest.TestCase):
         self.assertIn("appd: control quit-ack", proc)
         self.assertIn("appd: control quit-fallback", proc)
         self.assertIn("appd: control quit-timeout", proc)
+        self.assertIn("appd: control quit-noack-exited", proc)
+        self.assertIn("char *app_id;", proc)
+        self.assertIn("c->app_id = g_strdup(instance->app->id);", proc)
+        self.assertIn('g_message("appd: control quit-ack appId=%s pid=%d", c->app_id, c->pid);', proc)
+        self.assertIn("g_free(c->app_id)", proc)
         self.assertIn("kill(-c->pid, SIGTERM)", proc)
 
     def test_selinux_permission_only_broker_to_app_channel(self):

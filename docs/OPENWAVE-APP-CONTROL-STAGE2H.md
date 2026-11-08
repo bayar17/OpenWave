@@ -62,6 +62,44 @@ smoke test considered the resulting exit to be acceptable.
    restrictions remain unchanged; in particular no \`CAP_FSETID\`,
    \`execmem\`, \`CAP_SYS_ADMIN\`, or \`openwave_default_t\` mount grant.
 
+## Stage 2H follow-up — fast-exit asynchronous reply race
+
+An enforcing guest test reached all five application surfaces; Files, Photos,
+and Ocean Browser each exited normally with `wait-status=0 stopping=true`,
+yet all three recorded `APP_TEST CONTROL_FAIL`, without `quit-ack` or
+`quit-fallback` log entries. The suspected race is that the GLib child
+reaper frees the `Instance` before the async socket-response callback.
+Previously `command_done()` only reported ACK/fallback when it could
+find the live instance. Thus an app could successfully exit with status 0
+and still leave **no** appd completion evidence.
+
+Follow-up:
+- `Command` owns an immutable copy of the app ID until it completes.
+  Authenticated ACKs are logged even after child reaping; failures after
+  reaping are explicitly `quit-noack-exited`, not silently ignored.
+  Signalling a child only occurs while its tracked instance still exists.
+- The guest harness polls for the result for at most 3 seconds **after**
+  observing the process exit. It does not treat exit status 0 as an ACK.
+- If any application still fails, the guest prints its matching appd log
+  lines with the failure to support targeted diagnosis.
+
+Before reusing an existing image or attributing this to SELinux, verify that
+the **actual staged and packed appd binary** includes Stage 2H's messages:
+
+```sh
+strings rootfs/System/Services/appd | grep -F 'appd: control quit-ack appId='
+# Optional: inspect the packed image without mounting or mutating it.
+mkdir -p out/boot-recovery/stage2h-inspect
+debugfs -R "dump /System/Services/appd out/boot-recovery/stage2h-inspect/appd" \
+  out/boot-recovery/ocean-app-control-stage2h.img
+strings out/boot-recovery/stage2h-inspect/appd | grep -F 'appd: control quit-ack appId='
+sha256sum rootfs/System/Services/appd out/boot-recovery/stage2h-inspect/appd
+```
+
+If the marker is absent from the **packed** image, it contains a stale
+appd executable. Rebuild `userspace`, then `rootfs`, and create a new
+image; do **not** expand SELinux grants to compensate for stale code.
+
 ## Build and test (disposable OpenWave guest only)
 
 Do not use the previous Stage 2G disk image as though it contained the new
