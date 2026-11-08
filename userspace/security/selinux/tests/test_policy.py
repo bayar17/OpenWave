@@ -224,6 +224,8 @@ class PolicyTests(unittest.TestCase):
             '(allow openwave_lxc_t openwave_shared_lib_t (file (write)))',
             '(allow openwave_waydroid_manager_t openwave_elf_loader_t (file (append)))',
             '(allow openwave_waydroid_net_t openwave_shared_lib_t (file (relabelto)))',
+            '(allow openwave_lxc_t openwave_shared_lib_t (file (execute_no_trans)))',
+            '(allow openwave_app_t openwave_elf_loader_t (file (entrypoint)))',
         ):
             with self.subTest(rule=rule):
                 result = self.compile(rule)
