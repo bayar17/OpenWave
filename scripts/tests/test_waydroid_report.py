@@ -98,6 +98,48 @@ class WaydroidReportTests(unittest.TestCase):
         self.assertIn(
             '(allow openwave_lxc_t openwave_default_t (dir (search)))', policy)
 
+    def test_lxc_config_access_denial_reports_exact_path(self):
+        serial = (
+            'WAYDROID_QA BEGIN enforcing=1\\n'
+            + probe('startup', 'Starting waydroid [ ok ]')
+            + probe('request_session', 'OSError: container failed to start', 1)
+            + probe('container', 'STOPPED')
+            + 'WAYDROID_QA LOG /var/lib/waydroid/waydroid.log\\n'
+            + '(1916) lxc-start -P /var/lib/waydroid/lxc -F -n waydroid\\n'
+            + 'lxc-start: waydroid: ../../../third_party/lxc-6.0.6/'
+              'src/lxc/tools/lxc_start.c: lxc_start_main: 191 '
+              'You lack access to /var/lib/waydroid/lxc\\n'
+            + 'WAYDROID_QA END enforcing=1\\n'
+        )
+        # Do not let a test use literal escaped slashes for line delimiters.
+        serial = serial.replace('\\\\n', '\\n')
+        result = evaluate(serial)
+        self.assertEqual(result['stages']['lxc_config_access'], 'FAIL')
+        self.assertEqual(result['lxc_denied_config_path'], '/var/lib/waydroid/lxc')
+        self.assertFalse(result['framework_passed'])
+
+    def test_lxc_config_access_is_unverified_without_container_evidence(self):
+        serial = (
+            'WAYDROID_QA BEGIN enforcing=1\\n'
+            + probe('container', 'STOPPED')
+            + 'WAYDROID_QA END enforcing=1\\n'
+        ).replace('\\\\n', '\\n')
+        result = evaluate(serial)
+        self.assertEqual(result['stages']['lxc_config_access'], 'UNVERIFIED')
+        self.assertIsNone(result['lxc_denied_config_path'])
+
+    def test_lxc_host_traversal_permission_scope(self):
+        from pathlib import Path
+        policy = (Path(__file__).resolve().parents[2] /
+                  'userspace/security/selinux/openwave.cil').read_text()
+        for typ in ('openwave_private_t', 'openwave_proc_t', 'openwave_sysfs_t'):
+            self.assertEqual(policy.count(
+                '(allow openwave_lxc_t ' + typ + ' (dir (search)))'), 1)
+            self.assertNotIn('(allow openwave_lxc_t ' + typ +
+                             ' (dir (read open search)))', policy)
+            self.assertNotIn('(allow openwave_lxc_t ' + typ +
+                             ' (file (read open)))', policy)
+
     def test_empty_successful_commands_and_missing_container_are_failures(self):
         result = evaluate(probe('container', '') + probe('boot_completed', ''))
         self.assertFalse(result['framework_passed'])
