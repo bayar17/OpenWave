@@ -394,6 +394,12 @@
     (file (write append create setattr unlink link rename relabelfrom relabelto)))
 (neverallow openwave_untrusted_link_client openwave_shared_lib_t
     (file (write append create setattr unlink link rename relabelfrom relabelto)))
+; Shared objects may be mapped executable but must not become direct
+; process entrypoints or an execve-without-transition bypass.
+(neverallow openwave_untrusted_link_client openwave_shared_lib_t
+    (file (entrypoint execute_no_trans)))
+(neverallow openwave_untrusted_link_client openwave_elf_loader_t
+    (file (entrypoint)))
 
 ; PID 1 and its child processes need these base permissions after enforcement.
 ; Grant them only to the trusted system domain, not application domains.
