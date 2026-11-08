@@ -43,11 +43,15 @@ class Runner:
     def __init__(self, args):
         self.args = args
         self.root = ROOT
-        self.rootfs = (ROOT / args.rootfs).resolve()
+        original_rootfs = ROOT / args.rootfs
+        self.rootfs = original_rootfs.resolve()
+        if (original_rootfs.is_symlink() or not safe_within(self.rootfs, ROOT)
+                or self.rootfs == ROOT):
+            raise ValueError("Refusing symlinked or external runtime rootfs")
         self.kernel = (ROOT / args.kernel).resolve() if args.kernel else None
         self.image = (ROOT / args.image).resolve() if args.image else None
         self.evidence_root = (ROOT / "out/waydroid-integration").resolve()
-        if not safe_within(self.evidence_root, ROOT / "out"):
+        if (ROOT / "out").is_symlink() or not safe_within(self.evidence_root, ROOT / "out"):
             raise ValueError("Refusing evidence outside OpenWave out/")
         self.evidence_root.mkdir(parents=True, exist_ok=True)
         if args.command == "report":
@@ -57,7 +61,8 @@ class Runner:
                     raise ValueError("The requested report directory is not valid")
             else:
                 candidates = sorted(p for p in self.evidence_root.iterdir()
-                                    if p.is_dir() and (p / "result.json").is_file())
+                                    if p.is_dir() and not p.is_symlink()
+                                    and (p / "result.json").is_file())
                 if not candidates:
                     raise ValueError("No prior integration result exists")
                 chosen = candidates[-1]
@@ -161,7 +166,8 @@ class Runner:
                 self.gate(f"android_{name}_image", "PASS", str(candidate))
             else:
                 self.gate(f"android_{name}_image", "BLOCKED", str(candidate))
-        config = self.kernel.parent.parent.parent / ".config" if self.kernel else None
+        # bzImage at build/arch/x86/boot/bzImage -> build/.config.
+        config = self.kernel.parents[3] / ".config" if self.kernel else None
         if config and config.is_file():
             settings = config.read_text()
             required = ("CONFIG_SECURITY_SELINUX=y", "CONFIG_ANDROID_BINDER_IPC=y",
@@ -219,6 +225,9 @@ class Runner:
             return False
         env = dict(os.environ, OPENWAVE_POLICY_BUILD=str(policy))
         checks = [
+            ("orchestrator_security_tests", [sys.executable, "-m", "unittest",
+                "discover", "-s", str(ROOT / "scripts/tests"),
+                "-p", "test_waydroid_orchestrator.py", "-v"], 120),
             ("effective_file_contexts", [sys.executable,
                 ROOT / "userspace/security/selinux/tests/test_file_contexts.py"], 120),
             ("full_security_suite", [sys.executable,
@@ -261,6 +270,15 @@ class Runner:
         success = self.run("image_build", [
             ROOT / "build-openwave", "image", self.rootfs, target], timeout=3600, env=env)
         if success and target.is_file():
+            # The canonical builder's per-inode xattr readback and e2fsck must
+            # have completed; refuse success if its verification marker vanished.
+            log = self.out / "logs/image_build.log"
+            verified = ("SELinux attributes processed:" in log.read_text(errors="replace")
+                        if log.is_file() else False)
+            if not verified:
+                return self.gate("image_inode_labels", "FAIL",
+                                 "Image builder did not print the all-inode SELinux readback marker")
+            self.gate("image_inode_labels", "PASS", "All labels read back by openwave-label-ext4.py")
             self.image = target
             self.record["inputs"]["image"] = str(target)
             self.record["inputs"]["image_sha256"] = digest(target)
@@ -333,8 +351,8 @@ class Runner:
     def report(self):
         self.record["finished_utc"] = datetime.now(timezone.utc).isoformat()
         release_gates = ("full_security_suite", "security_release_gate",
-                         "image_build", "qemu_inputs_immutable", "android_framework",
-                         "android_appd_shortcuts")
+                         "image_build", "image_inode_labels", "qemu_inputs_immutable",
+                         "android_framework", "android_appd_shortcuts")
         self.record["release_ready"] = all(self.record["gates"].get(x, {}).get("status") == "PASS"
                                             for x in release_gates)
         (self.out / "result.json").write_text(json.dumps(self.record, indent=2, sort_keys=True) + "\n")
