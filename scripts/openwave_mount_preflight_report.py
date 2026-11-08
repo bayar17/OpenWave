@@ -17,7 +17,7 @@ INFO = re.compile(r"^MOUNT_QA_INFO ([a-z_]+)=([^\r\n]+)$", re.M)
 
 def evaluate(serial: str) -> dict:
     # QEMU serial consoles may emit CRLF; do not misclassify valid guest markers.
-    serial = serial.replace("\r\n", "\n").replace("\r", "\n")
+    serial = serial.replace("\r\n", "\n").replace("\r", "\n").replace("\x00", "")
     begins, ends = list(BEGIN.finditer(serial)), list(END.finditer(serial))
     matches = list(GATE.finditer(serial))
     gates = {}
@@ -28,7 +28,7 @@ def evaluate(serial: str) -> dict:
             duplicated.append(key)
         # Kernel audit output can interleave with console printf mid-line.
         # Keep AVCs in the full serial log; do not absorb them into a gate detail.
-        detail = re.split(r"\baudit: type=|\bavc:\s+denied\b",
+        detail = re.split(r"(?:\[\s*\d+\.\d+\]\s*)?audit:\s*type=|\bavc:\s+denied\b",
                           details or "", maxsplit=1, flags=re.I)[0].rstrip()
         gates[key] = {"status": state, "detail": detail}
     info = {}
