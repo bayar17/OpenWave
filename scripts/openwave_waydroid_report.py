@@ -33,6 +33,15 @@ def evaluate(serial):
         r'([A-Za-z0-9_+.\-]+): cannot open shared object file: Permission denied',
         serial)
     stages['lxc_loader'] = 'FAIL' if loader else 'UNVERIFIED'
+    # Record the next real LXC failure separately from the dynamic loader:
+    # this message originates from lxc_start_main after libraries loaded.
+    # No error alone is not sufficient; only a RUNNING container is PASS.
+    denied_config = re.search(
+        r'lxc-start: waydroid: [^\\r\\n]*?You lack access to '
+        r'(/var/lib/waydroid/lxc)(?=\\s|$)',
+        serial)
+    stages['lxc_config_access'] = (
+        'FAIL' if denied_config else ('PASS' if container else 'UNVERIFIED'))
     for name, value in [('servicemanager', 'running'), ('zygote', 'running'),
                         ('boot_completed', '1')]:
         stages[name] = ('PASS' if exact(name, value) else 'FAIL') if container else 'BLOCKED'
@@ -54,4 +63,5 @@ def evaluate(serial):
         'container', 'servicemanager', 'zygote', 'system_server', 'boot_completed', 'package_manager'))
     return {'diagnostics_complete': complete, 'framework_passed': framework,
             'integration_passed': False, 'stages': stages, 'probes': probes,
-            'lxc_failed_library': loader.group(1) if loader else None}
+            'lxc_failed_library': loader.group(1) if loader else None,
+            'lxc_denied_config_path': denied_config.group(1) if denied_config else None}
