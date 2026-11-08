@@ -1415,6 +1415,8 @@
 (allow openwave_waydroid_mount_t self (process (getattr getcap getrlimit)))
 (allow openwave_waydroid_mount_t openwave_default_t (dir (search getattr)))
 (allow openwave_waydroid_mount_t openwave_runtime_t (dir (search getattr)))
+; Preinstalled Android image files live under /usr/share/waydroid-extra.
+(allow openwave_waydroid_mount_t openwave_runtime_t (file (read open getattr)))
 (allow openwave_waydroid_mount_t openwave_waydroid_state_t
        (dir (search getattr read open)))
 (allow openwave_waydroid_mount_t openwave_waydroid_state_t
@@ -1422,6 +1424,9 @@
 (allow openwave_waydroid_mount_t openwave_proc_t (dir (search getattr)))
 (allow openwave_waydroid_mount_t openwave_proc_t (file (read open getattr)))
 (allow openwave_waydroid_mount_t openwave_security_t (file (read open getattr)))
+; The helper checks the enforcement state but may not change it.
+(allow openwave_waydroid_mount_t openwave_selinux_enforce_t
+       (file (read open getattr)))
 ; The new entrypoint is not executable by ordinary native applications.
 (neverallow openwave_app_t openwave_waydroid_mount_exec_t
             (file (execute execute_no_trans entrypoint)))
