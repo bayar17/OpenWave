@@ -37,6 +37,9 @@
 #ifndef EXT4_SUPER_MAGIC
 #define EXT4_SUPER_MAGIC 0xEF53UL
 #endif
+#ifndef OVERLAYFS_SUPER_MAGIC
+#define OVERLAYFS_SUPER_MAGIC 0x794c7630UL
+#endif
 
 struct image_kind {
     const char *name, *filename, *mountpoint, *mount_parent, *fstype;
@@ -326,9 +329,11 @@ static int open_valid_property_target(int *parent_out, int *target_out)
     if (parent == -1)
         return err("opening vendor directory");
     struct statfs fs;
-    if (fstatfs(parent, &fs) || (unsigned long)fs.f_type != EXT4_SUPER_MAGIC) {
+    if (fstatfs(parent, &fs) ||
+        ((unsigned long)fs.f_type != EXT4_SUPER_MAGIC &&
+         (unsigned long)fs.f_type != OVERLAYFS_SUPER_MAGIC)) {
         close(parent);
-        return reject("vendor filesystem must be the mounted ext4 image");
+        return reject("vendor must be an ext4 image or approved overlayfs layer");
     }
     int target = open_fixed_path(PROP_DEST, O_PATH);
     if (target == -1) {
@@ -425,12 +430,172 @@ static int unbind_property(void)
     return 0;
 }
 
+
+/*
+ * Stage 2C: strict, fixed-path overlay operations matching the pinned
+ * Waydroid helper sequence. No dynamic source, destination or mount options.
+ *
+ * These are staged only. The helper has NO SELinux sys_admin grant and no
+ * upstream Waydroid integration. A successful host C compile is not a
+ * substitute for kernel, mount namespace and SELinux validation in QEMU.
+ */
+#define OVERLAY_ROOT WAYDROID_ROOT "/overlay"
+#define OVERLAY_RW WAYDROID_ROOT "/overlay_rw"
+#define OVERLAY_WORK WAYDROID_ROOT "/overlay_work"
+
+struct overlay_kind {
+    const char *name, *lower_overlay, *upper, *work;
+    const struct image_kind *image;
+};
+static const struct overlay_kind SYSTEM_OVERLAY = {
+    "system", OVERLAY_ROOT, OVERLAY_RW "/system",
+    OVERLAY_WORK "/system", &SYSTEM_IMAGE
+};
+static const struct overlay_kind VENDOR_OVERLAY = {
+    "vendor", OVERLAY_ROOT "/vendor", OVERLAY_RW "/vendor",
+    OVERLAY_WORK "/vendor", &VENDOR_IMAGE
+};
+
+static int owned_directory(const char *path)
+{
+    int fd = open_fixed_path(path, O_PATH | O_DIRECTORY);
+    if (fd < 0)
+        return -1;
+    struct stat st;
+    if (fstat(fd, &st) || !S_ISDIR(st.st_mode) || st.st_uid != 0 ||
+        (st.st_mode & (S_IWGRP | S_IWOTH))) {
+        close(fd);
+        errno = EACCES;
+        return -1;
+    }
+    return fd;
+}
+
+static int overlay_image(const struct overlay_kind *kind)
+{
+    int parent = -1;
+    int target = open_target(kind->image, &parent);
+    if (target < 0)
+        return err("opening fixed overlay target");
+    bool mounted = false;
+    struct statfs fs;
+    if (target_is_separate_mount(target, parent, &mounted) ||
+        fstatfs(target, &fs)) {
+        close(target); close(parent);
+        return err("checking backing image mount");
+    }
+    if (!mounted || (unsigned long)fs.f_type != kind->image->fsmagic) {
+        close(target); close(parent);
+        return reject("overlay requires the expected EROFS/ext4 backing mount");
+    }
+
+    int lower = owned_directory(kind->lower_overlay);
+    int upper = owned_directory(kind->upper);
+    int work = owned_directory(kind->work);
+    if (lower < 0 || upper < 0 || work < 0) {
+        if (lower >= 0) close(lower);
+        if (upper >= 0) close(upper);
+        if (work >= 0) close(work);
+        close(target); close(parent);
+        return err("opening fixed root-owned overlay directories");
+    }
+    struct stat us, ws;
+    if (fstat(upper, &us) || fstat(work, &ws) ||
+        us.st_dev != ws.st_dev || us.st_ino == ws.st_ino) {
+        close(work); close(upper); close(lower);
+        close(target); close(parent);
+        return reject("overlay upper/work must be distinct directories on one filesystem");
+    }
+    char lower_a[64], lower_b[64], upper_path[64], work_path[64], dest[64];
+    if (fd_string(lower, lower_a) || fd_string(target, lower_b) ||
+        fd_string(upper, upper_path) || fd_string(work, work_path) ||
+        fd_string(target, dest)) {
+        close(work); close(upper); close(lower);
+        close(target); close(parent);
+        return reject("unable to pin an overlay path descriptor");
+    }
+    char options[512];
+    int len = snprintf(options, sizeof(options),
+        "lowerdir=%s:%s,upperdir=%s,workdir=%s,xino=off",
+        lower_a, lower_b, upper_path, work_path);
+    if (len < 0 || (size_t)len >= sizeof(options)) {
+        close(work); close(upper); close(lower);
+        close(target); close(parent);
+        return reject("approved overlay options overflow fixed buffer");
+    }
+    /*
+     * Waydroid's mount_overlay(readonly=True) requests -o ro even with
+     * upper/work. Preserve that request and do not retry with write flags.
+     * Guest kernels may reject the combination; that is a validation gate.
+     */
+    int rc = mount("overlay", dest, "overlay",
+                   MS_RDONLY | MS_NOSUID | MS_NODEV, options);
+    int saved = errno;
+    close(work); close(upper); close(lower);
+    close(target); close(parent);
+    errno = saved;
+    if (rc)
+        return err("mounting fixed readonly overlay");
+    printf("waydroid-mount: %s overlay mounted readonly\n", kind->name);
+    return 0;
+}
+
+static int unoverlay_image(const struct overlay_kind *kind)
+{
+    int parent = -1;
+    int target = open_target(kind->image, &parent);
+    if (target < 0)
+        return err("opening fixed overlay teardown target");
+    bool mounted = false;
+    struct statfs fs;
+    if (target_is_separate_mount(target, parent, &mounted) ||
+        fstatfs(target, &fs)) {
+        close(target); close(parent);
+        return err("checking fixed overlay mount identity");
+    }
+    if (!mounted || (unsigned long)fs.f_type != OVERLAYFS_SUPER_MAGIC) {
+        close(target); close(parent);
+        return reject("expected distinct overlayfs mount is absent");
+    }
+    /* Do not detach a parent while child mounts are still attached. */
+    const char *child = kind == &VENDOR_OVERLAY ? PROP_DEST : VENDOR_MOUNT;
+    int child_fd = open_fixed_path(child, O_PATH);
+    if (child_fd >= 0) {
+        uint64_t target_id, child_id;
+        if (mount_fd_id(target, &target_id) ||
+            mount_fd_id(child_fd, &child_id) ||
+            target_id != child_id) {
+            close(child_fd); close(target); close(parent);
+            return reject("detach nested vendor/property mount before parent overlay");
+        }
+        close(child_fd);
+    } else if (errno != ENOENT) {
+        close(target); close(parent);
+        return err("inspecting nested mount before overlay teardown");
+    }
+    char dest[64];
+    if (fd_string(target, dest)) {
+        close(target); close(parent);
+        return reject("unable to pin overlay unmount descriptor");
+    }
+    int rc = umount2(dest, 0); /* no lazy or recursive detach */
+    int saved = errno;
+    close(target); close(parent);
+    errno = saved;
+    if (rc)
+        return err("unmounting fixed Waydroid overlay");
+    printf("waydroid-mount: %s overlay unmounted\n", kind->name);
+    return 0;
+}
+
 static void usage(void)
 {
     puts("Usage: waydroid-mount --verify-system|--verify-vendor preinstalled|persistent\n"
          "       waydroid-mount --mount-system|--mount-vendor preinstalled|persistent\n"
          "       waydroid-mount --unmount-vendor|--unmount-system\n"
          "       waydroid-mount --bind-prop|--unbind-prop\n"
+         "       waydroid-mount --overlay-system|--overlay-vendor\n"
+         "       waydroid-mount --unoverlay-vendor|--unoverlay-system\n"
          "This Stage 2A helper is not wired into the upstream Waydroid lifecycle.");
 }
 int main(int argc, char **argv)
@@ -485,6 +650,17 @@ int main(int argc, char **argv)
             return rc;
         }
         return mount_image(kind, store);
+    }
+    if (argc == 2 && (!strcmp(argv[1], "--overlay-system") ||
+                      !strcmp(argv[1], "--overlay-vendor") ||
+                      !strcmp(argv[1], "--unoverlay-system") ||
+                      !strcmp(argv[1], "--unoverlay-vendor"))) {
+        if (verify_context())
+            return 1;
+        const struct overlay_kind *kind =
+            strstr(argv[1], "vendor") ? &VENDOR_OVERLAY : &SYSTEM_OVERLAY;
+        return strncmp(argv[1], "--unoverlay-", 12) == 0
+            ? unoverlay_image(kind) : overlay_image(kind);
     }
     if (argc == 2 && (!strcmp(argv[1], "--bind-prop") ||
                       !strcmp(argv[1], "--unbind-prop"))) {

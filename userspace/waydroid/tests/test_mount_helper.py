@@ -113,6 +113,43 @@ class MountHelperTests(unittest.TestCase):
         self.assertIn("source_st.st_ino != target_st.st_ino", source)
         self.assertIn("st.st_size > 65536", source)
 
+    def test_fixed_overlay_commands_reject_unconfined_execution(self):
+        for operation in ("--overlay-system", "--overlay-vendor",
+                          "--unoverlay-vendor", "--unoverlay-system"):
+            with self.subTest(operation=operation):
+                result = self.run_helper(operation, test=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("overlay mounted readonly", result.stdout)
+                self.assertNotIn("overlay unmounted", result.stdout)
+
+    def test_overlay_commands_reject_all_path_arguments(self):
+        for args in (("--overlay-system", "/etc"),
+                     ("--overlay-vendor", "/var/lib/waydroid"),
+                     ("--unoverlay-system", "/"),
+                     ("--unoverlay-vendor", "/proc"),
+                     ("--overlay-system", "writable")):
+            with self.subTest(args=args):
+                result = self.run_helper(*args, test=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("refused", result.stderr)
+
+    def test_overlay_uses_fixed_readonly_and_fd_bound_paths(self):
+        source = SOURCE.read_text()
+        self.assertIn("OVERLAY_ROOT WAYDROID_ROOT", source)
+        self.assertIn("OVERLAY_RW WAYDROID_ROOT", source)
+        self.assertIn("OVERLAY_WORK WAYDROID_ROOT", source)
+        self.assertIn("lowerdir=%s:%s,upperdir=%s,workdir=%s,xino=off", source)
+        self.assertIn("MS_RDONLY | MS_NOSUID | MS_NODEV, options", source)
+        self.assertIn("us.st_dev != ws.st_dev", source)
+        self.assertIn("OVERLAYFS_SUPER_MAGIC", source)
+        self.assertIn("target_id != child_id", source)
+
+    def test_overlay_parent_unmount_checks_nested_children(self):
+        source = SOURCE.read_text()
+        self.assertIn("kind == &VENDOR_OVERLAY ? PROP_DEST : VENDOR_MOUNT", source)
+        self.assertIn("detach nested vendor/property mount before parent overlay", source)
+        self.assertIn("umount2(dest, 0)", source)
+
     def test_generic_mount_cli_is_rejected(self):
         for args in (("-o", "rw", "/dev/sda", "/"),
                      ("--mount-system", "../../etc"),
