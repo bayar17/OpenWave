@@ -23,6 +23,46 @@ class WaydroidReportTests(unittest.TestCase):
             with self.subTest(old=old):
                 self.assertFalse(evaluate(serial.replace(old, new))['framework_passed'])
 
+    def test_manager_service_success_does_not_hide_failed_container_start(self):
+        serial = (
+            'WAYDROID_QA BEGIN enforcing=1\n'
+            + probe('startup', 'Starting waydroid [ ok ]')
+            + probe('request_session', 'OSError: container failed to start', 1)
+            + probe('container', 'STOPPED')
+            + 'WAYDROID_QA END enforcing=1\n'
+        )
+        result = evaluate(serial)
+        self.assertEqual(result['stages']['manager'], 'PASS')
+        self.assertEqual(result['stages']['session_start'], 'FAIL')
+        self.assertEqual(result['stages']['container'], 'FAIL')
+        self.assertFalse(result['framework_passed'])
+
+    def test_guest_qa_collects_failed_lxc_and_overlay_evidence_read_only(self):
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[2]
+        script = (root / 'userspace/openrc/qa/waydroid.start').read_text()
+        self.assertIn('WAYDROID_QA overlay_path=%s status=missing-or-inaccessible', script)
+        self.assertIn('WAYDROID_QA mountinfo START', script)
+        self.assertIn('WAYDROID_QA LXC_LOG', script)
+        self.assertNotIn('mkdir -p /var/lib/waydroid/overlay', script)
+        self.assertNotIn('setenforce 0', script)
+        self.assertNotIn('MNT_DETACH', script)
+        import subprocess
+        check = subprocess.run(['/bin/sh', '-n', str(root / 'userspace/openrc/qa/waydroid.start')], capture_output=True, text=True)
+        self.assertEqual(check.returncode, 0, check.stderr)
+
+    def test_lxc_policy_root_access_is_search_only(self):
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[2]
+        policy = (root / 'userspace/security/selinux/openwave.cil').read_text()
+        self.assertEqual(policy.count(
+            '(allow openwave_lxc_t openwave_default_t (dir (search)))'), 1)
+        self.assertNotIn(
+            '(allow openwave_lxc_t openwave_default_t (dir (read open write search)))',
+            policy)
+        self.assertNotIn(
+            '(allow openwave_lxc_t openwave_default_t (file (read open)))', policy)
+
     def test_empty_successful_commands_and_missing_container_are_failures(self):
         result = evaluate(probe('container', '') + probe('boot_completed', ''))
         self.assertFalse(result['framework_passed'])
