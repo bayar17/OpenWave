@@ -26,7 +26,8 @@ class OrchestratorTests(unittest.TestCase):
 
     def args(self, command="audit", image=None, kernel=None):
         return SimpleNamespace(command=command, rootfs="rootfs", image=image, kernel=kernel,
-                               seconds=60, image_size="6G", run_dir=None)
+                               kernel_config=None, seconds=60, image_size="6G",
+                               run_dir=None)
 
     def test_parent_directory_does_not_pass_output_containment(self):
         self.assertTrue(integration.safe_within(self.root / "out/candidate.img",
