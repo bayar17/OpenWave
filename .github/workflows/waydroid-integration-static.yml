@@ -1,0 +1,90 @@
+name: Waydroid integration orchestrator static checks
+
+on:
+  push:
+    branches:
+      - waydroid/integration-automation-20261108
+    paths:
+      - 'scripts/openwave-waydroid-integration.*'
+      - 'scripts/tests/test_waydroid_orchestrator.py'
+      - 'scripts/openwave_mount_preflight_report.py'
+      - 'scripts/test-openwave-boot.py'
+      - 'scripts/tests/test_mount_preflight_report.py'
+      - 'scripts/openwave_selinux_avc_report.py'
+      - 'scripts/tests/test_selinux_debug.py'
+      - 'scripts/prepare-openwave-boot.py'
+      - 'userspace/openrc/qa/waydroid-mount-preflight.start'
+      - 'userspace/waydroid/waydroid_mount.c'
+      - 'userspace/waydroid/CMakeLists.txt'
+      - 'userspace/waydroid/tests/test_mount_helper.py'
+      - 'userspace/controls-gallery/CMakeLists.txt'
+      - 'userspace/controls-gallery/tests/test_sdk_guard.py'
+      - 'userspace/waydroid/mount-helper/CMakeLists.txt'
+      - 'userspace/waydroid/CMakeLists.txt'
+      - 'build-openwave'
+      - 'userspace/security/selinux/openwave.cil'
+      - 'userspace/security/selinux/file_contexts'
+      - '.github/workflows/waydroid-integration-static.yml'
+  pull_request:
+    paths:
+      - 'scripts/openwave-waydroid-integration.*'
+      - 'scripts/tests/test_waydroid_orchestrator.py'
+      - 'scripts/openwave_mount_preflight_report.py'
+      - 'scripts/test-openwave-boot.py'
+      - 'scripts/tests/test_mount_preflight_report.py'
+      - 'scripts/openwave_selinux_avc_report.py'
+      - 'scripts/tests/test_selinux_debug.py'
+      - 'scripts/prepare-openwave-boot.py'
+      - 'userspace/openrc/qa/waydroid-mount-preflight.start'
+      - 'userspace/waydroid/waydroid_mount.c'
+      - 'userspace/waydroid/CMakeLists.txt'
+      - 'userspace/waydroid/tests/test_mount_helper.py'
+      - 'userspace/controls-gallery/CMakeLists.txt'
+      - 'userspace/controls-gallery/tests/test_sdk_guard.py'
+      - 'userspace/waydroid/mount-helper/CMakeLists.txt'
+      - 'userspace/waydroid/CMakeLists.txt'
+      - 'build-openwave'
+      - 'userspace/security/selinux/openwave.cil'
+      - 'userspace/security/selinux/file_contexts'
+      - '.github/workflows/waydroid-integration-static.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python syntax
+        run: python3 -m py_compile scripts/openwave-waydroid-integration.py scripts/tests/test_waydroid_orchestrator.py scripts/openwave_mount_preflight_report.py scripts/test-openwave-boot.py scripts/tests/test_mount_preflight_report.py scripts/prepare-openwave-boot.py scripts/openwave_selinux_avc_report.py scripts/tests/test_selinux_debug.py
+      - name: Bash syntax
+        run: bash -n scripts/openwave-waydroid-integration.sh build-openwave
+      - name: Fail-closed contract regression tests
+        run: python3 -m unittest discover -s scripts/tests -p 'test_waydroid_orchestrator.py' -v
+      - name: CLI parsing
+        run: python3 -I scripts/openwave-waydroid-integration.py --help
+      - name: Guest mount preflight script syntax
+        run: sh -n userspace/openrc/qa/waydroid-mount-preflight.start
+      - name: Mount preflight evidence parser
+        run: python3 -m unittest discover -s scripts/tests -p 'test_mount_preflight_report.py' -v
+      - name: Explicit SELinux debug gating and AVC report regression tests
+        run: python3 -m unittest discover -s scripts/tests -p 'test_selinux_debug.py' -v
+      - name: Bounded QEMU runner supports mount preflight
+        run: python3 scripts/test-openwave-boot.py --help | grep -- '--mount-preflight'
+      - name: Waydroid fixed-op helper C tests
+        run: python3 -m unittest discover -s userspace/waydroid/tests -p 'test_mount_helper.py' -v
+      - name: WaterRouge SDK dependency gating
+        run: python3 -m unittest discover -s userspace/controls-gallery/tests -p 'test_sdk_guard.py' -v
+      - name: Standalone Waydroid mount helper CMake configure, build and install
+        run: |
+          cmake -S userspace/waydroid/mount-helper -B "${RUNNER_TEMP}/mount-build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build "${RUNNER_TEMP}/mount-build" --target waydroid-mount
+          DESTDIR="${RUNNER_TEMP}/mount-stage" cmake --install "${RUNNER_TEMP}/mount-build"
+          test -x "${RUNNER_TEMP}/mount-stage/usr/libexec/openwave-waydroid/waydroid-mount"
+          "${RUNNER_TEMP}/mount-stage/usr/libexec/openwave-waydroid/waydroid-mount" --help
+          if "${RUNNER_TEMP}/mount-stage/usr/libexec/openwave-waydroid/waydroid-mount" --mount-system preinstalled; then
+            echo "A confined helper incorrectly accepted a privileged request outside OpenWave" >&2
+            exit 1
+          fi

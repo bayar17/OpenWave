@@ -300,6 +300,7 @@ def main():
                          ('keyboard.start', 'zz-openwave-keyboard.start'),
                          ('browser-actions.start', 'zz-openwave-browser-actions.start'),
                          ('waydroid.start', 'zz-openwave-waydroid.start'),
+                         ('waydroid-mount-preflight.start', 'zzz-openwave-mount-preflight.start'),
                          ('wifi.start', 'zz-openwave-wifi.start'),
                          ('wifi-settings.start', 'zzz-openwave-wifi-settings.start'),
                          ('wifi-association.start', 'zzz-openwave-wifi-association.start')):

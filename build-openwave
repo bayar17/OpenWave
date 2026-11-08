@@ -23,6 +23,7 @@ Usage: ./build-openwave COMMAND [OPTIONS]
   mdns                          Download/build Avahi and its dependencies
   waydroid-host-deps            Stage pinned Waydroid, iproute2, and networking tools
   waydroid-bindings             Build target Python GI bindings against the SDK
+  waydroid-mount                Cross-build/install only the Stage 2A mount helper (no Qt SDK)
   selinux                       Build SELinux libraries and OpenWave policy
   bubblewrap                    Download/build Bubblewrap and libcap into rootfs
   tzdata                        Install time zone data into runtime staging
@@ -922,6 +923,28 @@ build_waydroid_host_deps() (
         > "$build/upstream-integrity.json"
 )
 
+# Compile the image-mount helper without configuring the native GUI. This is
+# intentionally a separate acceptance gate: missing WaterRouge UI libraries
+# must not prevent us from testing an unrelated staged SELinux helper.
+build_waydroid_mount() (
+source "$ROOT/env.sh" --build
+if (($#)); then
+    echo "Usage: ./build-openwave waydroid-mount" >&2
+    exit 2
+fi
+BUILD="$ROOT/out/waydroid-mount-$OPENWAVE_TARGET_TRIPLE"
+openwave_cmake_configure -S "$ROOT/userspace/waydroid/mount-helper" -B "$BUILD" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN" \
+    -DCMAKE_INSTALL_PREFIX=/usr
+cmake --build "$BUILD" --target waydroid-mount --parallel "${OPENWAVE_BUILD_JOBS:-4}"
+DESTDIR="$OPENWAVE_RUNTIME_STAGE" cmake --install "$BUILD"
+[[ -x "$OPENWAVE_RUNTIME_STAGE/usr/libexec/openwave-waydroid/waydroid-mount" ]] || {
+    echo "Stage 2A helper did not install to the runtime staging tree" >&2
+    exit 1
+}
+)
+
 build_userspace() (
 
 source "$ROOT/env.sh" --build
@@ -1153,7 +1176,7 @@ case "$COMMAND" in
         if (($# > 1)); then usage >&2; exit 2; fi
         case "${1:-all}" in all|deps|media|engine) ;; *) usage >&2; exit 2 ;; esac
         ;;
-    waydroid-host-deps|waydroid-bindings)
+    waydroid-host-deps|waydroid-bindings|waydroid-mount)
         if (($# != 0)); then usage >&2; exit 2; fi
         ;;
     userspace|all)

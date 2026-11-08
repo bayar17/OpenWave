@@ -1,0 +1,172 @@
+#!/bin/sh
+# Opt-in, read-only guest validation. Never starts Waydroid or performs a mount.
+case " $(cat /proc/cmdline) " in
+    *' openwave.qa=mount-preflight '*) ;;
+    *) exit 0 ;;
+esac
+exec >/dev/console 2>&1
+exec /usr/bin/python3.14 -I - <<'PY'
+import os
+import stat
+import struct
+import subprocess
+from pathlib import Path
+
+HELPER = Path('/usr/libexec/openwave-waydroid/waydroid-mount')
+PREINSTALLED = Path('/usr/share/waydroid-extra/images')
+PERSISTENT = Path('/var/lib/waydroid/images')
+MOUNTS = (('/var/lib/waydroid/rootfs', 'erofs'),
+          ('/var/lib/waydroid/rootfs/vendor', 'ext4'))
+OVERLAYS = ('/var/lib/waydroid/overlay',
+            '/var/lib/waydroid/overlay/vendor',
+            '/var/lib/waydroid/overlay_rw/system',
+            '/var/lib/waydroid/overlay_work/system',
+            '/var/lib/waydroid/overlay_rw/vendor',
+            '/var/lib/waydroid/overlay_work/vendor')
+EXPECTED = 'system_u:object_r:openwave_waydroid_mount_exec_t:s0'
+results = {}
+
+def record(name, success, detail=''):
+    state = 'PASS' if success else 'BLOCKED'
+    results[name] = state
+    print('MOUNT_QA_GATE %s=%s %s' % (name, state, detail), flush=True)
+
+def label(path):
+    try:
+        return os.getxattr(path, 'security.selinux', follow_symlinks=False).rstrip(b'\x00').decode()
+    except (OSError, UnicodeError) as exc:
+        return 'unreadable:%s' % type(exc).__name__
+
+def file_ok(path):
+    try:
+        st = path.lstat()
+        return (stat.S_ISREG(st.st_mode) and st.st_uid == 0 and
+                not st.st_mode & 0o022 and st.st_nlink == 1)
+    except OSError:
+        return False
+
+def image_gate(kind, offset, magic):
+    for store in (PREINSTALLED, PERSISTENT):
+        path = store / (kind + '.img')
+        if not file_ok(path):
+            continue
+        try:
+            with path.open('rb') as stream:
+                stream.seek(offset)
+                if stream.read(len(magic)) == magic:
+                    record('image_' + kind, True, 'store=' + store.name)
+                    return
+        except OSError:
+            pass
+    record('image_' + kind, False, 'no validated fixed-store filesystem image')
+
+def mount_map():
+    mounts = {}
+    try:
+        for line in Path('/proc/self/mountinfo').read_text().splitlines():
+            fields = line.split(' - ', 1)
+            if len(fields) != 2:
+                continue
+            left, right = fields
+            target = left.split()[4].replace('\\040', ' ')
+            filesystem = right.split()[0]
+            mounts[target] = filesystem
+    except OSError:
+        pass
+    return mounts
+
+enforcement = Path('/sys/fs/selinux/enforce')
+try:
+    enforcing = enforcement.read_text().strip() == '1'
+except OSError:
+    enforcing = False
+print('MOUNT_QA_BEGIN enforcing=%s' % (1 if enforcing else 0), flush=True)
+record('enforcing', enforcing, 'SELinux mode must remain enforcing')
+record('helper_inode', file_ok(HELPER) and os.access(HELPER, os.X_OK),
+       'installed fixed-operation executable, owner=0, non-writable by group/other')
+actual_label = label(HELPER)
+record('helper_label', actual_label == EXPECTED, 'label=' + actual_label)
+try:
+    context = Path('/proc/self/attr/current').read_text().strip()
+except OSError:
+    context = 'unreadable'
+print('MOUNT_QA_INFO observer_domain=' + context, flush=True)
+try:
+    with HELPER.open('rb') as stream:
+        elf = stream.read(20)
+    elf_valid = elf[:4] == b'\x7fELF' and elf[4] == 2 and elf[5] == 1 and (
+        len(elf) == 20 and struct.unpack('<H', elf[18:20])[0] == 62)
+except OSError:
+    elf_valid = False
+record('helper_elf', elf_valid, 'ELF64 little-endian x86_64')
+try:
+    action = subprocess.run([str(HELPER), '--help'], capture_output=True,
+                            text=True, timeout=5, check=False)
+    help_ok = (action.returncode == 0 and
+               '--overlay-system' in action.stdout and
+               '--bind-egl32' in action.stdout and
+               '--unbind-vendor-odm' in action.stdout)
+except (OSError, subprocess.TimeoutExpired):
+    help_ok = False
+# The observer is not the Waydroid manager domain. Executing the helper
+# from it may be forbidden by SELinux; that denial is NOT a bad helper install.
+print('MOUNT_QA_INFO helper_help=' + ('PASS' if help_ok else 'NOT_EXECUTABLE_FROM_OBSERVER'),
+      flush=True)
+image_gate('system', 1024, bytes.fromhex('e2e1f5e0'))
+image_gate('vendor', 1080, bytes.fromhex('53ef'))
+record('loop_control', Path('/dev/loop-control').exists(),
+       'kernel loop-control node exists')
+# Read-only debug inventory: kernel support and /dev creation are separate
+# prerequisites. The diagnostic must never invoke mknod or modprobe.
+for name, path in (
+    ('loop_sysfs', '/sys/devices/virtual/misc/loop-control/dev'),
+    ('loop_module', '/sys/module/loop'),
+    ('devtmpfs', '/dev'),
+):
+    p = Path(path)
+    print('MOUNT_QA_INFO %s=%s' %
+          (name, 'present' if p.exists() else 'missing'), flush=True)
+try:
+    devices = Path('/proc/devices').read_text()
+    print('MOUNT_QA_INFO loop_block_major=%s' %
+          ('present' if any(line.split()[-1] == 'loop' for line in devices.splitlines()
+                            if line.split()) else 'missing'), flush=True)
+except OSError:
+    print('MOUNT_QA_INFO loop_block_major=unreadable', flush=True)
+try:
+    devices = sorted(p.name for p in Path('/dev').glob('loop[0-9]*'))[:12]
+    print('MOUNT_QA_INFO loop_block_nodes=%s' %
+          (','.join(devices) if devices else 'none'), flush=True)
+except OSError:
+    print('MOUNT_QA_INFO loop_block_nodes=unreadable', flush=True)
+try:
+    filesystems = Path('/proc/filesystems').read_text()
+    for fs_name in ('erofs', 'ext4', 'overlay'):
+        present = any(line.split()[-1] == fs_name for line in filesystems.splitlines()
+                      if line.split())
+        print('MOUNT_QA_INFO fs_%s=%s' %
+              (fs_name, 'available' if present else 'missing'), flush=True)
+except OSError:
+    print('MOUNT_QA_INFO filesystems=unreadable', flush=True)
+mounts = mount_map()
+for destination, filesystem in MOUNTS:
+    actual = mounts.get(destination, 'not-mounted')
+    key = 'mount_' + ('system' if destination.endswith('/rootfs') else 'vendor')
+    print('MOUNT_QA_INFO %s=%s' % (key, actual), flush=True)
+    # Being unmounted before the start request is expected, not a failure.
+for path in OVERLAYS:
+    p = Path(path)
+    try:
+        st = p.lstat()
+        status = ('present' if stat.S_ISDIR(st.st_mode) and st.st_uid == 0
+                  and not st.st_mode & 0o022 else 'unsafe')
+    except OSError:
+        status = 'missing'
+    print('MOUNT_QA_INFO overlay_%s=%s' % (path.removeprefix('/var/lib/waydroid/').replace('/', '_'), status),
+          flush=True)
+print('MOUNT_QA_INFO helper_domain_transition=UNVERIFIED', flush=True)
+print('MOUNT_QA_INFO mount_syscalls=NOT_ATTEMPTED', flush=True)
+summary = all(value == 'PASS' for value in results.values())
+print('MOUNT_QA_END prerequisites=%s' % ('PASS' if summary else 'BLOCKED'),
+      flush=True)
+PY

@@ -82,6 +82,10 @@ def main():
     parser.add_argument('--keyboard', action='store_true', help='Inject QEMU hardware keys into Ocean and the confined Settings search field')
     parser.add_argument('--browser-actions', action='store_true', help='Exercise Browser downloads and web-app installation using a local HTTP fixture')
     parser.add_argument('--waydroid', action='store_true', help='Collect bounded Waydroid/framework diagnostics under enforcing SELinux')
+    parser.add_argument('--mount-preflight', action='store_true',
+                        help='Read-only Waydroid mount-helper prerequisites; no Android startup or mounts')
+    parser.add_argument('--selinux-debug', action='store_true',
+                        help='Allow permissive SELinux ONLY with --mount-preflight; capture AVC evidence in disposable QEMU')
     parser.add_argument('--dns', action='store_true', help='With --app-launch, verify confined app access to live DNS and profile isolation')
     parser.add_argument('--power', choices=('poweroff', 'reboot'), help='Exercise confirmed Ocean power actions; reboot must boot again before powering off')
     parser.add_argument('--usb-wifi', help='Exercise a real host USB Wi-Fi adapter (VID:PID); temporarily detaches it from the host')
@@ -91,11 +95,18 @@ def main():
         parser.error('--dns requires --app-launch')
     if args.wifi_associate and not args.usb_wifi:
         parser.error('--wifi-associate requires --usb-wifi')
-    if sum(bool(value) for value in (args.portal, args.app_launch, args.power, args.usb_wifi, args.keyboard, args.browser_actions, args.waydroid)) > 1:
+    if sum(bool(value) for value in (args.portal, args.app_launch, args.power, args.usb_wifi, args.keyboard, args.browser_actions, args.waydroid, args.mount_preflight)) > 1:
         parser.error('Run the portal, application, power, Wi-Fi and keyboard suites separately')
     if not 10 <= args.seconds <= 600:
         parser.error('--seconds must be 10..600')
-    if (args.app_launch or args.portal or args.power or args.usb_wifi or args.keyboard or args.browser_actions or args.waydroid) and args.mode != 'enforcing':
+    debug_allowed = args.selinux_debug and args.mount_preflight and args.mode == 'permissive'
+    if args.selinux_debug and not debug_allowed:
+        parser.error('--selinux-debug requires --mount-preflight --mode permissive')
+    if args.mount_preflight and args.mode == 'permissive' and not args.selinux_debug:
+        parser.error('Permissive mount preflight requires explicit --selinux-debug')
+    if (args.app_launch or args.portal or args.power or args.usb_wifi or
+        args.keyboard or args.browser_actions or args.waydroid or
+        args.mount_preflight) and args.mode != 'enforcing' and not debug_allowed:
         parser.error('Guest integration suites require enforcing mode')
     usb = None
     if args.usb_wifi:
@@ -136,6 +147,9 @@ def main():
               'video=Virtual-1:544x960@60e OPENWAVE_DISPLAY_MODE=544x960')
     if args.mode == 'permissive':
         append += ' openwave.selinux=permissive'
+    if args.selinux_debug:
+        # Diagnostic-only kernel logging. Never relax security via image edits.
+        append += ' audit=1 log_buf_len=16M printk.time=1'
     if args.app_launch:
         append += ' openwave.qa=app-launch'
     if args.dns:
@@ -148,6 +162,8 @@ def main():
         append += ' openwave.qa=keyboard'
     if args.waydroid:
         append += ' openwave.qa=waydroid'
+    if args.mount_preflight:
+        append += ' openwave.qa=mount-preflight'
     if fixture:
         append += ' openwave.qa=browser-actions openwave.browser-fixture=' + fixture.url
     if args.power:
@@ -178,11 +194,13 @@ def main():
                 except (OSError, ValueError, RuntimeError) as error:
                     (output / 'keyboard-driver-error.txt').write_text(str(error) + '\n')
             try:
-                if args.browser_actions or args.waydroid:
+                if args.browser_actions or args.waydroid or args.mount_preflight:
                     while process.poll() is None and time.monotonic() < deadline:
                         serial_path = output / 'serial.log'
                         progress = serial_path.read_text(errors='replace') if serial_path.exists() else ''
                         if ((args.waydroid and 'WAYDROID_QA END enforcing=1' in progress)
+                            or (args.mount_preflight and
+                                'MOUNT_QA_END prerequisites=' in progress)
                             or 'BROWSER_QA_FAIL end-to-end actions' in progress
                             or 'BROWSER_QA PASS download bytes, owner, prompts and web app enforcing=1' in progress):
                             deadline = time.monotonic()
@@ -259,6 +277,32 @@ def main():
     if args.wifi_associate:
         report['usb_wifi_passed'] = 'WIFI_ASSOC PASS associated, DHCP and DNS' in serial and 'WIFI_ASSOC FAIL' not in serial
         report['wifi_association_requested'] = True
+    if args.mount_preflight:
+        from openwave_mount_preflight_report import evaluate as evaluate_mount
+        mount_preflight = evaluate_mount(serial)
+        report['mount_preflight_requested'] = True
+        report['mount_preflight_passed'] = mount_preflight['preflight_passed']
+        (output / 'mount-preflight.json').write_text(
+            json.dumps(mount_preflight, indent=2) + '\n')
+    if args.selinux_debug:
+        from openwave_selinux_avc_report import analyze_avcs
+        avcs = analyze_avcs(serial)
+        debug_complete = (
+            mount_preflight['diagnostics_complete']
+            and not mount_preflight['enforcing']
+            and 'MOUNT_QA_BEGIN enforcing=0' in serial
+            and 'MOUNT_QA_END prerequisites=' in serial
+            and unchanged and 'Kernel panic' not in serial
+        )
+        report['selinux_debug_requested'] = True
+        report['selinux_debug_capture_complete'] = debug_complete
+        report['release_ready'] = False
+        report['mount_operations_passed'] = False
+        (output / 'selinux-avc-debug.json').write_text(
+            json.dumps({'schema': 1, 'mode': 'permissive-diagnostic',
+                        'capture_complete': debug_complete,
+                        'release_ready': False,
+                        'avc_summary': avcs}, indent=2) + '\n')
     if args.waydroid:
         from openwave_waydroid_report import evaluate
         waydroid = evaluate(serial)
@@ -272,6 +316,8 @@ def main():
         or (args.keyboard and not report['keyboard_passed']) \
         or (args.browser_actions and not report['browser_actions_passed']) \
         or (args.waydroid and not report['waydroid_framework_passed']) \
+        or (args.mount_preflight and not args.selinux_debug and not report['mount_preflight_passed']) \
+        or (args.selinux_debug and not report['selinux_debug_capture_complete']) \
         or (args.power and not report['power_passed']) or (usb and not report['usb_wifi_passed']):
         raise SystemExit(1)
 
