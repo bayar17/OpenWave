@@ -208,6 +208,31 @@ class PolicyTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('neverallow', result.stderr)
 
+    def test_mount_helper_stage2a_is_transitional_but_unprivileged(self):
+        # This stage validates domain separation, not actual mount ability.
+        assertions = '''
+            (neverallow openwave_waydroid_mount_t self (capability (sys_admin sys_boot sys_time)))
+            (neverallow openwave_waydroid_mount_t openwave_all_types
+                        (security (load_policy setenforce)))
+            (neverallow openwave_app_t openwave_waydroid_mount_exec_t
+                        (file (execute entrypoint execute_no_trans)))
+        '''
+        result = self.compile(assertions)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # We do not pretend that the helper can mount before Android guest
+        # filesystem and mountpoint labels have been verified.
+        for rule in (
+            '(allow openwave_waydroid_mount_t self (capability (sys_admin)))',
+            '(allow openwave_waydroid_mount_t openwave_default_t (filesystem (mount)))',
+            '(allow openwave_waydroid_mount_t openwave_private_t (security (setenforce)))',
+            '(allow openwave_app_t openwave_waydroid_mount_exec_t (file (execute)))',
+            '(neverallow openwave_waydroid_manager_t openwave_waydroid_mount_exec_t (file (execute)))',
+        ):
+            with self.subTest(rule=rule):
+                mutated = self.compile(rule)
+                self.assertNotEqual(mutated.returncode, 0, mutated.stderr)
+                self.assertIn('neverallow', mutated.stderr)
+
     def test_linker_objects_are_readonly_for_confined_clients(self):
         result = self.compile('''
             (neverallow openwave_app_t openwave_elf_loader_t
