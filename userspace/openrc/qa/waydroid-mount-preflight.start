@@ -9,7 +9,6 @@ exec /usr/bin/python3.14 -I - <<'PY'
 import os
 import stat
 import struct
-import subprocess
 from pathlib import Path
 
 HELPER = Path('/usr/libexec/openwave-waydroid/waydroid-mount')
@@ -29,7 +28,9 @@ results = {}
 def record(name, success, detail=''):
     state = 'PASS' if success else 'BLOCKED'
     results[name] = state
-    print('MOUNT_QA_GATE %s=%s %s' % (name, state, detail), flush=True)
+    # One write reduces the chance of printk splitting a gate's description.
+    os.write(1, ('MOUNT_QA_GATE %s=%s %s\n' %
+                 (name, state, detail)).encode('utf-8'))
 
 def label(path):
     try:
@@ -42,6 +43,27 @@ def file_ok(path):
         st = path.lstat()
         return (stat.S_ISREG(st.st_mode) and st.st_uid == 0 and
                 not st.st_mode & 0o022 and st.st_nlink == 1)
+    except OSError:
+        return False
+
+def helper_inode_ok(path):
+    # Inspect mode bits; os.access(X_OK) asks SELinux for execute permission.
+    # The observer must never require authority to execute this privileged
+    # helper merely to establish that its owner/mode are safe.
+    try:
+        st = path.lstat()
+        return file_ok(path) and bool(st.st_mode & 0o111)
+    except OSError:
+        return False
+
+def loop_control_ok():
+    # Confirm a real, root-owned loop-control character device, not a
+    # symlink or an unrelated file. This remains metadata-only.
+    try:
+        st = Path('/dev/loop-control').lstat()
+        return (stat.S_ISCHR(st.st_mode) and st.st_uid == 0
+                and os.major(st.st_rdev) == 10
+                and os.minor(st.st_rdev) == 237)
     except OSError:
         return False
 
@@ -82,7 +104,7 @@ except OSError:
     enforcing = False
 print('MOUNT_QA_BEGIN enforcing=%s' % (1 if enforcing else 0), flush=True)
 record('enforcing', enforcing, 'SELinux mode must remain enforcing')
-record('helper_inode', file_ok(HELPER) and os.access(HELPER, os.X_OK),
+record('helper_inode', helper_inode_ok(HELPER),
        'installed fixed-operation executable, owner=0, non-writable by group/other')
 actual_label = label(HELPER)
 record('helper_label', actual_label == EXPECTED, 'label=' + actual_label)
@@ -99,23 +121,14 @@ try:
 except OSError:
     elf_valid = False
 record('helper_elf', elf_valid, 'ELF64 little-endian x86_64')
-try:
-    action = subprocess.run([str(HELPER), '--help'], capture_output=True,
-                            text=True, timeout=5, check=False)
-    help_ok = (action.returncode == 0 and
-               '--overlay-system' in action.stdout and
-               '--bind-egl32' in action.stdout and
-               '--unbind-vendor-odm' in action.stdout)
-except (OSError, subprocess.TimeoutExpired):
-    help_ok = False
-# The observer is not the Waydroid manager domain. Executing the helper
-# from it may be forbidden by SELinux; that denial is NOT a bad helper install.
-print('MOUNT_QA_INFO helper_help=' + ('PASS' if help_ok else 'NOT_EXECUTABLE_FROM_OBSERVER'),
-      flush=True)
+# Do not run --help: the observer is not the authorized Waydroid manager,
+# so executing this privileged binary both violates the read-only purpose
+# and creates an expected (irrelevant) SELinux AVC.
+print('MOUNT_QA_INFO helper_help=NOT_ATTEMPTED_READ_ONLY_OBSERVER', flush=True)
 image_gate('system', 1024, bytes.fromhex('e2e1f5e0'))
 image_gate('vendor', 1080, bytes.fromhex('53ef'))
-record('loop_control', Path('/dev/loop-control').exists(),
-       'kernel loop-control node exists')
+record('loop_control', loop_control_ok(),
+       'root-owned misc 10:237 loop-control character device exists')
 # Read-only debug inventory: kernel support and /dev creation are separate
 # prerequisites. The diagnostic must never invoke mknod or modprobe.
 for name, path in (
