@@ -12,6 +12,7 @@ Usage: ./build-openwave COMMAND [OPTIONS]
   cross-files                   Regenerate SDK-local Meson/CMake machine files
   graphics                      Build Mesa EGL/GLES2 into target sysroot
   userspace                      Build system apps/services into staging only
+  appd-only                      Rebuild/stage appd and its helpers without missing WaterRouge UI APIs
   openrc [--clean]              Cross-build and stage OpenRC only (no rootfs/image)
   sdk                           Build and install the public API client libraries
   kernel                        Build the kernel with application isolation enabled
@@ -995,6 +996,43 @@ fi
 
 )
 
+# Stage 2H maintenance path: only the existing production appd targets.
+# A complete native UI requires WaterRouge Application/Controls/Theme SDK
+# exports; this target intentionally cannot silently substitute them.
+build_appd_only() (
+    source "$ROOT/env.sh" --build
+    BUILD="$ROOT/out/appd-only-$OPENWAVE_TARGET_TRIPLE"
+    local bundle
+    for bundle in \
+        com.openwave.shell/bin/ocean-launcher \
+        com.openwave.settings/bin/ocean-settings \
+        com.openwave.files/bin/ocean-files \
+        com.openwave.photos/bin/ocean-photos \
+        com.openwave.ocean/bin/ocean \
+        com.openwave.waterrouge-gallery/bin/water-rouge-gallery; do
+        if [[ ! -x "$OPENWAVE_RUNTIME_STAGE/System/Applications/$bundle" ]]; then
+            echo "appd-only requires an existing working UI staging tree; missing $bundle" >&2
+            echo "Restore the WaterRouge Application/Controls/Theme SDK to rebuild userspace from scratch." >&2
+            exit 1
+        fi
+    done
+    openwave_cmake_configure -S "$ROOT/userspace/appd-only" -B "$BUILD" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN" \
+        -DQT_HOST_PATH="$OPENWAVE_QT_HOST" \
+        -DQT_HOST_PATH_CMAKE_DIR="$OPENWAVE_QT_HOST/lib/cmake" \
+        -DCMAKE_INSTALL_PREFIX=/usr
+    cmake --build "$BUILD" --parallel "${OPENWAVE_BUILD_JOBS:-4}"
+    DESTDIR="$OPENWAVE_RUNTIME_STAGE" cmake --install "$BUILD"
+    local appd_binary="$OPENWAVE_RUNTIME_STAGE/System/Services/appd"
+    if [[ ! -x "$appd_binary" ]] || \
+        ! grep -aFq 'appd: control quit-noack-exited appId=' "$appd_binary"; then
+        echo "appd-only staging failed: expected Stage 2H control marker is absent" >&2
+        exit 1
+    fi
+    echo "Stage 2H appd and helpers staged; existing UI bundles were not rebuilt."
+)
+
 build_rootfs() (
     if (($#)); then
         echo "Usage: ./build-openwave rootfs" >&2
@@ -1179,7 +1217,7 @@ case "$COMMAND" in
     waydroid-host-deps|waydroid-bindings|waydroid-mount)
         if (($# != 0)); then usage >&2; exit 2; fi
         ;;
-    userspace|all)
+    userspace|appd-only|all)
         if (($# != 0)); then usage >&2; exit 2; fi
         ;;
     rootfs)
