@@ -10,6 +10,8 @@ on:
       - 'userspace/waydroid/waydroid_mount.c'
       - 'userspace/waydroid/CMakeLists.txt'
       - 'userspace/waydroid/tests/test_mount_helper.py'
+      - 'userspace/controls-gallery/CMakeLists.txt'
+      - 'userspace/controls-gallery/tests/test_sdk_guard.py'
       - 'userspace/security/selinux/openwave.cil'
       - 'userspace/security/selinux/file_contexts'
       - '.github/workflows/waydroid-integration-static.yml'
@@ -20,6 +22,8 @@ on:
       - 'userspace/waydroid/waydroid_mount.c'
       - 'userspace/waydroid/CMakeLists.txt'
       - 'userspace/waydroid/tests/test_mount_helper.py'
+      - 'userspace/controls-gallery/CMakeLists.txt'
+      - 'userspace/controls-gallery/tests/test_sdk_guard.py'
       - 'userspace/security/selinux/openwave.cil'
       - 'userspace/security/selinux/file_contexts'
       - '.github/workflows/waydroid-integration-static.yml'
@@ -43,3 +47,5 @@ jobs:
         run: python3 -I scripts/openwave-waydroid-integration.py --help
       - name: Waydroid fixed-op helper C tests
         run: python3 -m unittest discover -s userspace/waydroid/tests -p 'test_mount_helper.py' -v
+      - name: WaterRouge SDK dependency gating
+        run: python3 -m unittest discover -s userspace/controls-gallery/tests -p 'test_sdk_guard.py' -v
