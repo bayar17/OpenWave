@@ -1,12 +1,15 @@
 pragma ComponentBehavior: Bound
 import QtQuick
+import OpenWave.Application 1.0
+import OpenWave.Controls 1.0
 import OpenWave.Fonts 1.0
+import OpenWave.Theme 1.0
 import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Window
 import "SearchCompatibility.js" as SearchCompatibility
 
-ApplicationWindow {
+WRApplicationWindow {
     id: root
     width: 768; height: 1366
     visible: true
@@ -469,6 +472,7 @@ ApplicationWindow {
             }
 
             DownloadsPage {
+                objectName: "browserDownloadsPage"
                 anchors.fill: parent
                 visible: root.pageMode === "downloads" && !root.overviewOpen
                 fontFamily: Fonts.family
@@ -597,7 +601,7 @@ ApplicationWindow {
                     anchors.right: menuButton.left; anchors.rightMargin: 9
                     height: parent.height; radius: 32
                     color: "white"
-                    TextField {
+                    WRTextField {
                         id: addressInput
                         anchors.left: parent.left; anchors.leftMargin: 14
                         anchors.right: searchButton.left; anchors.rightMargin: 3
@@ -605,8 +609,8 @@ ApplicationWindow {
                         text: "about:overview"
                         placeholderText: qsTr("type to search")
                         placeholderTextColor: "#9d9d9d"
-                        color: "#121212"; selectionColor: "#8fd5e4"
-                        font.family: Fonts.family; font.pixelSize: 32
+                        color: "#121212"; selectionColor: Theme.selectionColor
+                        fontPixelSize: 40
                         verticalAlignment: TextInput.AlignVCenter
                         leftPadding: 0; rightPadding: 0
                         topPadding: 0; bottomPadding: 0

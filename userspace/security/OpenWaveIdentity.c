@@ -4,11 +4,19 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <selinux/selinux.h>
 #include <unistd.h>
+
+#ifndef OPENWAVE_PROC_DIR
+#define OPENWAVE_PROC_DIR "/proc"
+#endif
+#ifndef OPENWAVE_OWNER_UID
+#define OPENWAVE_OWNER_UID 0
+#endif
 
 guint64 openwave_process_start(guint pid)
 {
-    char *path = g_strdup_printf("/proc/%u/stat", pid), *text = NULL;
+    char *path = g_strdup_printf(OPENWAVE_PROC_DIR "/%u/stat", pid), *text = NULL;
     g_file_get_contents(path, &text, NULL, NULL); g_free(path);
     if (!text) return 0;
     char *end = strrchr(text, ')'); guint64 ticks = 0;
@@ -20,19 +28,40 @@ guint64 openwave_process_start(guint pid)
     g_free(text); return ticks;
 }
 
-gboolean openwave_supervised_process(guint uid, guint pid, const char *pidfile)
+static gboolean supervisor_record_label(int fd)
 {
-    if (uid || pid < 2) return FALSE;
+    int enabled = is_selinux_enabled();
+    if (enabled == 0) return TRUE; /* Non-SELinux host development. */
+    if (enabled < 0) return FALSE;
+    char *context = NULL;
+    gboolean okay = fgetfilecon_raw(fd, &context) >= 0
+        && !strcmp(context, "system_u:object_r:openwave_service_run_t:s0");
+    freecon(context);
+    return okay;
+}
+
+gboolean openwave_supervised_process_uid(guint uid, guint pid, const char *pidfile, guint expected_uid)
+{
+    if (uid != expected_uid || pid < 2) return FALSE;
     char *identity = g_strconcat(pidfile, ".identity", NULL);
     int fd = open(identity, O_RDONLY | O_CLOEXEC | O_NOFOLLOW); g_free(identity);
-    struct stat st; char text[128] = {0}; unsigned expected = 0; unsigned long long ticks = 0;
+    struct stat st; char text[128] = {0}, extra;
+    unsigned expected = 0, recorded_uid = 0; unsigned long long ticks = 0;
     gboolean okay = fd >= 0 && !fstat(fd, &st) && S_ISREG(st.st_mode)
-        && !st.st_uid && !(st.st_mode & 0022) && st.st_size < (off_t)sizeof(text)
-        && read(fd, text, sizeof(text) - 1) > 0
-        && sscanf(text, "%u %llu", &expected, &ticks) == 2
-        && expected == pid && ticks && ticks == openwave_process_start(pid);
+        && st.st_uid == OPENWAVE_OWNER_UID && !(st.st_mode & 0022)
+        && supervisor_record_label(fd)
+        && st.st_size > 0 && st.st_size < (off_t)sizeof(text)
+        && read(fd, text, sizeof(text) - 1) == st.st_size
+        && sscanf(text, "%u %u %llu %c", &expected, &recorded_uid, &ticks, &extra) == 3
+        && expected == pid && recorded_uid == expected_uid
+        && ticks && ticks == openwave_process_start(pid);
     if (fd >= 0) close(fd);
     return okay;
+}
+
+gboolean openwave_supervised_process(guint uid, guint pid, const char *pidfile)
+{
+    return openwave_supervised_process_uid(uid, pid, pidfile, 0);
 }
 
 char *openwave_service_owner(GDBusConnection *bus, const char *name, const char *pidfile, GError **error)

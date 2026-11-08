@@ -28,6 +28,7 @@ Item {
         function init() {
             grid.cancelFlick()
             grid.appDragActive = false
+            grid.reduceMotion = true
             grid.width = 668
             grid.height = 340
             grid.apps = []

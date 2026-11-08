@@ -148,6 +148,28 @@ Item {
         function respond(result, text) { busy = false; finished("test", result, text || "") }
         function cancel() { if (kind === "form") respondFields("cancelled", {}); else respond("cancelled", "") }
     }
+    QtObject {
+        id: fileChooser
+        property bool busy: false
+        property int openCount: 0
+        property int openPhotoCount: 0
+        property var lastOptions: ({})
+        signal completed(var grants)
+        signal cancelled()
+        signal errorOccurred(string message)
+        function openFile(options) {
+            openCount++
+            lastOptions = options
+            busy = true
+        }
+        function openPhoto(options) {
+            openPhotoCount++
+            lastOptions = Object.assign({}, options, {
+                mimeTypes: ["image/*"], imageSource: "gallery"
+            })
+            busy = true
+        }
+    }
     Ocean.Main { id: app; settingsBackend: backend; promptClient: prompts }
 
     TestCase {
@@ -168,6 +190,11 @@ Item {
             app.height = 1366
             app.connectivityBackend = null
             app.timeBackend = null
+            app.portalClient = fileChooser
+            fileChooser.busy = false
+            fileChooser.openCount = 0
+            fileChooser.openPhotoCount = 0
+            fileChooser.lastOptions = ({})
             page.wifiScanDurationMs = 30000
             page.wifiScanIntervalMs = 12000
             page.wifiRefreshIntervalMs = 1500
@@ -238,6 +265,58 @@ Item {
             compare(apps.applicationId, "")
             verify(findChild(page, "settingsTab_apps"))
         }
+        function test_editWallpaperOffersPhotosAndFiles() {
+            page.selectTab(4)
+            app.width = 544
+            app.height = 960
+            wait(30)
+            const edit = findChild(page, "settingsEditWallpaper")
+            const icon = findChild(page, "settingsEditWallpaperIcon")
+            const menu = findChild(page, "settingsWallpaperSourceMenu")
+            const pane = findChild(page, "settingsWifiPaneViewport")
+            verify(edit !== null)
+            verify(icon !== null)
+            verify(menu !== null)
+            verify(pane !== null)
+            compare(icon.width, 48)
+            mouseClick(edit, 40, 28)
+            verify(menu.visible)
+            wait(220)
+            const paneOrigin = pane.mapToItem(menu.parent, 0, 0)
+            const paneEnd = pane.mapToItem(menu.parent, pane.width, pane.height)
+            const buttonAnchor = edit.mapToItem(menu.parent, edit.pressX, edit.pressY)
+            const visualWidth = menu.width
+            const visualHeight = menu.height
+            verify(menu.revealProgress > 0.99)
+            verify(menu.x >= paneOrigin.x)
+            verify(menu.x + visualWidth <= paneEnd.x)
+            verify(menu.y >= paneOrigin.y)
+            verify(menu.y + visualHeight <= paneEnd.y)
+            verify(menu.x <= buttonAnchor.x)
+            verify(menu.x + visualWidth >= buttonAnchor.x)
+            verify(Math.abs(menu.x + menu.sourceX - buttonAnchor.x) < 2)
+            verify(Math.abs(menu.y + menu.sourceY - buttonAnchor.y) < 2)
+            const photos = findChild(page, "settingsWallpaperChoosePhotos")
+            const files = findChild(page, "settingsWallpaperChooseFiles")
+            verify(photos !== null)
+            verify(files !== null)
+            photos.clicked()
+            compare(fileChooser.openPhotoCount, 1)
+            compare(fileChooser.openCount, 0)
+            compare(fileChooser.lastOptions.mimeTypes, ["image/*"])
+            compare(fileChooser.lastOptions.imageSource, "gallery")
+            verify(!menu.visible)
+            fileChooser.busy = false
+            edit.clicked()
+            verify(menu.visible)
+            files.clicked()
+            compare(fileChooser.openCount, 1)
+            compare(fileChooser.openPhotoCount, 1)
+            compare(fileChooser.lastOptions.imageSource, "files")
+            verify(!menu.visible)
+            app.width = 768
+            app.height = 1366
+        }
         function test_wallpaperCropSlidesAndKeepsOutputAspect() {
             page.selectTab(4)
             let cropper = findChild(page, "settingsWallpaperCropper")
@@ -272,7 +351,7 @@ Item {
             page.selectTab(2)
             const general = findChild(page, "settingsGeneralPage")
             compare(general.category, "")
-            compare(general.categories.map(entry => entry.title), ["About", "Storage", "Locale & Languages", "Power options"])
+            compare(general.categories.map(entry => entry.title), ["About", "Appearance", "Storage", "Locale & Languages", "Power options"])
             mouseClick(findChild(page, "settingsGeneral_about"))
             wait(20)
             compare(general.category, "about")
@@ -301,6 +380,67 @@ Item {
             verify(findChild(page, "settingsRestart").visible)
             verify(findChild(page, "settingsShutdown").visible)
             page.selectTab(1); page.selectTab(2)
+            compare(general.category, "")
+        }
+        function test_appearanceOffersAccentPalettes() {
+            backend.reduceMotion = true
+            page.selectTab(2)
+            const general = findChild(page, "settingsGeneralPage")
+            mouseClick(findChild(page, "settingsGeneral_appearance"))
+            compare(general.category, "appearance")
+            wait(30)
+            const paletteButton = findChild(page, "settingsAccentPaletteButton")
+            const paletteCard = findChild(page, "settingsAccentPalette")
+            const paletteDescription = findChild(page, "settingsAccentPaletteDescription")
+            const paletteSurface = findChild(page, "settingsAccentPaletteSurface")
+            verify(paletteButton !== null && paletteButton.visible)
+            verify(paletteDescription !== null)
+            compare(findChild(page, "settingsQuickMenuAppearance"), null)
+            compare(findChild(page, "settingsQuickMenuEditor"), null)
+            compare(findChild(page, "settingsAccentPalettePicker"), null)
+            compare(paletteSurface.height, 62)
+            verify(paletteSurface.y >= paletteDescription.y + paletteDescription.implicitHeight + 16)
+            const collapsedCardHeight = paletteCard.height
+            backend.reduceMotion = false
+            mouseClick(paletteButton)
+            tryCompare(paletteCard, "paletteExpanded", true)
+            const choices = findChild(paletteCard, "settingsAccentPaletteChoices")
+            verify(choices !== null && choices.visible)
+            wait(45)
+            verify(choices.opacity > 0 && choices.opacity < 1,
+                "Accent choices should fade in as the dropdown opens")
+            tryCompare(choices, "opacity", 1, 500)
+            tryVerify(function() { return paletteSurface.height > 200 })
+            compare(paletteCard.height, collapsedCardHeight)
+            verify(paletteCard.z > 0)
+            for (const key of ["ocean-cyan", "rouge", "violet", "amber"])
+                verify(findChild(page, "settingsAccentChoice_" + key) !== null)
+            mouseClick(paletteButton)
+            wait(45)
+            verify(choices.opacity > 0 && choices.opacity < 1,
+                "Accent choices should remain visible while fading out")
+            tryCompare(choices, "opacity", 0, 500)
+            verify(!choices.visible)
+            backend.reduceMotion = true
+            mouseClick(paletteButton)
+            tryCompare(paletteCard, "paletteExpanded", true)
+            const rougeChoice = findChild(page, "settingsAccentChoice_rouge")
+            verify(rougeChoice.visible && rougeChoice.enabled)
+            waitForRendering(rougeChoice)
+            mouseClick(rougeChoice)
+            tryCompare(paletteSurface, "height", 62)
+            compare(findChild(page, "settingsAccentPaletteButton").Accessible.name, "Accent color, Rouge")
+            verify(general.back())
+        }
+        function test_quickMenuEditingIsRemovedFromSettings() {
+            backend.reduceMotion = true
+            page.selectTab(2)
+            const general = findChild(page, "settingsGeneralPage")
+            general.openCategory("appearance")
+            wait(30)
+            compare(findChild(page, "settingsQuickMenuAppearance"), null)
+            compare(findChild(page, "settingsQuickMenuEditor"), null)
+            general.back()
             compare(general.category, "")
         }
         function test_generalSearchOpensCategory() {

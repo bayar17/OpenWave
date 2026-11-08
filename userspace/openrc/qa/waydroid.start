@@ -1,0 +1,130 @@
+#!/bin/sh
+# Opt-in diagnostics only; OpenRC remains the sole container-manager owner.
+case " $(cat /proc/cmdline) " in *' openwave.qa=waydroid '*) ;; *) exit 0 ;; esac
+exec >/dev/console 2>&1
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+export PYTHONDONTWRITEBYTECODE=1
+printf 'WAYDROID_QA BEGIN enforcing=%s\n' "$(cat /sys/fs/selinux/enforce)"
+probe() {
+    name=$1; shift
+    limit=8
+    [ "$name" != initialize ] || limit=25
+    [ "$name" != startup ] || limit=30
+    [ "$name" != request_session ] || limit=60
+    [ "$name" != boot_wait ] || limit=100
+    printf 'WAYDROID_PROBE_BEGIN %s\n' "$name"
+    /bin/busybox timeout "$limit" "$@"
+    result=$?
+    printf '\nWAYDROID_PROBE_END %s exit=%s\n' "$name" "$result"
+}
+probe kernel /bin/busybox uname -a
+probe filesystems /bin/busybox cat /proc/filesystems
+probe devices /bin/busybox ls -ld /dev/binderfs /dev/binder /dev/anbox-binder /dev/dri/renderD128
+probe openrc /sbin/rc-service waydroid status
+probe provisioning /sbin/rc-service waydroid-runtime start
+if [ ! -f /var/lib/waydroid/waydroid.cfg ] \
+    && [ -s /usr/share/waydroid-extra/images/system.img ] \
+    && [ -s /usr/share/waydroid-extra/images/vendor.img ]; then
+    # The administrator-selected images are preinstalled. Upstream recognizes
+    # this location without downloading, replacing data, or starting Android.
+    probe initialize /usr/bin/waydroid init \
+        -i /usr/share/waydroid-extra/images \
+        -c https://waydroid-atv.github.io/ota/a17-qpr0/system \
+        -v https://waydroid-atv.github.io/ota/a17-qpr0/vendor \
+        -r lineage -s GAPPS
+fi
+probe binder_reprovision /usr/bin/python3.14 - <<'PY'
+import hashlib
+import subprocess
+from pathlib import Path
+config = Path('/var/lib/waydroid/waydroid.cfg')
+before = hashlib.sha256(config.read_bytes()).digest()
+subprocess.run(['/usr/bin/umount', '/dev/binderfs'], check=True)
+subprocess.run(['/usr/bin/python3.14', '-I',
+                '/usr/libexec/openwave-waydroid-binder.py'], check=True)
+assert hashlib.sha256(config.read_bytes()).digest() == before
+print('Binder remount recovery PASS; Android configuration unchanged')
+PY
+probe startup /sbin/rc-service waydroid start
+probe binder_labels /usr/bin/python3.14 - <<'PY'
+import os
+import stat
+for name in sorted(os.listdir('/dev/binderfs')):
+    path = '/dev/binderfs/' + name
+    info = os.stat(path)
+    print(path, 'character=' + str(stat.S_ISCHR(info.st_mode)),
+          os.getxattr(path, 'security.selinux').rstrip(b'\0').decode())
+PY
+probe runtime /System/Services/openwave-runtime-check --waydroid
+probe version /usr/bin/waydroid --version
+probe status /usr/bin/waydroid status
+if /System/Services/openwave-wait-dbus system id.waydro.Container; then
+    # Boot diagnostic: ask upstream's root manager to create the dedicated
+    # Waydroid user's container. This does not certify a running user session,
+    # application provider, or authenticated Ocean surfaces.
+    probe session_data /lib/rc/bin/checkpath -d -o waydroid:waydroid -m 0700 /var/lib/waydroid-user/data
+    probe request_session /usr/bin/python3.14 - <<'PY'
+import os
+import dbus
+
+assert os.getuid() == os.geteuid() == 0
+assert 'openwave.qa=waydroid' in open('/proc/cmdline').read().split()
+session = {
+    'user_name': 'waydroid', 'user_id': '990', 'group_id': '990',
+    'host_user': '/var/lib/waydroid-user', 'pid': str(os.getpid()),
+    'xdg_data_home': '/var/lib/waydroid-user',
+    'xdg_runtime_dir': '/run/waydroid',
+    'wayland_display': '/run/user/1000/wayland-0',
+    'pulse_runtime_path': '/run/waydroid/pulse',
+    'waydroid_user_state': '/var/lib/waydroid-user',
+    'waydroid_data': '/var/lib/waydroid-user/data',
+    'state': 'STOPPED', 'lcd_density': '0', 'background_start': 'true',
+}
+manager = dbus.Interface(dbus.SystemBus().get_object(
+    'id.waydro.Container', '/ContainerManager'), 'id.waydro.ContainerManager')
+manager.Start(dbus.Dictionary(session, signature='ss'), timeout=55)
+print('Upstream container Start returned; framework readiness is checked separately')
+PY
+fi
+probe container /usr/bin/lxc-info -P /var/lib/waydroid/lxc -n waydroid -sH
+if [ -f /var/lib/waydroid/waydroid.cfg ]; then
+    printf 'WAYDROID_QA initialized=yes\n'
+else
+    printf 'WAYDROID_QA initialized=no\n'
+fi
+for image in system vendor; do
+    found=no
+    for directory in /var/lib/waydroid/images /usr/share/waydroid-extra/images; do
+        if [ -s "$directory/$image.img" ]; then
+            printf 'WAYDROID_QA image=%s present=yes path=%s\n' "$image" "$directory/$image.img"
+            found=yes
+            break
+        fi
+    done
+    if [ "$found" = no ]; then
+        printf 'WAYDROID_QA image=%s present=no\n' "$image"
+    fi
+done
+state=$(/bin/busybox timeout 3 /usr/bin/lxc-info -P /var/lib/waydroid/lxc -n waydroid -sH 2>/dev/null)
+if [ "$state" = RUNNING ]; then
+    # Android cold boot continues after LXC reports RUNNING. Poll inside the
+    # container, without elevated LXC/LSM bypass options, before final probes.
+    probe boot_wait /usr/bin/waydroid shell -- /system/bin/sh -c \
+        'i=0; while [ "$i" -lt 45 ]; do [ "$(getprop sys.boot_completed)" = 1 ] && exit 0; i=$((i+1)); sleep 2; done; exit 1'
+    probe android_processes /usr/bin/waydroid shell ps -A
+    probe servicemanager /usr/bin/waydroid shell getprop init.svc.servicemanager
+    probe zygote /usr/bin/waydroid shell getprop init.svc.zygote
+    probe system_server /usr/bin/waydroid shell pidof system_server
+    probe boot_completed /usr/bin/waydroid shell getprop sys.boot_completed
+    probe packages /usr/bin/waydroid shell pm list packages
+    probe applications /usr/bin/waydroid app list
+    probe logcat /usr/bin/waydroid logcat -- -d -t 100
+else
+    printf 'WAYDROID_QA framework=BLOCKED container-not-running\n'
+fi
+for log in /run/openwave/waydroid.stdout.log /run/openwave/waydroid.stderr.log /var/lib/waydroid/waydroid.log /run/waydroid-lxc/dnsmasq.log; do
+    [ -f "$log" ] || continue
+    printf 'WAYDROID_QA LOG %s\n' "$log"
+    /bin/busybox tail -80 "$log"
+done
+printf 'WAYDROID_QA END enforcing=%s\n' "$(cat /sys/fs/selinux/enforce)"

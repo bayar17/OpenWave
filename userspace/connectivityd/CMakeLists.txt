@@ -14,7 +14,7 @@ target_include_directories(connectivityd PRIVATE
     "${CMAKE_SYSROOT}/usr/include/libnm"
     "${CMAKE_SYSROOT}/usr/include/glib-2.0"
     "${CMAKE_SYSROOT}/usr/lib64/glib-2.0/include")
-target_link_libraries(connectivityd PRIVATE OpenWave::Xml nm gio-2.0 gobject-2.0 glib-2.0)
+target_link_libraries(connectivityd PRIVATE OpenWave::Xml OpenWave::Identity nm gio-2.0 gobject-2.0 glib-2.0)
 install(TARGETS connectivityd RUNTIME DESTINATION /System/Services)
 install(FILES org.openwave.Connectivity.conf
         DESTINATION share/dbus-1/system.d)

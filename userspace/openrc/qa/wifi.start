@@ -1,0 +1,68 @@
+#!/bin/sh
+case " $(cat /proc/cmdline) " in *' openwave.qa=wifi '*) ;; *) exit 0 ;; esac
+exec >/dev/console 2>&1
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+printf 'WIFI_QA BEGIN\n'
+attempt=0
+wireless=
+while [ "$attempt" -lt 60 ]; do
+    for path in /sys/class/net/*/phy80211; do
+        [ -e "$path" ] || continue
+        wireless=${path%/phy80211}; wireless=${wireless##*/}
+        break
+    done
+    [ -n "$wireless" ] && break
+    attempt=$((attempt + 1)); sleep 0.25
+done
+printf 'WIFI_QA interface=%s driver=%s\n' "$wireless" "$(readlink "/sys/class/net/$wireless/device/driver")"
+nmcall() {
+    /usr/bin/gdbus call --system --timeout 5 --dest org.freedesktop.NetworkManager \
+        --object-path "$1" --method "$2" ${3+"$3"} ${4+"$4"} ${5+"$5"}
+}
+manager=/org/freedesktop/NetworkManager
+device=
+attempt=0
+while [ "$attempt" -lt 40 ]; do
+    devices=$(nmcall "$manager" org.freedesktop.NetworkManager.GetDevices 2>&1)
+    for candidate in $(printf '%s\n' "$devices" | sed 's/[^a-zA-Z0-9_\/]\{1,\}/ /g'); do
+        case "$candidate" in /org/freedesktop/NetworkManager/Devices/*) ;; *) continue ;; esac
+        kind=$(nmcall "$candidate" org.freedesktop.DBus.Properties.Get org.freedesktop.NetworkManager.Device DeviceType 2>&1)
+        case "$kind" in *'uint32 2'*) device=$candidate; break ;; esac
+    done
+    [ -n "$device" ] && break
+    attempt=$((attempt + 1)); sleep 0.25
+done
+okay=0
+if [ -n "$wireless" ] && [ -n "$device" ]; then
+    nmcall "$manager" org.freedesktop.DBus.Properties.Set org.freedesktop.NetworkManager WirelessEnabled '<true>'
+    sleep 2
+    if nmcall "$device" org.freedesktop.NetworkManager.Device.Wireless.RequestScan '{}'; then
+        scan_wait=0
+        count=0
+        while [ "$scan_wait" -lt 15 ]; do
+            points=$(nmcall "$device" org.freedesktop.NetworkManager.Device.Wireless.GetAccessPoints 2>&1)
+            # Count AP object paths; do not capture SSIDs or credentials in logs.
+            count=$(printf '%s\n' "$points" | grep -o '/org/freedesktop/NetworkManager/AccessPoint/[0-9]*' | awk 'END { print NR+0 }')
+            [ "$count" -gt 0 ] && break
+            scan_wait=$((scan_wait + 1)); sleep 1
+        done
+        printf 'WIFI_QA scan access_points=%s\n' "$count"
+        state=$(/usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Connectivity \
+            --object-path /org/openwave/Connectivity --method org.openwave.Connectivity1.GetState 2>&1)
+        case "$state" in
+            *"'wifiDeviceAvailable': <true>"*"'wifiEnabled': <true>"*)
+                printf 'WIFI_QA native OpenWave connectivity sees enabled adapter\n'
+                [ "$count" -gt 0 ] && [ "$(cat /sys/fs/selinux/enforce)" = 1 ] && okay=1 ;;
+        esac
+    fi
+fi
+for file in /run/openwave/iwd.*.log /run/openwave/networkmanager.*.log; do
+    [ -f "$file" ] || continue
+    printf '\nWIFI_LOG %s\n' "$file"; tail -60 "$file"
+done
+if [ "$okay" = 1 ]; then
+    printf 'WIFI_QA PASS real USB adapter, NetworkManager and scan\n'
+else
+    printf 'WIFI_QA FAIL adapter or scan\n'
+fi
+printf 'WIFI_QA END\n'

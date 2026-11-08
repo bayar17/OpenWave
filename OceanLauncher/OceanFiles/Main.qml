@@ -1,10 +1,13 @@
 import QtQuick
+import OpenWave.Application 1.0
+import OpenWave.Controls 1.0
 import OpenWave.Fonts 1.0
+import OpenWave.Theme 1.0
 import QtQuick.Controls
 import QtQuick.Window
 import QtQuick.Effects
 
-ApplicationWindow {
+WRApplicationWindow {
     id: root
     width: 768; height: 1366
     flags: Qt.Window | Qt.FramelessWindowHint
@@ -37,10 +40,7 @@ ApplicationWindow {
         NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
     }
 
-    FontLoader { id: regular; source: "assets/fonts/Inter-Regular.otf" }
-    FontLoader { id: light; source: "assets/fonts/Inter-Light.otf" }
-    FontLoader { source: "assets/fonts/Inter-SemiBold.otf" }
-    font.family: regular.name
+    font.family: Fonts.family
 
     function back() {
         if (navigating) return
@@ -345,14 +345,15 @@ ApplicationWindow {
 
         Item {
             x: 40; y: 98; width: 688; height: 60
-            TextField {
+            WRTextField {
                 id: searchInput
                 objectName: "filesSearch"
                 x: 15; width: 540; height: 58
                 placeholderText: "Search"
                 color: "white"; placeholderTextColor: "white"
-                font.family: light.name; font.pixelSize: 43
+                fontPixelSize: 52; fontWeight: Font.Light
                 leftPadding: 7; rightPadding: 7
+                topPadding: 0; bottomPadding: 0
                 background: Item {}
                 onTextChanged: if (root.filesBackend) root.filesBackend.setSearchQuery(text)
                 onAccepted: focus = false
@@ -402,7 +403,7 @@ ApplicationWindow {
                         objectName: "filesSelectionCircle"
                         x: 0; y: 26; width: 40; height: 40; radius: 20
                         border.color: "#f2ffffff"; border.width: 1
-                        color: row.selected ? "#003b91" : "transparent"
+                        color: row.selected ? Qt.rgba(Theme.selectionColor.r, Theme.selectionColor.g, Theme.selectionColor.b, 0.36) : "transparent"
                         opacity: root.selectionReveal
                     }
                     Item {
@@ -418,13 +419,13 @@ ApplicationWindow {
                         Text {
                             x: 91; y: 11; width: parent.width - x - 16; height: 42
                             text: row.name; color: "white"
-                            font.family: regular.name; font.pixelSize: 33
+                            font.family: Fonts.family; font.pixelSize: 33
                             elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter
                         }
                         Text {
                             x: 91; y: 54; width: parent.width - x - 16; height: 27
                             text: row.detail; color: "#dde1e3"
-                            font.family: light.name; font.pixelSize: 21
+                            font.family: Fonts.family; font.pixelSize: 21; font.weight: Font.Light
                             elide: Text.ElideRight
                         }
                     }
@@ -444,7 +445,7 @@ ApplicationWindow {
                     anchors.centerIn: parent
                     visible: fileList.count === 0 && root.filesBackend && !root.filesBackend.error
                     text: searchInput.text.length ? "No matching files" : "This folder is empty"
-                    color: "#dde1e3"; font.family: light.name; font.pixelSize: 30
+                    color: "#dde1e3"; font.family: Fonts.family; font.pixelSize: 30; font.weight: Font.Light
                 }
             }
     
@@ -462,7 +463,7 @@ ApplicationWindow {
                                 .arg(root.filesBackend.currentPath === root.filesBackend.rootPath ? qsTr("Data")
                                     : root.filesBackend.currentPath.split("/").pop())
                         : root.filesBackend ? root.filesBackend.breadcrumb : "Data"
-                    color: "white"; font.family: light.name; font.pixelSize: 32
+                    color: "white"; font.family: Fonts.family; font.pixelSize: 32; font.weight: Font.Light
                     elide: root.filesBackend && root.filesBackend.transferMode.length ? Text.ElideRight : Text.ElideLeft
                 }
                 TapHandler { onTapped: {
@@ -671,7 +672,7 @@ ApplicationWindow {
                 height: root.filesBackend && root.filesBackend.previewAudio ? 78 : 55
                 text: root.sorting ? "Sort by"
                     : (root.filesBackend ? root.filesBackend.previewName : "")
-                color: "white"; font.family: regular.name
+                    color: "white"; font.family: Fonts.family
                 font.pixelSize: root.filesBackend && root.filesBackend.previewAudio ? 29 : 34
                 elide: Text.ElideRight
                 wrapMode: Text.Wrap
@@ -682,7 +683,7 @@ ApplicationWindow {
                 x: 32; y: root.filesBackend && root.filesBackend.previewAudio ? 103 : 100
                 width: 548; height: 55
                 text: root.filesBackend ? root.filesBackend.previewDetail : ""
-                color: "#dde1e3"; font.family: light.name; font.pixelSize: 28
+                    color: "#dde1e3"; font.family: Fonts.family; font.pixelSize: 28; font.weight: Font.Light
             }
             Column {
                 visible: root.sorting
@@ -695,8 +696,8 @@ ApplicationWindow {
                         width: 548; height: 77
                         Text {
                             anchors.verticalCenter: parent.verticalCenter; text: modelData
-                            color: root.filesBackend && root.filesBackend.sortMode === index ? "#0ac9ff" : "white"
-                            font.family: light.name; font.pixelSize: 32
+                            color: root.filesBackend && root.filesBackend.sortMode === index ? Theme.accentColor : "white"
+                            font.family: Fonts.family; font.pixelSize: 32; font.weight: Font.Light
                         }
                         MouseArea {
                             anchors.fill: parent
@@ -736,12 +737,12 @@ ApplicationWindow {
                     horizontalAlignment: Text.AlignHCenter
                     text: root.mediaBackend && root.mediaBackend.loading ? "Preparing audio…"
                         : root.mediaBackend ? root.mediaBackend.error : ""
-                    color: "#e4e9ea"; font.family: light.name; font.pixelSize: 20
+                    color: "#e4e9ea"; font.family: Fonts.family; font.pixelSize: 20; font.weight: Font.Light
                     elide: Text.ElideRight
                 }
                 Rectangle {
                     x: 284; y: 300; width: 80; height: 80; radius: 40
-                    color: "#15bfed"
+                    color: Theme.accentColor
                     opacity: root.mediaBackend && root.mediaBackend.loading ? 0.45 : 1
                     Text {
                         anchors.centerIn: parent
@@ -754,40 +755,28 @@ ApplicationWindow {
                         onClicked: if (root.mediaBackend) root.mediaBackend.toggle()
                     }
                 }
-                Slider {
+                WRSlider {
                     id: playbackSlider
                     x: 38; y: 392; width: 572; height: 42
                     from: 0
                     to: Math.max(1, root.mediaBackend ? root.mediaBackend.durationMs : 1)
                     value: root.mediaBackend ? root.mediaBackend.positionMs : 0
                     onMoved: if (root.mediaBackend) root.mediaBackend.seek(value)
-                    background: Rectangle {
-                        x: playbackSlider.leftPadding
-                        y: playbackSlider.topPadding + playbackSlider.availableHeight / 2 - height / 2
-                        width: playbackSlider.availableWidth; height: 5; radius: 3
-                        color: "#748c9296"
-                        Rectangle {
-                            width: playbackSlider.visualPosition * parent.width
-                            height: parent.height; radius: 3; color: "#19d4ff"
-                        }
-                    }
-                    handle: Rectangle {
-                        x: playbackSlider.leftPadding + playbackSlider.visualPosition
-                            * (playbackSlider.availableWidth - width)
-                        y: playbackSlider.topPadding + playbackSlider.availableHeight / 2 - height / 2
-                        width: 22; height: 22; radius: 11; color: "white"
-                    }
+                    activeTrackColor: Theme.accentColor
+                    inactiveTrackColor: "#748c9296"
+                    handleColor: "white"
+                    accessibleLabel: qsTr("Playback position")
                 }
                 Text {
                     x: 39; y: 424; width: 120; height: 30
                     text: root.clockTime(root.mediaBackend ? root.mediaBackend.positionMs : 0)
-                    color: "white"; font.family: light.name; font.pixelSize: 22
+                    color: "white"; font.family: Fonts.family; font.pixelSize: 22; font.weight: Font.Light
                 }
                 Text {
                     x: 489; y: 424; width: 120; height: 30
                     horizontalAlignment: Text.AlignRight
                     text: root.clockTime(root.mediaBackend ? root.mediaBackend.durationMs : 0)
-                    color: "white"; font.family: light.name; font.pixelSize: 22
+                    color: "white"; font.family: Fonts.family; font.pixelSize: 22; font.weight: Font.Light
                 }
             }
         }

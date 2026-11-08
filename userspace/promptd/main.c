@@ -3,6 +3,7 @@
 #include <gio/gio.h>
 #include <glib-unix.h>
 #include <signal.h>
+#include <pwd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -71,7 +72,14 @@ static char *executable(guint pid)
 static gboolean trusted_renderer(Service *s, const char *sender)
 {
     guint uid = 0, pid = 0;
-    if (!credentials(s, sender, &uid, &pid) || uid != getuid()) return FALSE;
+    if (!credentials(s, sender, &uid, &pid)) return FALSE;
+#ifdef PROMPTD_TESTING
+    if (uid != getuid()) return FALSE;
+#else
+    struct passwd *ocean = getpwnam("ocean");
+    if (!ocean || !openwave_supervised_process_uid(uid, pid, s->renderer_pidfile, ocean->pw_uid))
+        return FALSE;
+#endif
     char *expected = NULL;
     if (!g_file_get_contents(s->renderer_pidfile, &expected, NULL, NULL)) return FALSE;
     char *end = NULL;

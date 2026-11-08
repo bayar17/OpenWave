@@ -24,17 +24,18 @@ gboolean appd_credentials(Manager *m, const char *sender, guint *uid, guint *pid
 }
 static void failure(GDBusMethodInvocation *call, const char *message)
 {
+    g_warning("appd: method=%s rejected: %s", g_dbus_method_invocation_get_method_name(call), message);
     g_dbus_method_invocation_return_dbus_error(call, "org.openwave.Applications.Error", message);
 }
 static gboolean trusted_renderer(Manager *m, guint uid, guint pid)
 {
-    char *contents = NULL;
     char *path = g_strdup_printf("/proc/%u/exe", pid);
     char *exe = g_file_read_link(path, NULL); g_free(path);
-    gboolean okay = uid == m->uid && g_strcmp0(exe, m->launcher_exe) == 0
-        && g_file_get_contents("/run/openwave/ocean.pid", &contents, NULL, NULL)
-        && g_ascii_strtoull(contents, NULL, 10) == pid;
-    g_free(exe); g_free(contents); return okay;
+    gboolean okay = openwave_supervised_process_uid(uid, pid, "/run/openwave/ocean.pid", m->uid)
+        && g_strcmp0(exe, m->launcher_exe) == 0;
+    if (!okay) g_warning("appd: renderer authentication rejected uid=%u pid=%u executable=%s (supervisor proof or executable mismatch)",
+        uid, pid, exe ? exe : "unreadable");
+    g_free(exe); return okay;
 }
 static void method(GDBusConnection *connection, const char *sender, const char *path,
     const char *interface, const char *member, GVariant *parameters, GDBusMethodInvocation *call, gpointer data)
@@ -71,13 +72,15 @@ static void method(GDBusConnection *connection, const char *sender, const char *
         else { failure(call, error ? error->message : "Could not create web app"); g_clear_error(&error); }
         return;
     }
-    gboolean privileged = openwave_supervised_process(uid, pid, "/run/openwave/ocean.pid")
+    gboolean privileged = openwave_supervised_process_uid(uid, pid, "/run/openwave/ocean.pid", m->uid)
         || openwave_supervised_process(uid, pid, "/run/openwave/permissiond.pid");
     if (!strcmp(member, "ResolveCaller") || !strcmp(member, "ResolveProcess") || !strcmp(member, "GetOwnIdentity")) {
         guint target_uid = uid, target_pid = pid;
         if (strcmp(member, "GetOwnIdentity")) {
             if (!privileged && !openwave_supervised_process(uid, pid, "/run/openwave/portal.pid")
                 && !openwave_supervised_process(uid, pid, "/run/openwave/promptd.pid")
+                && !openwave_supervised_process(uid, pid, "/run/openwave/powerd.pid")
+                && !openwave_supervised_process(uid, pid, "/run/openwave/connectivityd.pid")
                 && !openwave_supervised_process(uid, pid, "/run/openwave/wallpaper.pid")) {
                 failure(call, "Only supervised identity consumers may resolve other applications"); return;
             }
@@ -114,6 +117,7 @@ static void method(GDBusConnection *connection, const char *sender, const char *
         if (m->renderer && !renderer) appd_renderer_lost(m);
         if (!m->renderer) m->renderer = g_strdup(sender);
         m->renderer_pid = pid;
+        g_message("appd: renderer authenticated sender=%s uid=%u pid=%u", sender, uid, pid);
         g_dbus_method_invocation_return_value(call, NULL); return;
     }
     if (!strcmp(member, "SetSessionReady")) {
@@ -126,6 +130,7 @@ static void method(GDBusConnection *connection, const char *sender, const char *
         }
         if (ready) ready = appd_publish_sockets(m);
         m->ready = ready;
+        g_message("appd: session-ready=%s runtime=%s renderer-pid=%u", ready ? "true" : "false", m->runtime, m->renderer_pid);
         g_dbus_method_invocation_return_value(call, g_variant_new("(b)", ready)); return;
     }
     if (!strcmp(member, "ListApplications") || !strcmp(member, "GetRunningApplications")) {

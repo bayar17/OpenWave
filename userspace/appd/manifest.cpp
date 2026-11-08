@@ -22,15 +22,22 @@ static bool installedPath(const QString &path, bool executable)
 
 extern "C" App *appd_read_bundle(const char *directory)
 {
+    const auto reject = [directory](const char *reason) -> App * {
+        g_warning("appd: invalid manifest %s: %s", directory, reason);
+        return nullptr;
+    };
     const QString bundle = QString::fromUtf8(directory);
     const QString path = bundle + "/manifest.json";
-    if (!installedPath(path, false)) return nullptr;
+    if (!installedPath(path, false)) {
+        if (QFile::exists(path)) return reject("metadata path or ownership is unsafe");
+        return nullptr;
+    }
     QFile file(path);
-    if (!file.open(QIODevice::ReadOnly) || file.size() > 65536) return nullptr;
+    if (!file.open(QIODevice::ReadOnly) || file.size() > 65536) return reject("metadata unreadable or larger than 64 KiB");
     const auto bytes = file.readAll();
     QJsonParseError error;
     const auto document = QJsonDocument::fromJson(bytes, &error);
-    if (error.error != QJsonParseError::NoError || !document.isObject()) return nullptr;
+    if (error.error != QJsonParseError::NoError || !document.isObject()) return reject("invalid JSON object");
     const auto object = document.object();
     const QString id = object.value("id").toString();
     static const QRegularExpression identifier("^[a-zA-Z][a-zA-Z0-9_-]*(?:\\.[a-zA-Z0-9][a-zA-Z0-9_-]*){2,}$");
@@ -40,11 +47,11 @@ extern "C" App *appd_read_bundle(const char *directory)
         || object.value("name").toString().trimmed().isEmpty()
         || object.value("name").toString().size() > 256
         || object.value("version").toString().isEmpty()
-        || object.value("runtime").toString() != "openwave-qt") return nullptr;
+        || object.value("runtime").toString() != "openwave-qt") return reject("unsupported schema, application identity, name, version or runtime");
     const auto sandbox = object.value("sandbox").toObject();
     // Profiles select installed policy, never command line or kernel policy fragments.
     if (!sandbox.value("enabled").isBool() || !sandbox.value("enabled").toBool()
-        || sandbox.value("profile").toString() != "standard") return nullptr;
+        || sandbox.value("profile").toString() != "standard") return reject("mandatory sandbox profile missing or invalid");
     const auto requirements = sandbox.value("requires");
     if (!requirements.isUndefined() && !requirements.isArray()) return nullptr;
     for (const auto &requirement : requirements.toArray()) {
@@ -60,8 +67,8 @@ extern "C" App *appd_read_bundle(const char *directory)
     policyIdentity.argv = policyArguments;
     if (!requirements.toArray().isEmpty() && appd_trusted_app(&policyIdentity)) return nullptr;
     const QString role = object.value("role").toString();
-    if (!role.isEmpty()) {
-        // The compositor is bootstrapped by PID 1, never exposed as a launchable app.
+    if (!role.isEmpty() || id == "com.openwave.shell") {
+        // The compositor is started by OpenRC, never exposed as a launchable app.
         if (role != "compositor" || id != "com.openwave.shell"
             || bundle != "/System/Applications/com.openwave.shell")
             g_warning("appd: unsupported application role in %s", directory);
@@ -75,7 +82,7 @@ extern "C" App *appd_read_bundle(const char *directory)
     };
     const QString executable = object.value("executable").toString();
     if (!relative(executable) || !executable.startsWith("bin/")
-        || !installedPath(bundle + '/' + executable, true)) return nullptr;
+        || !installedPath(bundle + '/' + executable, true)) return reject("executable path, ownership or permissions are invalid");
     const auto permissions = object.value("permissions");
     if (!permissions.isArray() || permissions.toArray().size() > 64) return nullptr;
     const QRegularExpression permissionId(QRegularExpression::anchoredPattern("[A-Za-z0-9][A-Za-z0-9_.-]{0,127}"));

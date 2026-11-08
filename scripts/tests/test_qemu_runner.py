@@ -46,12 +46,14 @@ else:
                         QEMU_BIN=str(qemu), QEMU_ARGS_LOG=str(self.log),
                         OPENWAVE_QEMU_VNC_HOST='127.0.0.1')
 
-    def command(self, *args):
-        return subprocess.run([str(ROOT / 'run-openwave'), '--root', str(self.root),
-                               '--kernel', str(self.kernel), '--image', str(self.image),
+    def command(self, *args, include_kernel=True):
+        command = [str(ROOT / 'run-openwave'), '--root', str(self.root)]
+        if include_kernel:
+            command.extend(['--kernel', str(self.kernel)])
+        command.extend(['--image', str(self.image),
                                '--usb-wifi', 'none', '--usb-bluetooth', 'none',
-                               '--audio-backend', 'none', *args, 'run'],
-                              env=self.env, capture_output=True, text=True)
+                               '--audio-backend', 'none', *args, 'run'])
+        return subprocess.run(command, env=self.env, capture_output=True, text=True)
 
     def test_window_and_alias_disable_vnc(self):
         for flag in ('--window', '--qemu-window'):
@@ -78,6 +80,30 @@ else:
         result = self.command('--vnc-host', 'none')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('-vnc', json.loads(self.log.read_text()))
+
+    def test_raw_and_qcow2_image_formats_are_explicit_in_qemu_drive(self):
+        for image_format in ('raw', 'qcow2'):
+            with self.subTest(image_format=image_format):
+                result = self.command('--image-format', image_format)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                args = json.loads(self.log.read_text())
+                drive = args[args.index('-drive') + 1]
+                self.assertIn(f'file={self.image},format={image_format}', drive)
+
+    def test_unknown_image_format_fails_before_qemu(self):
+        result = self.command('--image-format', 'auto')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('Unsupported image format', result.stderr)
+        self.assertFalse(self.log.exists())
+
+    def test_default_kernel_is_reference_build(self):
+        default_kernel = self.root / 'out/linux/arch/x86/boot/bzImage'
+        default_kernel.parent.mkdir(parents=True)
+        default_kernel.touch()
+        result = self.command(include_kernel=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = json.loads(self.log.read_text())
+        self.assertEqual(args[args.index('-kernel') + 1], str(default_kernel))
 
     def test_guest_can_restart_without_exiting_qemu(self):
         result = self.command('--vnc')

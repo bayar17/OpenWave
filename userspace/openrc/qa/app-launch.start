@@ -1,0 +1,173 @@
+#!/bin/sh
+# QA proposal: invoke only after normal boot reaches a live Ocean compositor.
+# Set openwave.qa=app-launch explicitly; this runs entirely in snapshot guest.
+case " $(cat /proc/cmdline) " in *' openwave.qa=app-launch '*) ;; *) exit 0 ;; esac
+exec >/dev/console 2>&1
+dump_integration_logs() {
+    sha256sum /etc/selinux/openwave/policy/policy.35 /System/Services/appd \
+        /System/Applications/com.openwave.shell/bin/ocean-launcher
+    ls -ldZ /sys/fs/cgroup/cgroup.procs /sys/fs/cgroup/openwave-apps
+    for file in /run/openwave/*.pid.identity /run/openwave/appd/*.ini \
+        /run/openwave/appd.stderr.log /run/openwave/permissiond.stderr.log \
+        /run/user/1000/openwave-logs/ocean.stderr.log; do
+        [ -f "$file" ] || continue
+        printf '\nINTEGRATION_LOG %s\n' "$file"
+        tail -100 "$file"
+    done
+}
+trap dump_integration_logs EXIT
+printf 'OPENWAVE_APP_SMOKE_BEGIN\n'
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+
+application_info() {
+    /usr/bin/gdbus call --system --timeout 3 --dest org.openwave.Applications \
+        --object-path /org/openwave/Applications \
+        --method org.openwave.Applications1.GetApplicationInfo "$1"
+}
+run_application() {
+    id=$1
+    expected_context=$2
+    disposition=${3:-stop}
+    printf '\nAPP_TEST BEGIN %s\n' "$id"
+    attempt=0
+    accepted=0
+    while [ "$attempt" -lt 40 ]; do
+        if /System/Services/openwave-launch "$id"; then accepted=1; break; fi
+        attempt=$((attempt + 1))
+        sleep 0.25
+    done
+    [ "$accepted" = 1 ] || { printf 'APP_TEST FAIL %s launch rejected\n' "$id"; return 1; }
+    pid=
+    attempt=0
+    while [ "$attempt" -lt 60 ]; do
+        info=$(application_info "$id" 2>&1)
+        pid=$(printf '%s\n' "$info" | sed -n "s/.*'pid': <uint32 \([0-9][0-9]*\)>.*/\1/p")
+        case "$pid" in ''|0) ;; *) break ;; esac
+        attempt=$((attempt + 1))
+        sleep 0.25
+    done
+    printf 'Application info: %s\n' "$info"
+    case "$pid" in ''|0|*[!0-9]*) printf 'APP_TEST FAIL %s no live PID\n' "$id"; return 1 ;; esac
+    [ -r "/proc/$pid/status" ] || { printf 'APP_TEST FAIL %s stale PID\n' "$id"; return 1; }
+    context=$(tr -d '\000' <"/proc/$pid/attr/current")
+    uid=$(awk '/^Uid:/ {print $2}' "/proc/$pid/status")
+    nnp=$(awk '/^NoNewPrivs:/ {print $2}' "/proc/$pid/status")
+    seccomp=$(awk '/^Seccomp:/ {print $2}' "/proc/$pid/status")
+    caps=$(awk '/^CapEff:/ {print $2}' "/proc/$pid/status")
+    printf 'PID=%s UID=%s context=%s NoNewPrivs=%s Seccomp=%s CapEff=%s\n' "$pid" "$uid" "$context" "$nnp" "$seccomp" "$caps"
+    okay=1
+    [ "$context" = "system_u:system_r:$expected_context:s0" ] || okay=0
+    [ "$nnp" = 1 ] && [ "$caps" = 0000000000000000 ] || okay=0
+    [ "$(cat /sys/fs/selinux/enforce)" = 1 ] || okay=0
+    if [ "$expected_context" = openwave_app_t ]; then
+        [ "$uid" -ge 200000 ] && [ "$uid" -lt 300000 ] || okay=0
+        [ "$seccomp" = 2 ] || okay=0
+        for namespace in mnt ipc uts; do
+            host=$(readlink "/proc/1/ns/$namespace")
+            child=$(readlink "/proc/$pid/ns/$namespace")
+            printf 'namespace %s init=%s application=%s\n' "$namespace" "$host" "$child"
+            [ -n "$child" ] && [ "$host" != "$child" ] || okay=0
+        done
+        cgroup=$(awk -F: '$1==0 {print $3}' "/proc/$pid/cgroup")
+        case "$cgroup" in /openwave-apps/app-*) ;; *) okay=0 ;; esac
+        if [ -n "$cgroup" ]; then
+            limit=$(cat "/sys/fs/cgroup$cgroup/pids.max")
+            printf 'cgroup=%s pids.max=%s\n' "$cgroup" "$limit"
+            [ "$limit" = 512 ] || okay=0
+        fi
+    else
+        [ "$uid" = 1000 ] || okay=0
+    fi
+    attempt=0
+    while [ "$attempt" -lt 60 ]; do
+        grep -q "OCEAN_QA surface-present appId=$id pid=$pid " \
+            /run/user/1000/openwave-logs/ocean.stderr.log && break
+        [ -r "/proc/$pid/stat" ] || break
+        attempt=$((attempt + 1))
+        sleep 0.25
+    done
+    if ! grep -q "OCEAN_QA surface-present appId=$id pid=$pid " \
+        /run/user/1000/openwave-logs/ocean.stderr.log; then
+        printf 'APP_TEST FAIL %s no presented compositor surface\n' "$id"
+        okay=0
+    fi
+    held=0
+    while [ "$held" -lt "${hold_seconds:-0}" ]; do
+        sleep 1
+        held=$((held + 1))
+        live=$(application_info "$id" 2>&1)
+        case "$live" in
+            *"'state': <'Running'>"*"'pid': <uint32 $pid>"*) ;;
+            *) printf 'APP_TEST FAIL %s exited during hold (%ss): %s\n' "$id" "$held" "$live"; okay=0; break ;;
+        esac
+    done
+    printf 'APP_TEST HOLD %s pid=%s seconds=%s\n' "$id" "$pid" "$held"
+    if [ "$disposition" = crash ]; then
+        kill -KILL "$pid" || okay=0
+    else
+        /usr/bin/gdbus call --system --timeout 3 --dest org.openwave.Applications \
+            --object-path /org/openwave/Applications --method org.openwave.Applications1.Terminate "$id" || okay=0
+    fi
+    attempt=0
+    while [ -r "/proc/$pid/stat" ] && [ "$attempt" -lt 40 ]; do
+        attempt=$((attempt + 1)); sleep 0.25
+    done
+    [ ! -r "/proc/$pid/stat" ] || okay=0
+    stopped=$(application_info "$id" 2>&1)
+    printf 'Stopped info: %s\n' "$stopped"
+    if [ "$disposition" = crash ]; then
+        case "$stopped" in *"'state': <'Crashed'>"*) ;; *) okay=0 ;; esac
+    else
+        case "$stopped" in *"'state': <'Stopped'>"*) ;; *) okay=0 ;; esac
+    fi
+    if [ "$okay" = 1 ]; then
+        printf 'APP_TEST PASS %s live surface, confinement and %s\n' "$id" "$disposition"
+        return 0
+    fi
+    printf 'APP_TEST FAIL %s validation\n' "$id"
+    return 1
+}
+all_passed=1
+trusted_passed=1
+ordinary_passed=1
+hold_seconds=10
+run_application com.openwave.settings openwave_settings_t || trusted_passed=0
+run_application com.openwave.files openwave_files_t || trusted_passed=0
+run_application com.openwave.waterrouge-gallery openwave_app_t || ordinary_passed=0
+run_application com.openwave.photos openwave_app_t || ordinary_passed=0
+run_application com.openwave.ocean openwave_app_t || ordinary_passed=0
+hold_seconds=0
+[ "$trusted_passed" = 1 ] && [ "$ordinary_passed" = 1 ] || all_passed=0
+if [ "$trusted_passed" = 1 ]; then
+    # Real OpenRC restarts must publish new proofs and recover the handshake.
+    for service in appd openwave-ocean; do
+        case "$service" in appd) proof=appd ;; *) proof=ocean ;; esac
+        previous=$(cat "/run/openwave/$proof.pid.identity")
+        if /sbin/rc-service "$service" restart; then
+            current=$(cat "/run/openwave/$proof.pid.identity")
+            printf 'RESTART %s old=%s new=%s\n' "$service" "$previous" "$current"
+            [ "$previous" != "$current" ] || all_passed=0
+            run_application com.openwave.files openwave_files_t || all_passed=0
+            if [ "$ordinary_passed" = 1 ]; then
+                run_application com.openwave.waterrouge-gallery openwave_app_t || all_passed=0
+            fi
+        else
+            printf 'RESTART FAIL %s\n' "$service"
+            all_passed=0
+        fi
+    done
+fi
+if [ "$trusted_passed" = 1 ]; then
+    # Only appd may signal ordinary apps. Exercise the shared crash/reap path
+    # with a trusted native app that OpenRC's supervisor domain may signal.
+    run_application com.openwave.settings openwave_settings_t crash || all_passed=0
+    run_application com.openwave.settings openwave_settings_t || all_passed=0
+fi
+if [ "$all_passed" = 1 ]; then
+    printf 'APP_SMOKE PASS confined live app launched through Ocean\n'
+    printf 'INTEGRATION PASS trusted apps, ordinary app, surfaces, termination, crash recovery and OpenRC restarts\n'
+else
+    printf 'APP_SMOKE FAIL application integration\n'
+fi
+printf 'OPENWAVE_APP_SMOKE_END\n'
+[ "$all_passed" = 1 ]

@@ -7,17 +7,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(GNUInstallDirs)
 
 find_package(Qt6 6.10 REQUIRED COMPONENTS Quick QuickControls2 Svg WaylandCompositor Network)
-find_package(OpenWaveSDK REQUIRED COMPONENTS Fonts Applications Wallpaper Time Prompts SystemControls ApplicationData)
+find_package(OpenWaveSDK REQUIRED COMPONENTS Controls Fonts Theme Applications Wallpaper Time Prompts SystemControls ApplicationData Identity)
 qt_standard_project_setup(REQUIRES 6.10)
 
 if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/importedcontent/CMakeLists.txt")
     add_subdirectory(importedcontent)
 endif()
 
-qt_add_executable(appOceanLauncher main.cpp AppController.cpp AppController.h PageEdgeColor.cpp PageEdgeColor.h
-    PortalFileChooserBackend.cpp PortalFileChooserBackend.h
+qt_add_executable(appOceanLauncher main.cpp AppController.cpp AppController.h LockController.cpp LockController.h TilePuzzleModel.cpp TilePuzzleModel.h TileWallpaperItem.cpp TileWallpaperItem.h PageEdgeColor.cpp PageEdgeColor.h
+    PortalFileChooserBackend.cpp PortalFileChooserBackend.h PowerController.cpp PowerController.h
     ../OceanFiles/FilesBackend.cpp ../OceanFiles/FilesBackend.h
 )
+
+set(PHOTO_CHOOSER_QML "${CMAKE_CURRENT_LIST_DIR}/PhotoChooser.qml")
+set_source_files_properties("${PHOTO_CHOOSER_QML}" PROPERTIES QT_RESOURCE_ALIAS "PhotoChooser.qml")
 
 qt_add_qml_module(appOceanLauncher
     URI OceanLauncher
@@ -25,6 +28,7 @@ qt_add_qml_module(appOceanLauncher
     IMPORT_PATH "${OpenWaveSDK_QML_IMPORT_PATH}"
     QML_FILES
         Main.qml
+        LockScreen.qml
         AppIcon.qml
         DrawerAppIcon.qml
         DrawerAppGrid.qml
@@ -42,8 +46,8 @@ qt_add_qml_module(appOceanLauncher
         QuickMenu.qml
         QuickMenuTile.qml
         QuickMenuSlider.qml
-        WaterRougeQuickMenuEditor.qml
         PortalFileChooser.qml
+        "${PHOTO_CHOOSER_QML}"
         PromptDialog.qml
         PromptDropdown.qml
         VerticalUnfoldTransition.qml
@@ -82,7 +86,7 @@ qt_add_resources(appOceanLauncher ocean_portal_assets
 # URLs stable so the bar stays visible over every application surface.
 set(OCEAN_TOPBAR_ASSET_DIR "${CMAKE_CURRENT_LIST_DIR}/assets/topbar")
 set(OCEAN_TOPBAR_RESOURCES)
-foreach(icon IN ITEMS wifi bluetooth cellular airplane volume brightness)
+foreach(icon IN ITEMS wifi bluetooth cellular airplane volume brightness lock)
     set(asset "${OCEAN_TOPBAR_ASSET_DIR}/QuickMenu/${icon}.svg")
     set_source_files_properties("${asset}" PROPERTIES
         QT_RESOURCE_ALIAS "assets/QuickMenu/${icon}.svg")
@@ -121,9 +125,9 @@ set_target_properties(appOceanLauncher PROPERTIES
 )
 
 target_link_libraries(appOceanLauncher
-    PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Svg Qt6::WaylandCompositor Qt6::Network
+    PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Svg Qt6::WaylandCompositor Qt6::Network OpenWave::Identity
 )
-target_link_libraries(appOceanLauncher PRIVATE OpenWave::Fonts OpenWave::Applications OpenWave::Wallpaper OpenWave::Time OpenWave::Prompts OpenWave::SystemControls OpenWave::ApplicationData)
+target_link_libraries(appOceanLauncher PRIVATE OpenWave::Controls OpenWave::Fonts OpenWave::Theme OpenWave::Applications OpenWave::Wallpaper OpenWave::Time OpenWave::Prompts OpenWave::SystemControls OpenWave::ApplicationData)
 if(CMAKE_CROSSCOMPILING)
     target_include_directories(appOceanLauncher PRIVATE
         "${CMAKE_SYSROOT}/usr/include/glib-2.0"

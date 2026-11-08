@@ -1,0 +1,11 @@
+#!/sbin/openrc-run
+
+description="ACPI power-button event daemon"
+command="/usr/sbin/acpid"
+command_args_foreground="-n -f"
+supervisor=supervise-daemon
+
+depend() {
+	need devfs
+	use sysfs
+}

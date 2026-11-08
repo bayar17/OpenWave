@@ -1,5 +1,6 @@
 import QtQuick
 import OpenWave.Fonts 1.0
+import OpenWave.Theme 1.0
 import QtQuick.Controls
 
 Item {
@@ -12,6 +13,11 @@ Item {
     property bool reduceMotion: false
     property bool menuOpen: false
     property string menuPage: "main"
+    property string sourcePage: "files"
+    property string galleryAlbumFilter: ""
+    property string galleryTab: "photos"
+    property string gallerySearchQuery: ""
+    property var selectedGalleryTokens: []
     property bool searchOpen: false
     property bool compactRows: false
     property bool showDetails: true
@@ -31,6 +37,15 @@ Item {
     property string pendingPath: ""
     property var navigationSnapshot: null
     property int navigationGeneration: 0
+    readonly property bool imageSourceRequest: {
+        if (!backend) return false
+        if (backend.imageSources) return true
+        if (backend.mode !== "OpenFile" && backend.mode !== "OpenFiles") return false
+        const types = backend.mimeTypes || []
+        for (let i = 0; i < types.length; ++i)
+            if (String(types[i]).toLowerCase().startsWith("image/")) return true
+        return false
+    }
     visible: phase !== "hidden"
 
     onRequestedIdChanged: Qt.callLater(chooser.syncRequest)
@@ -52,6 +67,13 @@ Item {
         selectedPaths = []
         menuOpen = false
         menuPage = "main"
+        const initialImageSource = backend.imageSource || ""
+        sourcePage = imageSourceRequest && initialImageSource === "gallery"
+            ? "gallery" : "files"
+        galleryAlbumFilter = ""
+        galleryTab = "photos"
+        gallerySearchQuery = ""
+        selectedGalleryTokens = []
         searchOpen = false
         compactRows = false
         showDetails = true
@@ -63,6 +85,7 @@ Item {
         if (backend.initialDirectory)
             filesBackend.goToDirectory(backend.initialDirectory)
         filenameField.text = backend.suggestedFilename
+        if (sourcePage === "gallery") backend.loadGallery()
     }
 
     function syncRequest() {
@@ -112,7 +135,9 @@ Item {
                 return
             }
             chooser.phase = "open"
-            fileList.forceActiveFocus()
+            if (chooser.sourcePage === "source") sourceFilesButton.forceActiveFocus()
+            else if (chooser.sourcePage === "gallery") galleryContent.focusGallery()
+            else fileList.forceActiveFocus()
         }
         onClosed: chooser.finishClose()
     }
@@ -246,7 +271,48 @@ Item {
             backend.choose(selectedPaths)
         }
     }
-
+    function backFromGallery() {
+        selectedGalleryTokens = []
+        backend.cancel()
+    }
+    function selectGalleryItem(token) {
+        if (!backend || backend.busy || !token) return
+        if (displayedMode === "OpenFile") {
+            backend.chooseGallery([token])
+            return
+        }
+        const tokens = selectedGalleryTokens.slice()
+        const index = tokens.indexOf(token)
+        if (index >= 0) tokens.splice(index, 1)
+        else if (tokens.length < 32) tokens.push(token)
+        selectedGalleryTokens = tokens
+    }
+    readonly property var galleryAlbums: {
+        if (!backend || !visibleGalleryItems) return []
+        const albums = []
+        for (const item of visibleGalleryItems)
+            if (albums.indexOf(item.album) < 0) albums.push(item.album)
+        return albums
+    }
+    readonly property var visibleGalleryItems: {
+        if (!backend || !backend.galleryItems) return []
+        const query = gallerySearchQuery.trim().toLowerCase()
+        return backend.galleryItems.filter(item => {
+            const matchesAlbum = galleryTab !== "photos" || !galleryAlbumFilter || item.album === galleryAlbumFilter
+            const matchesQuery = !query || String(item.name).toLowerCase().includes(query)
+                || String(item.album).toLowerCase().includes(query)
+            return matchesAlbum && matchesQuery
+        })
+    }
+    function toggleGallerySearch() {
+        searchOpen = !searchOpen
+        if (searchOpen) Qt.callLater(searchField.forceActiveFocus)
+        else {
+            gallerySearchQuery = ""
+            searchField.text = ""
+            galleryContent.focusGallery()
+        }
+    }
     Connections {
         target: chooser.backend
         function onErrorOccurred(error) { message.text = error }
@@ -258,6 +324,7 @@ Item {
             if (chooser.aboutOpen) chooser.aboutOpen = false
             else if (chooser.menuPage !== "main") chooser.menuPage = "main"
             else if (chooser.menuOpen) chooser.menuOpen = false
+            else if (chooser.sourcePage === "gallery") chooser.backFromGallery()
             else if (chooser.searchOpen) chooser.searchOpen = false
             else chooser.backend.cancel()
         }
@@ -274,12 +341,18 @@ Item {
     Rectangle {
         id: panel
         objectName: "portalFileChooserPanel"
-        x: 32; y: 91; width: parent.width - 69; height: parent.height - y - 48
+        readonly property real restingY: 91
+        x: chooser.sourcePage === "gallery" ? 0 : 32
+        y: chooser.sourcePage === "gallery"
+            ? restingY + (1 - chooser.unfold) * height : restingY
+        width: chooser.sourcePage === "gallery" ? parent.width : parent.width - 69
+        height: parent.height - restingY - 48
         enabled: chooser.phase === "open"
-        radius: 20
-        color: chooser.lightTheme ? "#dde8e9e9" : "#b0a8abad"
+        radius: chooser.sourcePage === "gallery" ? 0 : 20
+        color: chooser.sourcePage === "gallery" ? "transparent"
+            : chooser.lightTheme ? "#dde8e9e9" : "#b0a8abad"
         border.color: chooser.lightTheme ? "#ffffff" : "#93dde0e1"
-        border.width: 1
+        border.width: chooser.sourcePage === "gallery" ? 0 : 1
         readonly property color ink: chooser.lightTheme ? "#25313a" : "#ffffff"
         readonly property color mutedInk: chooser.lightTheme ? "#68747a" : "#d9dedf"
         readonly property real titleMutedOpacity: 0.5
@@ -287,14 +360,16 @@ Item {
             origin.x: panel.width / 2
             origin.y: panel.height / 2
             xScale: 1
-            yScale: chooser.unfold
+            yScale: chooser.sourcePage === "gallery" ? 1 : chooser.unfold
         }
         MouseArea { anchors.fill: parent; preventStealing: true }
 
         AbstractButton {
             id: menuButton
             objectName: "portalMenuButton"
-            x: panel.width - 151; y: 15; width: 65; height: 62
+            x: chooser.sourcePage === "gallery" ? panel.width * 0.853 : panel.width - 151
+            y: 15; width: 65; height: 62
+            z: 3
             enabled: !chooser.navigating
             onClicked: {
                 chooser.menuPage = "main"
@@ -315,6 +390,8 @@ Item {
             id: closeButton
             objectName: "portalCloseButton"
             x: panel.width - 81; y: 15; width: 65; height: 62
+            visible: chooser.sourcePage !== "gallery"
+            z: 3
             onClicked: chooser.backend.cancel()
             background: Rectangle { color: closeButton.down ? "#2fffffff" : "transparent"; radius: 10 }
             contentItem: Item {
@@ -322,10 +399,31 @@ Item {
                 Rectangle { x: 13; y: 29; width: 41; height: 2; rotation: -45; color: panel.ink }
             }
         }
+        AbstractButton {
+            id: gallerySearchButton
+            objectName: "portalPhotoChooserSearchButton"
+            x: panel.width * 0.733; y: 15; width: 65; height: 62
+            visible: chooser.sourcePage === "gallery"
+            z: 3
+            onClicked: chooser.toggleGallerySearch()
+            background: Rectangle { color: gallerySearchButton.down ? "#2fffffff" : "transparent"; radius: 10 }
+            contentItem: Item {
+                Rectangle {
+                    x: 15; y: 12; width: 25; height: 25; radius: 13
+                    color: "transparent"; border.color: panel.ink; border.width: 2
+                }
+                Rectangle {
+                    x: 38; y: 36; width: 15; height: 2
+                    color: panel.ink; rotation: 48
+                }
+            }
+        }
         PortalTitle {
             id: portalTitle
             objectName: "portalTitle"
             x: 54; y: 73; width: parent.width - 105; height: 61
+            visible: chooser.sourcePage !== "gallery"
+            z: 3
             title: chooser.displayedTitle && chooser.displayedTitle !== chooser.displayedMode
                    ? chooser.displayedTitle
                    : chooser.displayedMode === "SaveFile" ? qsTr("Saving Document")
@@ -339,7 +437,8 @@ Item {
             fontFamily: Fonts.family
         }
         Text {
-            visible: !chooser.searchOpen
+            visible: !chooser.searchOpen && chooser.sourcePage !== "gallery"
+            z: 3
             x: 55; y: 130; width: parent.width - 105; height: 37
             text: chooser.displayedMode === "OpenFiles" ? "Select files"
                 : chooser.displayedMode === "SaveFile" ? "Save file as..."
@@ -350,28 +449,44 @@ Item {
         }
         TextField {
             id: searchField
+            objectName: "portalPhotoChooserSearchField"
             visible: chooser.searchOpen
             enabled: !chooser.navigating
-            x: 53; y: 129; width: parent.width - 106; height: 42
-            placeholderText: "Search files"
+            x: chooser.sourcePage === "gallery" ? 78 : 53
+            y: chooser.sourcePage === "gallery" ? 17 : 129
+            width: chooser.sourcePage === "gallery"
+                ? Math.max(0, panel.width * 0.733 - x - 15) : parent.width - 106
+            height: chooser.sourcePage === "gallery" ? 62 : 42
+            z: 3
+            placeholderText: chooser.sourcePage === "gallery" ? qsTr("Search photos") : qsTr("Search files")
             color: panel.ink; placeholderTextColor: panel.mutedInk
             font.family: light.name; font.pixelSize: 26
             leftPadding: 2; rightPadding: 2
             background: Item {}
-            onTextChanged: if (filesBackend) filesBackend.setSearchQuery(text)
+            onTextChanged: {
+                if (chooser.sourcePage === "gallery") chooser.gallerySearchQuery = text
+                else if (filesBackend) filesBackend.setSearchQuery(text)
+            }
             onAccepted: focus = false
         }
-        Rectangle { x: 52; y: 167; width: parent.width - 104; height: 2; color: panel.ink; opacity: 0.86 }
+        Rectangle {
+            x: chooser.sourcePage === "gallery" ? 52 : 52
+            y: 167; width: parent.width - 104; height: 2
+            color: panel.ink; opacity: 0.86
+            visible: chooser.sourcePage !== "gallery"
+        }
 
         Item {
             id: navigationContent
             objectName: "portalNavigationContent"
             anchors.fill: parent
+            visible: chooser.sourcePage === "files"
 
             ListView {
                 id: fileList
                 objectName: "portalFilesList"
-                x: 47; y: 184; width: parent.width - 94
+                x: 47; y: 184
+                width: parent.width - 94
                 height: footerDivider.y - y
                     - (chooser.displayedMode === "SaveFile" ? 128 : 10)
                 clip: true; focus: true; model: filesBackend
@@ -448,6 +563,29 @@ Item {
                 }
             }
         }
+
+        PhotoChooser {
+            id: galleryContent
+            anchors.fill: parent
+            visible: chooser.sourcePage === "gallery"
+            enabled: visible
+            z: 1
+            backend: chooser.backend
+            displayedMode: chooser.displayedMode
+            albumFilter: chooser.galleryAlbumFilter
+            selectedTokens: chooser.selectedGalleryTokens
+            ink: panel.ink
+            mutedInk: panel.mutedInk
+            lightTheme: chooser.lightTheme
+            albums: chooser.galleryAlbums
+            items: chooser.visibleGalleryItems
+            galleryTab: chooser.galleryTab
+            searchOpen: chooser.searchOpen
+            onBackRequested: chooser.backFromGallery()
+            onAlbumSelected: album => { chooser.galleryAlbumFilter = album; chooser.galleryTab = "photos" }
+            onItemSelected: token => chooser.selectGalleryItem(token)
+            onTabSelected: tab => { chooser.galleryTab = tab; if (tab === "albums") chooser.galleryAlbumFilter = "" }
+        }
         MouseArea {
             anchors.fill: navigationContent
             visible: chooser.navigating
@@ -469,7 +607,7 @@ Item {
         }
         TextField {
             id: filenameField
-            visible: chooser.displayedMode === "SaveFile"
+            visible: chooser.sourcePage === "files" && chooser.displayedMode === "SaveFile"
             enabled: !chooser.navigating
             x: 48; y: footerDivider.y - 116; width: parent.width - 96; height: 54
             placeholderText: "Filename"
@@ -484,16 +622,18 @@ Item {
             color: chooser.lightTheme ? "#a6283d" : "#fff3f3"
             font.family: light.name; font.pixelSize: 22
             elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter
+            visible: chooser.sourcePage === "files"
         }
         Rectangle {
             id: footerDivider
             x: 48; y: parent.height - 102; width: parent.width - 96; height: 2
             color: panel.ink; opacity: 0.8
+            visible: chooser.sourcePage !== "source"
         }
         AbstractButton {
             id: confirmButton
             objectName: "portalConfirmButton"
-            visible: chooser.displayedMode !== "OpenFile"
+            visible: chooser.sourcePage === "files" && chooser.displayedMode !== "OpenFile"
                 && (chooser.displayedMode !== "OpenFiles" || chooser.selectedPaths.length > 0)
             enabled: backend && !backend.busy && !chooser.navigating
             x: panel.width - 217; y: panel.height - 88; width: 173; height: 57
@@ -506,6 +646,22 @@ Item {
                     : chooser.displayedMode === "SelectDirectory" ? "Select" : "Open"
                 color: chooser.lightTheme ? "#25313a" : "white"
                 font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: 29
+                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+            }
+        }
+        AbstractButton {
+            id: galleryConfirmButton
+            objectName: "portalGalleryConfirmButton"
+            visible: chooser.sourcePage === "gallery" && chooser.displayedMode === "OpenFiles"
+                && chooser.selectedGalleryTokens.length > 0
+            enabled: chooser.backend && !chooser.backend.busy
+            x: panel.width - 217; y: panel.height - 178; width: 173; height: 57
+            onClicked: chooser.backend.chooseGallery(chooser.selectedGalleryTokens)
+            background: Rectangle { color: galleryConfirmButton.down ? "#a9d9dfe0" : "#9be5e8e9"; radius: 12 }
+            contentItem: Text {
+                text: qsTr("Open (%1)").arg(chooser.selectedGalleryTokens.length)
+                color: chooser.lightTheme ? "#25313a" : "white"
+                font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: 25
                 horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
             }
         }

@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
+import OpenWave.Controls 1.0
 
 Rectangle {
     id: page
@@ -66,7 +67,7 @@ Rectangle {
                     width: parent.width; text: page.bytes(transfer.receivedBytes) + (transfer.totalBytes >= 0 ? " / " + page.bytes(transfer.totalBytes) : "")
                     color: "#555"; font.family: page.fontFamily; font.pixelSize: 24; wrapMode: Text.Wrap
                 }
-                ProgressBar {
+                WRProgressBar {
                     width: parent.width; visible: transfer.status === "Downloading" || transfer.status === "Paused"
                     from: 0; to: 1; value: transfer.progress; indeterminate: transfer.totalBytes < 0
                 }

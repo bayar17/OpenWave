@@ -1,0 +1,488 @@
+#!/sbin/openrc-run
+
+description="Disposable OpenWave native-session boot status capture"
+
+depend() {
+	after openwave-runtime udevd dbus NetworkManager nm-dispatcher iwd bluetooth avahi-daemon connectivityd timed openwave-session-bus pipewire wireplumber audiod openwave-portal xdg-desktop-portal-openwave promptd wallpaperagentd appd permissiond openwave-ocean
+	before local
+}
+
+service_state() {
+	local name=$1
+	if [ ! -f "/etc/init.d/$name" ]; then
+		printf 'not-installed'
+		return
+	fi
+	if [ ! -L "/etc/runlevels/default/$name" ] &&
+	   [ ! -L "/etc/runlevels/boot/$name" ] &&
+	   [ ! -L "/etc/runlevels/sysinit/$name" ]; then
+		printf 'disabled'
+		return
+	fi
+	if [ -e "/run/openrc/starting/$name" ]; then
+		printf 'starting'
+	elif [ -e "/run/openrc/failed/$name" ]; then
+		printf 'failed'
+	elif [ -e "/run/openrc/started/$name" ]; then
+		printf 'running'
+	elif /sbin/rc-service "$name" status >/dev/null 2>&1; then
+		printf 'running'
+	else
+		printf 'stopped'
+	fi
+}
+
+dbus_owner() {
+	local bus=$1 name=$2
+	if [ "$bus" = session ]; then
+		if DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/bus" \
+			/usr/bin/gdbus call --session --timeout 2 \
+				--dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+				--method org.freedesktop.DBus.GetNameOwner "$name" >/dev/null 2>&1; then
+			printf 'registered'
+		else
+			printf 'not-registered'
+		fi
+		return
+	fi
+	if /usr/bin/gdbus call --system --timeout 2 \
+		--dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+		--method org.freedesktop.DBus.GetNameOwner "$name" >/dev/null 2>&1; then
+		printf 'registered'
+	else
+		printf 'not-registered'
+	fi
+}
+
+system_call() {
+	if [ "$#" -gt 1 ]; then
+		/usr/bin/gdbus call --system --timeout 4 \
+			--dest org.openwave.Wallpaper --object-path /org/openwave/Wallpaper \
+			--method "org.openwave.Wallpaper1.$1" "$2"
+	else
+		/usr/bin/gdbus call --system --timeout 4 \
+			--dest org.openwave.Wallpaper --object-path /org/openwave/Wallpaper \
+			--method "org.openwave.Wallpaper1.$1"
+	fi
+}
+
+wallpaper_probe() {
+	local owner_reply owner uid_reply pid_reply pid image_output image_hex image_raw image_count image_sha image_signature expected_image_sha line service_context
+	printf 'system_bus_accessible='
+	if [ -S /run/dbus/system_bus_socket ] &&
+	   /usr/bin/gdbus call --system --timeout 2 \
+		--dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+		--method org.freedesktop.DBus.ListNames >/dev/null 2>&1; then
+		printf 'yes\n'
+	else
+		printf 'no\n'
+		return
+	fi
+	printf 'service_process='
+	if [ -r /run/openwave/wallpaper.pid ]; then
+		IFS= read -r pid < /run/openwave/wallpaper.pid || pid=
+		case "$pid" in ''|*[!0-9]*) pid= ;; esac
+		if [ -n "$pid" ] && [ -r "/proc/$pid/comm" ]; then
+			printf 'running pid=%s comm=' "$pid"
+			cat "/proc/$pid/comm"
+			printf 'service_exe='; readlink "/proc/$pid/exe" 2>/dev/null || printf 'unavailable\n'
+			IFS= read -r service_context < "/proc/$pid/attr/current" || service_context=unavailable
+			printf 'service_context=%s\n' "$service_context"
+			while IFS= read -r line; do
+				case "$line" in Uid:*|Gid:*|CapEff:*|NoNewPrivs:*) printf '  %s\n' "$line" ;; esac
+			done < "/proc/$pid/status" 2>/dev/null || true
+		else
+			printf 'stale-pidfile\n'
+		fi
+	else
+		printf 'pidfile-missing\n'
+	fi
+	owner_reply=$(/usr/bin/gdbus call --system --timeout 3 \
+		--dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+		--method org.freedesktop.DBus.GetNameOwner org.openwave.Wallpaper 2>&1)
+	case "$owner_reply" in
+		*"(':"*)
+			owner=$(printf '%s' "$owner_reply" | sed -n "s/.*'\\(:[0-9.]*\\)'.*/\\1/p")
+			printf 'bus_name_owner=registered owner=%s reply=%s\n' "$owner" "$owner_reply" ;;
+		*) printf 'bus_name_owner=not-registered error=%s\n' "$owner_reply"; return ;;
+	esac
+	uid_reply=$(/usr/bin/gdbus call --system --timeout 3 \
+		--dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+		--method org.freedesktop.DBus.GetConnectionUnixUser "$owner" 2>&1)
+	pid_reply=$(/usr/bin/gdbus call --system --timeout 3 \
+		--dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+		--method org.freedesktop.DBus.GetConnectionUnixProcessID "$owner" 2>&1)
+	printf 'bus_name_owner_uid=%s\nbus_name_owner_pid=%s\n' "$uid_reply" "$pid_reply"
+	printf 'interface_introspection='
+	if /usr/bin/gdbus introspect --system --dest org.openwave.Wallpaper \
+		--object-path /org/openwave/Wallpaper 2>&1 |
+		grep -q 'interface org.openwave.Wallpaper1'; then
+		printf 'present\n'
+	else
+		printf 'missing-or-error\n'
+	fi
+	printf 'GetCurrent='
+	current_reply=$(system_call GetCurrent 2>&1)
+	case "$current_reply" in
+		\(*\))
+			if printf '%s' "$current_reply" | grep -Eq "'/.+png', '[0-9a-f]{64}'"; then
+				expected_image_sha=$(printf '%s' "$current_reply" | /bin/busybox awk -F "'" 'NF >= 4 { print $4; exit }')
+				printf 'valid-result response-type=ss %s\n' "$current_reply"
+			else
+				printf 'completed-invalid-result response-type=ss %s\n' "$current_reply"
+			fi ;;
+		*) printf 'error %s\n' "$current_reply" ;;
+	esac
+	image_output=$(mktemp /run/openwave/wallpaper-image-probe.XXXXXX) || {
+		printf 'GetImage=not-run reason=secure-temporary-file-unavailable\n'
+		return
+	}
+	image_hex="${image_output}.hex"
+	image_raw="${image_output}.png"
+	if system_call GetImage >"$image_output" 2>&1; then
+		if /bin/busybox awk '
+			{
+				for (i = 1; i <= NF; ++i) {
+					value = $i
+					if (value ~ /byte/) {
+						typed = 1
+						sub(/^.*byte/, "", value)
+					}
+					if (!typed) continue
+					sub(/^[^0-9xX]*/, "", value)
+					sub(/[^0-9a-fA-F]*$/, "", value)
+					if (value == "") continue
+					if (length(value) != 4 || substr(value, 1, 2) !~ /^0[xX]$/ ||
+					    substr(value, 3) !~ /^[[:xdigit:]][[:xdigit:]]$/) { bad = 1; continue }
+					printf "%s", substr(value, 3)
+					count++
+				}
+			}
+			END { if (bad || count < 8) exit 1 }
+		' "$image_output" >"$image_hex" &&
+		   /bin/busybox xxd -r -p "$image_hex" >"$image_raw"; then
+			image_count=$(/bin/busybox stat -c '%s' "$image_raw" 2>/dev/null || printf '0')
+			image_sha=$(/bin/busybox sha256sum "$image_raw" 2>/dev/null | /bin/busybox awk '{ print $1 }')
+			image_signature=$(/bin/busybox od -An -tx1 -N8 "$image_raw" 2>/dev/null | /bin/busybox tr -d ' \n')
+			if [ "$image_signature" = 89504e470d0a1a0a ] &&
+			   [ "$image_sha" = "$expected_image_sha" ] && [ "$image_count" -gt 8 ]; then
+				printf 'GetImage=verified response-type=ay valid-png-signature=yes sha256-matches-GetCurrent=yes encoded-bytes=%s sha256=%s\n' "$image_count" "$image_sha"
+			else
+				printf 'GetImage=integrity-failed response-type=ay valid-png-signature=%s sha256-matches-GetCurrent=%s encoded-bytes=%s expected-sha256=%s actual-sha256=%s\n' \
+					"$([ "$image_signature" = 89504e470d0a1a0a ] && printf yes || printf no)" \
+					"$([ "$image_sha" = "$expected_image_sha" ] && printf yes || printf no)" \
+					"$image_count" "$expected_image_sha" "$image_sha"
+			fi
+		else
+			printf 'GetImage=integrity-unverified reason=invalid-or-unparsed-gdbus-byte-array\n'
+		fi
+	else
+		printf 'GetImage=error %s\n' "$(cat "$image_output")"
+	fi
+	rm -f "$image_output" "$image_hex" "$image_raw"
+}
+
+start_shutdown_lock_watch() {
+	[ "${OPENWAVE_QA_SHUTDOWN:-0}" = 1 ] || return 0
+	local output pidfile
+	output=/var/log/openwave-qa/localmount-lock-owner.log
+	pidfile=/var/log/openwave-qa/localmount-lock-watch.pid
+	[ ! -e "$pidfile" ] || return 0
+	(
+		umask 077
+		: > "$output" || exit 1
+		chmod 0600 "$output" || exit 1
+	) || return 1
+	(
+		iteration=0
+		while [ "$iteration" -lt 900 ]; do
+			lock=/run/openrc/exclusive/localmount
+			if [ -f "$lock" ] && [ $((iteration % 5)) -eq 0 ]; then
+				inode=$(/bin/busybox stat -c '%i' "$lock" 2>/dev/null || true)
+				if [ -n "$inode" ]; then
+					/bin/busybox awk -v inode="$inode" \
+						'$6 ~ (":" inode "$") { print }' /proc/locks |
+					while IFS= read -r record; do
+						set -- $record
+						lock_pid=${5:-}
+						case "$lock_pid" in ''|*[!0-9]*) lock_pid= ;; esac
+						[ -n "$lock_pid" ] || continue
+						{
+							printf 'uptime='; /bin/busybox cat /proc/uptime
+							printf 'lock=%s inode=%s record=%s\n' "$lock" "$inode" "$record"
+							printf 'holder_pid=%s comm=' "$lock_pid"
+							IFS= read -r value < "/proc/$lock_pid/comm" 2>/dev/null || value=unavailable
+							printf '%s\n' "$value"
+							printf 'holder_wchan='
+							IFS= read -r value < "/proc/$lock_pid/wchan" 2>/dev/null || value=unavailable
+							printf '%s\n' "$value"
+							printf 'holder_state='
+							value=$(/bin/busybox awk '/^State:/ { print $2; exit }' "/proc/$lock_pid/status" 2>/dev/null || true)
+							printf '%s\n' "${value:-unavailable}"
+							printf 'holder_cmdline='
+							/bin/busybox tr '\000' ' ' < "/proc/$lock_pid/cmdline" 2>/dev/null || true
+							printf '\n'
+							for state in starting stopping started; do
+								[ ! -e "/run/openrc/$state/localmount" ] ||
+									printf 'localmount_state=%s\n' "$state"
+							done
+							printf 'localmount_status='; /sbin/rc-service localmount status 2>&1 || true
+							printf 'observer_service_state='; service_state openwave-qa-observer
+							printf 'mountinfo_begin\n'; /bin/busybox cat /proc/self/mountinfo
+							printf 'mountinfo_end\n\n'
+						} >> "$output"
+					done
+				fi
+			fi
+			/bin/busybox sleep 1
+			iteration=$((iteration + 1))
+		done
+		rm -f "$pidfile"
+	) </dev/null >/dev/null 2>&1 &
+	printf '%s\n' "$!" > "$pidfile" || return 1
+	chmod 0600 "$pidfile" || return 1
+}
+
+start() {
+	local output temporary service state pidfile pid name line socket event found
+	output=/var/log/openwave-qa/boot-status.txt
+	temporary="${output}.tmp"
+	if [ -L /var/log/openwave-qa ] || [ ! -d /var/log/openwave-qa ]; then
+		eerror "QA evidence directory is missing, symlinked, or not a directory"
+		return 1
+	fi
+	local evidence_metadata
+	evidence_metadata=$(/bin/busybox stat -c '%u:%g %a' /var/log/openwave-qa 2>/dev/null) || return 1
+	if [ "$evidence_metadata" != "0:0 700" ]; then
+		eerror "QA evidence directory has unexpected owner or mode: $evidence_metadata"
+		return 1
+	fi
+	{
+		printf 'OPENWAVE_QA_STATUS version=2\n'
+		printf 'uptime='; cat /proc/uptime 2>/dev/null || true
+		printf '\nrunlevel_status:\n'
+		/usr/bin/rc-status -a 2>&1 || true
+		printf '\nservice_state:\n'
+		for service in dbus udevd NetworkManager iwd bluetooth avahi-daemon connectivityd timed appd permissiond promptd wallpaperagentd openwave-portal xdg-desktop-portal-openwave openwave-session-bus pipewire wireplumber audiod openwave-ocean acpid waydroid; do
+			state=$(service_state "$service")
+			printf '%s=%s\n' "$service" "$state"
+			printf '  rc-service: '
+			/sbin/rc-service "$service" status 2>&1 || true
+		done
+		printf '\ndbus_names:\n'
+		for name in org.freedesktop.NetworkManager org.bluez org.openwave.Applications org.openwave.Permissions org.openwave.portal org.openwave.Shell org.openwave.Wallpaper; do
+			printf 'system %s=%s\n' "$name" "$(dbus_owner system "$name")"
+		done
+		for name in org.openwave.Prompt org.freedesktop.portal.Desktop org.freedesktop.impl.portal.desktop.openwave; do
+			printf 'session %s=%s\n' "$name" "$(dbus_owner session "$name")"
+		done
+		printf '\nwallpaper_system_bus_probe:\n'
+		wallpaper_probe
+		printf '\nsockets:\n'
+		for socket in /run/dbus/system_bus_socket /run/user/1000/bus; do
+			if [ -S "$socket" ]; then printf 'present %s\n' "$socket"; else printf 'missing %s\n' "$socket"; fi
+		done
+		printf '\nappd_readiness:\n'
+		if [ -e /run/openwave/appd/ready ]; then
+			printf 'marker=ready\n'
+	else
+			printf 'marker=missing\n'
+	fi
+		if /usr/bin/gdbus call --system --timeout 3 \
+			--dest org.openwave.Applications --object-path /org/openwave/Applications \
+			--method org.openwave.Applications1.ListApplications >/dev/null 2>&1; then
+			printf 'catalog_api=ready\n'
+			printf 'catalog_entries='
+			/usr/bin/gdbus call --system --timeout 3 \
+				--dest org.openwave.Applications --object-path /org/openwave/Applications \
+				--method org.openwave.Applications1.ListApplications 2>&1 || true
+		else
+			printf 'catalog_api=unavailable\n'
+		fi
+		printf '\nprocesses:\n'
+		for pidfile in /run/openwave/*.pid /run/user/1000/*.pid /run/acpid.pid; do
+			[ -r "$pidfile" ] || continue
+			IFS= read -r pid < "$pidfile" || continue
+			case "$pid" in ''|*[!0-9]*) continue ;; esac
+			[ -r "/proc/$pid/comm" ] || { printf 'stale_pidfile %s pid=%s\n' "$pidfile" "$pid"; continue; }
+			IFS= read -r name < "/proc/$pid/comm" || name=unknown
+			printf 'process pid=%s name=%s pidfile=%s exe=' "$pid" "$name" "$pidfile"
+			readlink "/proc/$pid/exe" 2>/dev/null || printf 'unavailable'
+			printf ' context='
+			IFS= read -r line < "/proc/$pid/attr/current" 2>/dev/null || line=unavailable
+			printf '%s\n' "$line"
+			while IFS= read -r line; do
+				case "$line" in Uid:*|Gid:*|Groups:*|CapEff:*|NoNewPrivs:*) printf '  %s\n' "$line" ;; esac
+			done < "/proc/$pid/status" 2>/dev/null || true
+		done
+		printf '\npermissiond_appd_identity:\n'
+		if grep -Fq 'permissiond: trusted appd process identity verified' /run/openwave/permissiond.stdout.log 2>/dev/null; then
+			printf 'trusted_appd_identity=verified\n'
+		else
+			printf 'trusted_appd_identity=not-verified\n'
+		fi
+		printf 'ocean_session_environment:\n'
+		if [ -r /run/openwave/ocean.pid ]; then
+			IFS= read -r pid < /run/openwave/ocean.pid || pid=
+			case "$pid" in ''|*[!0-9]*) pid= ;; esac
+			if [ -n "$pid" ] && [ -r "/proc/$pid/environ" ]; then
+				/bin/busybox tr '\000' '\n' < "/proc/$pid/environ" |
+				grep -E '^(XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|QT_QPA_PLATFORM|QT_QPA_EGLFS_INTEGRATION|QT_QPA_EGLFS_KMS_CONFIG|QT_QPA_EVDEV_MOUSE_PARAMETERS|OPENWAVE_QA_IDENTITY|OPENWAVE_QA_GRAPHICS|OPENWAVE_QA_WALLPAPER_IMAGE)=' || true
+			else
+				printf 'process_environment=unavailable\n'
+			fi
+		else
+			printf 'ocean_pidfile=missing\n'
+		fi
+		printf 'graphics_devices:\n'
+		for event in /sys/class/drm/card*-Virtual-1; do
+			[ -d "$event" ] || continue
+			printf 'connector=%s status=' "${event##*/}"
+			IFS= read -r line < "$event/status" 2>/dev/null || line=unavailable
+			printf '%s\n' "$line"
+			echo '  available_modes:'
+			/bin/busybox cat "$event/modes" 2>/dev/null || true
+		done
+		if [ -r /sys/class/graphics/fb0/virtual_size ]; then
+			printf 'framebuffer_virtual_size='
+			IFS= read -r line < /sys/class/graphics/fb0/virtual_size || line=unavailable
+			printf '%s\n' "$line"
+		fi
+		for event in /dev/dri/card* /dev/dri/renderD*; do
+			[ -e "$event" ] && /bin/busybox ls -l "$event" 2>&1 || true
+		done
+		printf 'input_devices:\n'
+		for event in /sys/class/input/event*; do
+			[ -r "$event/device/name" ] || continue
+			printf '%s ' "${event##*/}"
+			IFS= read -r line < "$event/device/name" || line=unavailable
+			printf '%s\n' "$line"
+		done
+		printf 'shell_graphical_readiness=%s\n' "$(dbus_owner system org.openwave.Shell)"
+		printf '\nprocess_snapshot:\n'
+		/bin/ps -o pid,user,group,comm,args 2>&1 || true
+		printf '\nservice_logs:\n'
+		for logfile in /var/log/openwave-qa/*.stderr.log /var/log/openwave-qa/*.stdout.log /run/openwave/*.stderr.log /run/openwave/*.stdout.log; do
+			[ -r "$logfile" ] || continue
+			printf '%s\n' "--- $logfile"
+			/bin/tail -n 2000 "$logfile" 2>&1 || true
+		done
+		printf '\nocean_user_logs:\n'
+		logdir=/run/user/1000/openwave-logs
+		if [ -L "$logdir" ] || [ ! -d "$logdir" ]; then
+			printf 'collection=refused reason=directory-missing-or-symlinked\n'
+		else
+			metadata=$(/bin/busybox stat -c '%u:%g %a' "$logdir" 2>/dev/null || true)
+			if [ "$metadata" != '1000:1000 700' ]; then
+				printf 'collection=refused reason=unexpected-directory-owner-or-mode metadata=%s\n' "$metadata"
+			else
+				for logfile in "$logdir/ocean.stdout.log" "$logdir/ocean.stderr.log"; do
+					if [ -L "$logfile" ] || { [ -e "$logfile" ] && [ ! -f "$logfile" ]; }; then
+						printf 'log=refused reason=non-regular-or-symlinked path=%s\n' "$logfile"
+						continue
+					fi
+					[ -e "$logfile" ] || { printf 'log=not-created path=%s\n' "$logfile"; continue; }
+					metadata=$(/bin/busybox stat -c '%u:%g %a' "$logfile" 2>/dev/null || true)
+					if [ "$metadata" != '1000:1000 600' ]; then
+						printf 'log=refused reason=unexpected-owner-or-mode path=%s metadata=%s\n' "$logfile" "$metadata"
+						continue
+					fi
+					printf '%s\n' "--- $logfile (owner/mode=$metadata)"
+					/bin/tail -n 2000 "$logfile" 2>&1 || true
+				done
+			fi
+		fi
+		printf '\nacpi_event_sources:\n'
+		found=0
+		for event in /dev/input/event*; do
+			[ -e "$event" ] || continue
+			printf '%s\n' "$event"
+			found=1
+		done
+		[ -r /proc/acpi/event ] && { printf '/proc/acpi/event\n'; found=1; }
+		[ -r /sys/firmware/acpi/interrupts/button ] && { printf '/sys/firmware/acpi/interrupts/button\n'; found=1; }
+		[ "$found" -eq 1 ] || printf 'no-known-acpi-event-node\n'
+		printf '\nselinux_enforce='
+		IFS= read -r line < /sys/fs/selinux/enforce 2>/dev/null || line=unavailable
+		printf '%s\n' "$line"
+	} > "$temporary" 2>&1 || {
+		rm -f "$temporary"
+		eerror "QA status capture failed"
+		return 1
+	}
+	chmod 0644 "$temporary" || return 1
+	mv -f "$temporary" "$output" || return 1
+	if start_shutdown_lock_watch; then
+		printf 'shutdown_lock_observer=started\n' >> "$output"
+	else
+		printf 'shutdown_lock_observer=failed errno=%s\n' "$?" >> "$output"
+		eerror "Shutdown lock evidence watcher could not start"
+		return 1
+	fi
+	einfo "QA status captured at $output"
+	return 0
+}
+
+stop() {
+	[ "${OPENWAVE_QA_SHUTDOWN:-0}" = 1 ] || return 0
+	local output lock inode record lock_pid value found
+	output=/var/log/openwave-qa/localmount-lock-owner.log
+	[ ! -L "$output" ] && [ -f "$output" ] || return 1
+	local status_file logfile
+	status_file=/var/log/openwave-qa/boot-status.txt
+	if [ ! -L "$status_file" ] && [ -f "$status_file" ]; then
+		{
+			printf '\nshutdown_service_logs_begin\n'
+			for logfile in /var/log/openwave-qa/*.stderr.log /var/log/openwave-qa/*.stdout.log; do
+				[ -f "$logfile" ] && [ ! -L "$logfile" ] || continue
+				printf '%s\n' "--- $logfile (last 2000 lines at observer stop)"
+				/bin/tail -n 2000 "$logfile" 2>&1 || true
+			done
+			printf 'shutdown_service_logs_end\n'
+		} >> "$status_file" 2>&1 || true
+	fi
+	{
+		printf '\nshutdown_stop_hook_uptime='
+		/bin/busybox cat /proc/uptime
+		lock=/run/openrc/exclusive/localmount
+		if [ -L "$lock" ]; then
+			printf 'localmount_lock=refused-symlink\n'
+		elif [ -f "$lock" ]; then
+			inode=$(/bin/busybox stat -c '%i' "$lock" 2>/dev/null || true)
+			printf 'localmount_lock=present inode=%s\n' "${inode:-unavailable}"
+			found=0
+			if [ -n "$inode" ]; then
+				while IFS= read -r record; do
+					[ -n "$record" ] || continue
+					set -- $record
+					lock_pid=${5:-}
+					case "$lock_pid" in ''|*[!0-9]*) lock_pid= ;; esac
+					printf 'localmount_lock_record=%s holder_pid=%s\n' "$record" "${lock_pid:-unavailable}"
+					if [ -n "$lock_pid" ]; then
+						printf 'holder_comm='
+						IFS= read -r value < "/proc/$lock_pid/comm" 2>/dev/null || value=unavailable
+						printf '%s\n' "$value"
+						printf 'holder_state='
+						value=$(/bin/busybox awk '/^State:/ { print $2; exit }' "/proc/$lock_pid/status" 2>/dev/null || true)
+						printf '%s\n' "${value:-unavailable}"
+						printf 'holder_cmdline='
+						/bin/busybox tr '\000' ' ' < "/proc/$lock_pid/cmdline" 2>/dev/null || true
+						printf '\n'
+					fi
+					found=1
+				done <<EOF_LOCKS
+				$(/bin/busybox awk -v inode="$inode" '$6 ~ (":" inode "$") { print }' /proc/locks 2>/dev/null)
+EOF_LOCKS
+			fi
+			[ "$found" -eq 1 ] || printf 'localmount_lock_record=none-visible-in-proc-locks\n'
+		else
+			printf 'localmount_lock=absent\n'
+		fi
+		for state in starting stopping started; do
+			[ ! -e "/run/openrc/$state/localmount" ] || printf 'localmount_state=%s\n' "$state"
+		done
+		printf 'shutdown_mountinfo_begin\n'
+		/bin/busybox cat /proc/self/mountinfo
+		printf 'shutdown_mountinfo_end\n'
+	} >> "$output" 2>&1
+}

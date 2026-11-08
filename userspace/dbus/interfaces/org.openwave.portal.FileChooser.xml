@@ -44,6 +44,20 @@
       <arg type="u" direction="in" />
       <arg type="as" direction="in" />
     </method>
+    <method name="ListGallery">
+      <arg type="o" direction="in" />
+      <arg type="a(ssss)" direction="out" />
+    </method>
+    <method name="OpenGalleryItem">
+      <arg type="o" direction="in" />
+      <arg type="s" direction="in" />
+      <arg type="h" direction="out" />
+    </method>
+    <method name="CompleteGalleryRequest">
+      <arg type="o" direction="in" />
+      <arg type="u" direction="in" />
+      <arg type="as" direction="in" />
+    </method>
     <signal name="Response">
       <arg type="o" />
       <arg type="u" />

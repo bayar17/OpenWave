@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+description="Ocean user D-Bus session bus"
+command="/usr/bin/dbus-daemon"
+command_args="--config-file=/etc/dbus-1/openwave-openrc-session.conf --nofork"
+command_user="ocean:ocean"
+command_background="yes"
+pidfile="/run/user/1000/dbus.pid"
+export HOME="/var/lib/ocean"
+export USER="ocean"
+export LOGNAME="ocean"
+export XDG_RUNTIME_DIR="/run/user/1000"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/bus"
+export QT_QPA_PLATFORM="eglfs"
+
+depend() {
+	need openwave-runtime
+}
+
+start_post() {
+	checkpath -d -o ocean:ocean -m 0700 /run/user/1000
+	/System/Services/openwave-wait-dbus session org.freedesktop.DBus
+}

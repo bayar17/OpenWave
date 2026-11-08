@@ -1,0 +1,115 @@
+/.* system_u:object_r:openwave_default_t:s0
+/init system_u:object_r:openwave_runtime_t:s0
+/(usr|lib|lib64|bin|sbin|etc)(/.*)? system_u:object_r:openwave_runtime_t:s0
+/etc/selinux(/.*)? system_u:object_r:openwave_private_t:s0
+/etc/selinux system_u:object_r:openwave_runtime_t:s0
+/etc/selinux/config system_u:object_r:openwave_runtime_t:s0
+/System(/.*)? system_u:object_r:openwave_runtime_t:s0
+/Applications(/.*)? system_u:object_r:openwave_user_bundle_t:s0
+/Applications/[^/]+/bin(/.*)? system_u:object_r:openwave_user_app_exec_t:s0
+/System/Applications/[^/]+/bin(/.*)? system_u:object_r:openwave_app_exec_t:s0
+/Data(/.*)? system_u:object_r:openwave_user_data_t:s0
+/Data/Users/[^/]+/\.DataLocation/Applications/[^/]+(/.*)? system_u:object_r:openwave_app_data_t:s0
+/var(/.*)? system_u:object_r:openwave_private_t:s0
+/var/openwave(/.*)? system_u:object_r:openwave_wallpaper_state_t:s0
+/var/cache/fontconfig(/.*)? system_u:object_r:openwave_runtime_t:s0
+/dev(/.*)? system_u:object_r:openwave_device_t:s0
+/dev/(null|zero|random|urandom) system_u:object_r:openwave_null_t:s0
+/dev/console system_u:object_r:openwave_console_t:s0
+/dev/dri(/.*)? system_u:object_r:openwave_gpu_t:s0
+/dev/shm(/.*)? system_u:object_r:openwave_app_data_t:s0
+
+/sbin/openrc-init -- system_u:object_r:openwave_openrc_exec_t:s0
+
+# Writable supervisor and persistent service state, never executable runtime.
+/(run|tmp)(/.*)? system_u:object_r:openwave_run_t:s0
+/var/(lib|log|cache)(/.*)? system_u:object_r:openwave_state_t:s0
+/run/user/1000/openwave-logs(/.*)? system_u:object_r:openwave_qa_evidence_t:s0
+/run/udev(/.*)? system_u:object_r:openwave_udev_runtime_t:s0
+/run/dbus(/.*)? system_u:object_r:openwave_dbus_runtime_t:s0
+/run/user/1000/bus -s system_u:object_r:openwave_dbus_runtime_t:s0
+/run/openrc(/.*)? system_u:object_r:openwave_openrc_state_t:s0
+/run/openrc/init\.ctl -p system_u:object_r:openwave_power_fifo_t:s0
+# Canonical runtime links are readable without granting access to /var state.
+/var/(run|lock) -l system_u:object_r:openwave_run_t:s0
+/var/lib/openwave/app-identities(/.*)? system_u:object_r:openwave_appd_state_t:s0
+/var/lib/openwave/permissions(/.*)? system_u:object_r:openwave_permission_state_t:s0
+/var/lib/ocean(/.*)? system_u:object_r:openwave_shell_state_t:s0
+/var/lib/waydroid(/.*)? system_u:object_r:openwave_waydroid_state_t:s0
+/var/lib/waydroid-user(/.*)? system_u:object_r:openwave_waydroid_user_t:s0
+/var/lib/misc system_u:object_r:openwave_misc_t:s0
+/var/lib/misc/dnsmasq\.waydroid0\.leases(\.new)? system_u:object_r:openwave_waydroid_lease_t:s0
+/run/waydroid-lxc(/.*)? system_u:object_r:openwave_waydroid_net_runtime_t:s0
+/run/xtables\.lock system_u:object_r:openwave_xtables_lock_t:s0
+/usr/lib/waydroid/data/scripts/waydroid-net\.sh system_u:object_r:openwave_waydroid_net_exec_t:s0
+/run/waydroid(/.*)? system_u:object_r:openwave_waydroid_runtime_t:s0
+
+/run/openwave(/.*)? system_u:object_r:openwave_service_run_t:s0
+/run/openwave/waydroid(/.*)? system_u:object_r:openwave_waydroid_snapshot_t:s0
+/run/openwave/apps/[^/]+(/.*)? system_u:object_r:openwave_app_data_t:s0
+/run/openwave/appd(/.*)? system_u:object_r:openwave_appd_runtime_t:s0
+/var/lib/openwave-accounts(/.*)? system_u:object_r:openwave_accounts_t:s0
+/run/openwave/public-preferences\.ini(\..*)? system_u:object_r:openwave_public_preferences_t:s0
+/dev/input(/.*)? system_u:object_r:openwave_input_t:s0
+/dev/rfkill -c system_u:object_r:openwave_rfkill_t:s0
+/(usr/)?lib/firmware(/.*)? system_u:object_r:openwave_firmware_t:s0
+/run/NetworkManager(/.*)? system_u:object_r:openwave_networkmanager_state_t:s0
+/run/NetworkManager/resolv\.conf(\.tmp)? -- system_u:object_r:openwave_dns_config_t:s0
+/var/lib/NetworkManager(/.*)? system_u:object_r:openwave_networkmanager_state_t:s0
+/var/lib/iwd(/.*)? system_u:object_r:openwave_iwd_state_t:s0
+/dev/tty[0-9]+ system_u:object_r:openwave_console_t:s0
+/Data/Users/[^/]+/\.DataLocation(/Applications)? -d system_u:object_r:openwave_app_storage_t:s0
+/run/openwave/apps -d system_u:object_r:openwave_app_storage_t:s0
+/etc/selinux/openwave/contexts(/.*)? system_u:object_r:openwave_label_config_t:s0
+
+/dev/tty system_u:object_r:openwave_console_t:s0
+/dev/loop-control system_u:object_r:openwave_loop_control_t:s0
+/dev/loop[0-9]+ system_u:object_r:openwave_loop_block_t:s0
+
+/bin/lxc\-attach system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-autostart system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-cgroup system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-checkconfig system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-checkpoint system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-config system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-console system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-copy system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-create system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-destroy system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-device system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-execute system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-freeze system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-info system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-ls system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-monitor system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-start system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-stop system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-top system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-unfreeze system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-unshare system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-usernsexec system_u:object_r:openwave_lxc_exec_t:s0
+/bin/lxc\-wait system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-attach system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-autostart system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-cgroup system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-checkconfig system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-checkpoint system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-config system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-console system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-copy system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-create system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-destroy system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-device system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-execute system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-freeze system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-info system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-ls system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-monitor system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-stop system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-top system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-unfreeze system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-unshare system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-usernsexec system_u:object_r:openwave_lxc_exec_t:s0
+/usr/bin/lxc\-wait system_u:object_r:openwave_lxc_exec_t:s0
+/run/lxc(/.*)? system_u:object_r:openwave_lxc_run_t:s0
+/usr/bin/lxc-start -- system_u:object_r:openwave_lxc_start_exec_t:s0

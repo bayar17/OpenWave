@@ -1,0 +1,1348 @@
+(handleunknown deny)
+(mls true)
+(sensitivity s0)
+(sensitivityorder (s0))
+(user system_u)
+(role system_r)
+(role object_r)
+(userrole system_u system_r)
+(userrole system_u object_r)
+(userlevel system_u (s0))
+(userrange system_u ((s0) (s0)))
+(typeattribute openwave_all_types)
+(typeattributeset openwave_all_types (all))
+(allow openwave_all_types openwave_all_types (filesystem (associate)))
+(roletype system_r openwave_all_types)
+(roletype object_r openwave_all_types)
+(type openwave_system_t)
+(type openwave_app_t)
+(type openwave_app_exec_t)
+(type openwave_user_bundle_t)
+(type openwave_user_app_exec_t)
+(type openwave_runtime_t)
+(type openwave_shared_t)
+(type openwave_app_data_t)
+(type openwave_user_data_t)
+(type openwave_private_t)
+(type openwave_security_t)
+(type openwave_selinux_enforce_t)
+(type openwave_default_t)
+(type openwave_device_t)
+(type openwave_loop_control_t)
+(type openwave_loop_block_t)
+(type openwave_gpu_t)
+(type openwave_null_t)
+(type openwave_console_t)
+(type openwave_proc_t)
+(type openwave_sysfs_t)
+(type openwave_cgroup_t)
+(type openwave_qa_evidence_t)
+(type openwave_service_identity_exec_t)
+(type openwave_waydroid_snapshot_t)
+(type openwave_waydroid_state_t)
+(type openwave_waydroid_runtime_t)
+(type openwave_waydroid_user_t)
+(type openwave_binderfs_t)
+(type openwave_binder_control_t)
+(genfscon binder / (system_u object_r openwave_binderfs_t ((s0) (s0))))
+(genfscon binder /binder-control (system_u object_r openwave_binder_control_t ((s0) (s0))))
+; Upstream initialization allocates only its Binder nodes through the control
+; device. Do not grant access to generic unlabeled devices or application IPC.
+(allow openwave_system_t openwave_binderfs_t (filesystem (mount remount unmount)))
+(allow openwave_system_t openwave_binderfs_t (dir (read open search getattr)))
+(allow openwave_system_t openwave_binderfs_t (file (read open getattr)))
+(allow openwave_system_t openwave_binderfs_t (chr_file (getattr setattr)))
+(allow openwave_system_t openwave_binder_control_t (chr_file (read write open getattr setattr ioctl)))
+(neverallow openwave_app_t openwave_binder_control_t (chr_file (all)))
+(neverallow openwave_app_t openwave_binderfs_t (chr_file (all)))
+; LXC parses its configuration in a private, non-executable memory file.
+(allow openwave_system_t self (memfd_file (create read write open getattr setattr map lock)))
+
+; The root supervisor may start only the installed upstream manager shim.
+; These process/runtime basics do not authorize container mounts or host devices.
+(allow openwave_system_t openwave_waydroid_manager_exec_t (file (read open getattr map execute)))
+(allow openwave_system_t openwave_waydroid_manager_t (process (transition sigchld signull signal sigkill getattr rlimitinh siginh noatsecure)))
+(allow openwave_system_t openwave_waydroid_manager_t (dir (search read open getattr)))
+(allow openwave_system_t openwave_waydroid_manager_t (file (read open getattr)))
+(allow openwave_dbus_t openwave_waydroid_manager_t (dir (search read open getattr)))
+(allow openwave_dbus_t openwave_waydroid_manager_t (file (read open getattr)))
+(allow openwave_dbus_t openwave_waydroid_manager_t (process (getattr)))
+(allow openwave_waydroid_manager_t openwave_waydroid_manager_exec_t (file (read open getattr map execute entrypoint execute_no_trans)))
+(allow openwave_waydroid_manager_t openwave_runtime_t (dir (read open search getattr)))
+(allow openwave_waydroid_manager_t openwave_runtime_t (file (read open getattr map execute execute_no_trans)))
+(allow openwave_waydroid_manager_t openwave_runtime_t (lnk_file (read getattr)))
+(allow openwave_waydroid_manager_t openwave_default_t (dir (search getattr)))
+(allow openwave_waydroid_manager_t openwave_private_t (dir (search getattr)))
+(allow openwave_waydroid_manager_t openwave_state_t (dir (search getattr)))
+(allow openwave_waydroid_manager_t openwave_run_t (dir (search getattr)))
+(allow openwave_waydroid_manager_t openwave_run_t (lnk_file (read getattr)))
+; Upstream resolves its fixed Unix service identity through the read-only
+; public account database. This does not grant account or profile mutation.
+(allow openwave_waydroid_manager_t openwave_accounts_t (dir (read open search getattr)))
+(allow openwave_waydroid_manager_t openwave_accounts_t (file (read open getattr map)))
+(allow openwave_waydroid_manager_t openwave_service_run_t (dir (search getattr)))
+(allow openwave_waydroid_manager_t openwave_dbus_runtime_t (dir (search getattr)))
+(allow openwave_waydroid_manager_t openwave_dbus_runtime_t (sock_file (read write open getattr)))
+(allow openwave_waydroid_manager_t openwave_dbus_t (unix_stream_socket (connectto)))
+(allow openwave_waydroid_manager_t openwave_security_t (dir (read open search getattr)))
+(allow openwave_waydroid_manager_t openwave_security_t (file (read open getattr map)))
+(allow openwave_waydroid_manager_t openwave_security_t (filesystem (getattr)))
+(allow openwave_waydroid_manager_t openwave_proc_t (dir (read open search getattr)))
+(allow openwave_waydroid_manager_t openwave_proc_t (file (read open getattr)))
+(allow openwave_waydroid_manager_t openwave_proc_t (lnk_file (read getattr)))
+(allow openwave_waydroid_manager_t self (process (fork sigchld signal signull getsched setsched getpgid setpgid getsession getcap getrlimit setrlimit)))
+(allow openwave_waydroid_manager_t openwave_system_t (process (sigchld)))
+(allow openwave_waydroid_manager_t openwave_system_t (fd (use)))
+(allow openwave_waydroid_manager_t self (fd (use)))
+(allow openwave_waydroid_manager_t self (dir (read open search getattr)))
+(allow openwave_waydroid_manager_t self (file (read open getattr)))
+(allow openwave_waydroid_manager_t self (lnk_file (read getattr)))
+(allow openwave_waydroid_manager_t self (unix_stream_socket (create connect read write getattr getopt setopt shutdown ioctl)))
+(allow openwave_waydroid_manager_t self (fifo_file (read write open getattr ioctl)))
+(allow openwave_waydroid_manager_t self (memfd_file (create read write open getattr setattr map lock)))
+(allow openwave_waydroid_manager_t openwave_device_t (dir (search getattr)))
+(allow openwave_waydroid_manager_t openwave_device_t (lnk_file (read getattr)))
+; Initialization has already created Binder nodes. The manager can resolve
+; them and apply upstream's device modes without remounting or reallocating.
+(allow openwave_waydroid_manager_t openwave_binderfs_t (dir (read open search getattr)))
+(allow openwave_waydroid_manager_t openwave_binderfs_t (chr_file (getattr setattr)))
+(allow openwave_waydroid_manager_t openwave_null_t (chr_file (read write open getattr ioctl)))
+(allow openwave_waydroid_manager_t openwave_console_t (chr_file (read write open getattr ioctl)))
+(allow openwave_waydroid_manager_t openwave_service_run_t (file (write append getattr)))
+; Python/color logging probes terminal state on regular descriptors. Restrict
+; these ioctls to the observed terminal/FIOCLEX queries, excluding filesystem
+; administration such as FS_IOC_SHUTDOWN (0x587d).
+(allow openwave_waydroid_manager_t openwave_service_run_t (file (ioctl)))
+(allowx openwave_waydroid_manager_t openwave_service_run_t (ioctl file (0x5413 0x542a)))
+(allow openwave_waydroid_manager_t openwave_runtime_t (file (ioctl)))
+(allowx openwave_waydroid_manager_t openwave_runtime_t (ioctl file (0x542a 0x5451)))
+(neverallowx openwave_waydroid_manager_t openwave_all_types (ioctl file (0x587d)))
+(allow openwave_waydroid_manager_t openwave_waydroid_storage (dir (create read open search getattr write add_name remove_name setattr rmdir)))
+(allow openwave_waydroid_manager_t openwave_waydroid_storage (file (create read write append open getattr setattr unlink rename lock map)))
+(allow openwave_waydroid_manager_t openwave_waydroid_storage (lnk_file (read getattr)))
+; This SDK's libffi allocates callback trampolines in an unlinked temporary
+; file. Only the root-private TMPDIR supports executable mappings; Android
+; state/user data remains non-executable for the manager. No execve entrypoint
+; or execute_no_trans permission is granted for the temporary files.
+(allow openwave_waydroid_manager_t openwave_waydroid_snapshot_t (file (execute)))
+(neverallow openwave_waydroid_manager_t openwave_waydroid_snapshot_t (file (execute_no_trans entrypoint)))
+(neverallow openwave_waydroid_manager_t openwave_all_types (security (load_policy setenforce)))
+(neverallow openwave_waydroid_manager_t openwave_waydroid_state_t (file (execute execute_no_trans entrypoint)))
+(typeattribute openwave_waydroid_storage)
+(typeattributeset openwave_waydroid_storage (openwave_waydroid_snapshot_t openwave_waydroid_state_t openwave_waydroid_runtime_t openwave_waydroid_user_t))
+; Only OpenRC provisions these paths. This is storage setup, not authority
+; for Android or its manager to mount images, execute or change host policy.
+(typetransition openwave_system_t openwave_service_run_t dir "waydroid" openwave_waydroid_snapshot_t)
+(typetransition openwave_system_t openwave_state_t dir "waydroid" openwave_waydroid_state_t)
+(typetransition openwave_system_t openwave_state_t dir "waydroid-user" openwave_waydroid_user_t)
+(typetransition openwave_system_t openwave_run_t dir "waydroid" openwave_waydroid_runtime_t)
+(allow openwave_system_t openwave_waydroid_storage (dir (create read open search getattr write add_name remove_name setattr rmdir)))
+(allow openwave_system_t openwave_waydroid_storage (file (create read open getattr write append setattr unlink rename lock map)))
+(allow openwave_system_t openwave_waydroid_storage (lnk_file (read getattr)))
+(neverallow openwave_app_t openwave_waydroid_storage (file (all)))
+(neverallow openwave_app_t openwave_waydroid_storage (dir (create write add_name remove_name setattr rmdir rename relabelfrom relabelto)))
+; Only the pinned upstream network script receives network administration.
+; The long-lived Python manager does not inherit these capabilities.
+(type openwave_waydroid_net_t)
+(type openwave_waydroid_net_exec_t)
+(type openwave_waydroid_net_runtime_t)
+(type openwave_misc_t)
+(type openwave_waydroid_lease_t)
+(type openwave_xtables_lock_t)
+(type openwave_waydroid_forwarding_t)
+(type openwave_waydroid_bridge_sysctl_t)
+(typeattribute openwave_waydroid_network_controls)
+(typeattributeset openwave_waydroid_network_controls (openwave_waydroid_forwarding_t openwave_waydroid_bridge_sysctl_t))
+(genfscon proc /sys/net/ipv4/ip_forward (system_u object_r openwave_waydroid_forwarding_t ((s0) (s0))))
+(genfscon proc /sys/net/ipv6/conf/waydroid0/accept_dad (system_u object_r openwave_waydroid_bridge_sysctl_t ((s0) (s0))))
+(typetransition openwave_waydroid_manager_t openwave_waydroid_net_exec_t process openwave_waydroid_net_t)
+(typetransition openwave_system_t openwave_waydroid_net_exec_t process openwave_waydroid_net_t)
+(allow openwave_waydroid_manager_t openwave_waydroid_net_exec_t (file (read open getattr map execute)))
+(allow openwave_system_t openwave_waydroid_net_exec_t (file (read open getattr map execute)))
+(allow openwave_waydroid_manager_t openwave_waydroid_net_t (process (transition signal signull sigkill getattr rlimitinh siginh noatsecure)))
+(allow openwave_system_t openwave_waydroid_net_t (process (transition signal signull sigkill getattr rlimitinh siginh noatsecure)))
+(allow openwave_waydroid_net_t openwave_waydroid_net_exec_t (file (read open getattr map execute entrypoint execute_no_trans)))
+(allow openwave_waydroid_net_t openwave_runtime_t (dir (read open search getattr)))
+(allow openwave_waydroid_net_t openwave_runtime_t (file (read open getattr map execute execute_no_trans)))
+(allow openwave_waydroid_net_t openwave_runtime_t (lnk_file (read getattr)))
+(allow openwave_waydroid_net_t openwave_default_t (dir (search getattr)))
+(allow openwave_waydroid_net_t openwave_private_t (dir (search getattr)))
+(allow openwave_waydroid_net_t openwave_state_t (dir (search getattr write add_name)))
+(allow openwave_waydroid_net_t openwave_run_t (dir (read open search getattr write add_name)))
+(allow openwave_waydroid_net_t openwave_run_t (lnk_file (read getattr)))
+(allow openwave_waydroid_net_t openwave_proc_t (dir (read open search getattr)))
+(allow openwave_waydroid_net_t openwave_proc_t (file (read open getattr)))
+(allow openwave_waydroid_net_t openwave_proc_t (lnk_file (read getattr)))
+(allow openwave_waydroid_net_t openwave_proc_t (filesystem (getattr)))
+(allow openwave_waydroid_net_t openwave_security_t (filesystem (getattr)))
+(allow openwave_waydroid_net_t openwave_sysfs_t (dir (read open search getattr)))
+(allow openwave_waydroid_net_t openwave_sysfs_t (file (read open getattr)))
+(allow openwave_waydroid_net_t openwave_sysfs_t (lnk_file (read getattr)))
+(allow openwave_waydroid_net_t openwave_network_sysctl_t (dir (read open search getattr)))
+(allow openwave_waydroid_net_t openwave_interface_sysctl_t (dir (read open search getattr)))
+(allow openwave_waydroid_net_t openwave_waydroid_network_controls (file (read write open getattr)))
+(allow openwave_waydroid_net_t openwave_accounts_t (dir (read open search getattr)))
+(allow openwave_waydroid_net_t openwave_accounts_t (file (read open getattr map)))
+(allow openwave_waydroid_net_t openwave_waydroid_state_t (dir (read open search getattr)))
+(allow openwave_waydroid_net_t openwave_waydroid_state_t (file (read open getattr map)))
+(allow openwave_waydroid_net_t openwave_dns_config_t (file (read open getattr watch)))
+(allow openwave_waydroid_net_t openwave_networkmanager_state_t (dir (read open search getattr)))
+(allow openwave_waydroid_net_t openwave_networkmanager_state_t (lnk_file (read getattr)))
+(allow openwave_waydroid_net_t openwave_device_t (dir (search getattr)))
+(allow openwave_waydroid_net_t openwave_null_t (chr_file (read write open getattr ioctl)))
+(allow openwave_waydroid_net_t openwave_console_t (chr_file (read write open getattr ioctl)))
+(allow openwave_waydroid_net_t openwave_system_t (fd (use)))
+(allow openwave_waydroid_net_t openwave_waydroid_manager_t (fd (use)))
+(allow openwave_waydroid_net_t openwave_system_t (fifo_file (read write getattr)))
+(allow openwave_waydroid_net_t openwave_waydroid_manager_t (fifo_file (read write getattr)))
+(allow openwave_waydroid_net_t openwave_system_t (process (sigchld)))
+(allow openwave_waydroid_net_t openwave_waydroid_manager_t (process (sigchld)))
+(allow openwave_waydroid_net_t self (process (fork sigchld signal signull sigkill getsched getpgid setpgid getsession getcap setcap getrlimit setrlimit)))
+(allow openwave_waydroid_net_t self (fd (use)))
+(allow openwave_waydroid_net_t self (dir (read open search getattr)))
+(allow openwave_waydroid_net_t self (file (read open getattr)))
+(allow openwave_waydroid_net_t self (lnk_file (read getattr)))
+(allow openwave_waydroid_net_t self (fifo_file (create read write open getattr ioctl)))
+(allow openwave_waydroid_net_t self (unix_stream_socket (create connect read write getattr getopt setopt shutdown ioctl)))
+(allow openwave_waydroid_net_t self (unix_dgram_socket (create connect read write getattr getopt setopt shutdown ioctl)))
+(allow openwave_waydroid_net_t self (memfd_file (create read write open getattr setattr map lock)))
+(allow openwave_waydroid_net_t self (netlink_route_socket (create bind read write getattr getopt setopt nlmsg_read nlmsg_write)))
+(allow openwave_waydroid_net_t self (rawip_socket (create bind read write getattr getopt setopt ioctl)))
+(allow openwave_waydroid_net_t self (udp_socket (create bind connect read write getattr getopt setopt ioctl)))
+(allow openwave_waydroid_net_t self (tcp_socket (create bind connect listen accept read write getattr getopt setopt ioctl)))
+(allow openwave_waydroid_net_t self (packet_socket (create bind read write getattr getopt setopt ioctl)))
+(allow openwave_waydroid_net_t openwave_default_t (rawip_socket (node_bind recvfrom sendto)))
+(allow openwave_waydroid_net_t openwave_default_t (udp_socket (name_bind node_bind recvfrom sendto)))
+(allow openwave_waydroid_net_t openwave_default_t (tcp_socket (name_bind node_bind name_connect recvfrom sendto)))
+(allow openwave_waydroid_net_t self (capability (net_admin net_raw net_bind_service setuid setgid setpcap chown)))
+(typetransition openwave_waydroid_net_t openwave_run_t dir "waydroid-lxc" openwave_waydroid_net_runtime_t)
+(typetransition openwave_waydroid_net_t openwave_run_t file "xtables.lock" openwave_xtables_lock_t)
+(typetransition openwave_waydroid_net_t openwave_state_t dir "misc" openwave_misc_t)
+(typetransition openwave_waydroid_net_t openwave_misc_t file "dnsmasq.waydroid0.leases" openwave_waydroid_lease_t)
+(typetransition openwave_waydroid_net_t openwave_misc_t file "dnsmasq.waydroid0.leases.new" openwave_waydroid_lease_t)
+(allow openwave_waydroid_net_t openwave_waydroid_net_runtime_t (dir (create read open search getattr write add_name remove_name setattr relabelfrom relabelto)))
+(allow openwave_waydroid_net_t openwave_waydroid_net_runtime_t (file (create read write append open getattr setattr unlink rename lock)))
+(allow openwave_waydroid_net_t openwave_xtables_lock_t (file (create read write open getattr setattr lock)))
+(allow openwave_waydroid_net_t openwave_misc_t (dir (create read open search getattr write add_name remove_name setattr)))
+(allow openwave_waydroid_net_t openwave_waydroid_lease_t (file (create read write append open getattr setattr unlink rename lock)))
+(allow openwave_system_t openwave_waydroid_network_controls (file (read write open getattr)))
+(allow openwave_native_service openwave_waydroid_network_controls (file (read open getattr)))
+(allow openwave_app_t openwave_waydroid_network_controls (file (read open getattr)))
+(allow openwave_networkmanager_t openwave_waydroid_network_controls (file (write)))
+(allow openwave_system_t openwave_misc_t (dir (read open search getattr write add_name remove_name setattr)))
+(allow openwave_native_service openwave_misc_t (dir (search getattr)))
+(allow openwave_system_t openwave_waydroid_net_runtime_t (dir (read open search getattr)))
+(allow openwave_system_t openwave_waydroid_net_runtime_t (file (read open getattr)))
+(allow openwave_waydroid_manager_t openwave_sysfs_t (dir (read open search getattr)))
+(allow openwave_waydroid_manager_t openwave_sysfs_t (file (read open getattr)))
+(allow openwave_waydroid_manager_t openwave_sysfs_t (lnk_file (read getattr)))
+(neverallow openwave_waydroid_net_t openwave_all_types (security (load_policy setenforce)))
+(neverallow openwave_waydroid_net_t self (capability (sys_admin sys_boot sys_time)))
+(neverallow openwave_app_t openwave_waydroid_net_exec_t (file (execute execute_no_trans entrypoint)))
+(neverallow openwave_app_t openwave_waydroid_network_controls (file (write append setattr)))
+(neverallow openwave_app_t openwave_waydroid_net_runtime_t (file (all)))
+(neverallow openwave_app_t openwave_waydroid_lease_t (file (all)))
+(type openwave_openrc_exec_t)
+(typeattribute openwave_system_domain)
+(typeattributeset openwave_system_domain (openwave_power_t))
+(typeattributeset openwave_system_domain (openwave_system_t openwave_appd_t openwave_promptd_t openwave_permissiond_t openwave_portal_t openwave_xdg_portal_t openwave_wallpaper_t openwave_time_t openwave_connectivity_t openwave_audio_t openwave_shell_t openwave_settings_t openwave_files_t))
+(policycap open_perms)
+(policycap extended_socket_class)
+(policycap nnp_nosuid_transition)
+(policycap memfd_class)
+(fsuse xattr ext4 (system_u object_r openwave_default_t ((s0) (s0))))
+(fsuse task pipefs (system_u object_r openwave_runtime_t ((s0) (s0))))
+(fsuse task sockfs (system_u object_r openwave_runtime_t ((s0) (s0))))
+(fsuse trans tmpfs (system_u object_r openwave_runtime_t ((s0) (s0))))
+(fsuse trans devtmpfs (system_u object_r openwave_device_t ((s0) (s0))))
+(fsuse trans devpts (system_u object_r openwave_device_t ((s0) (s0))))
+(genfscon proc / (system_u object_r openwave_proc_t ((s0) (s0))))
+(genfscon sysfs / (system_u object_r openwave_sysfs_t ((s0) (s0))))
+(genfscon selinuxfs / (system_u object_r openwave_security_t ((s0) (s0))))
+(genfscon selinuxfs /enforce (system_u object_r openwave_selinux_enforce_t ((s0) (s0))))
+(genfscon cgroup2 / (system_u object_r openwave_cgroup_t ((s0) (s0))))
+(genfscon cgroup / (system_u object_r openwave_cgroup_t ((s0) (s0))))
+(typetransition openwave_appd_t openwave_app_exec_t process openwave_app_t)
+(typetransition openwave_shell_t openwave_run_t file openwave_shared_t)
+(allow openwave_app_t openwave_app_exec_t (file (read open getattr map execute entrypoint execute_no_trans)))
+(allow openwave_app_t openwave_app_exec_t (dir (read open search getattr)))
+; Installed web apps are published by appd under /Applications. System code
+; remains immutable; ordinary apps can only read the published bundles.
+(typetransition openwave_appd_t openwave_user_app_exec_t process openwave_app_t)
+(typeattribute openwave_bundle_reader)
+(typeattributeset openwave_bundle_reader (openwave_app_t openwave_native_service openwave_system_t))
+(typeattribute openwave_user_bundle_content)
+(typeattributeset openwave_user_bundle_content (openwave_user_bundle_t openwave_user_app_exec_t))
+(allow openwave_bundle_reader openwave_user_bundle_content (dir (read open search getattr watch)))
+(allow openwave_bundle_reader openwave_user_bundle_content (file (read open getattr map watch)))
+(allow openwave_bundle_reader openwave_user_bundle_content (lnk_file (read getattr)))
+(allow openwave_app_t openwave_user_app_exec_t (file (execute execute_no_trans entrypoint)))
+(allow openwave_appd_t openwave_user_bundle_t (dir (create write add_name remove_name setattr rmdir rename relabelfrom relabelto)))
+(allow openwave_appd_t openwave_user_bundle_t (file (create write append setattr unlink rename link lock relabelfrom relabelto)))
+(allow openwave_appd_t openwave_user_bundle_t (lnk_file (unlink)))
+(allow openwave_appd_t openwave_user_app_exec_t (dir (write add_name remove_name setattr rmdir rename relabelfrom relabelto)))
+(allow openwave_appd_t openwave_user_app_exec_t (file (execute unlink relabelfrom relabelto)))
+(neverallow openwave_app_t openwave_user_bundle_content (dir (create write add_name remove_name setattr rmdir rename relabelfrom relabelto)))
+(neverallow openwave_app_t openwave_user_bundle_content (file (create write append setattr unlink rename link relabelfrom relabelto)))
+(allow openwave_app_t self (process (fork sigchld sigkill sigstop signull signal getsched setsched getsession getpgid setpgid getcap getattr setrlimit getrlimit execmem execstack)))
+(allow openwave_app_t openwave_system_domain (process (sigchld signull)))
+(allow openwave_app_t openwave_system_domain (fd (use)))
+(allow openwave_app_t openwave_system_domain (dir (search getattr)))
+(allow openwave_app_t openwave_system_domain (file (read open getattr)))
+(allow openwave_app_t openwave_system_domain (lnk_file (read getattr)))
+(allow openwave_app_t openwave_system_domain (memfd_file (read write open getattr map lock ioctl)))
+(allow openwave_app_t openwave_system_domain (fifo_file (read write open getattr ioctl)))
+(allow openwave_app_t openwave_system_domain (unix_stream_socket (connectto read write getattr getopt setopt shutdown)))
+(allow openwave_app_t openwave_system_domain (unix_dgram_socket (sendto)))
+(allow openwave_app_t openwave_runtime_t (dir (read open search getattr watch)))
+(allow openwave_app_t openwave_runtime_t (file (read open getattr map execute execute_no_trans watch)))
+(allow openwave_app_t openwave_runtime_t (lnk_file (read getattr)))
+(allow openwave_app_t openwave_runtime_t (sock_file (read write open getattr)))
+(allow openwave_app_t openwave_default_t (dir (search getattr)))
+(allow openwave_app_t openwave_private_t (dir (search getattr)))
+(allow openwave_app_t openwave_app_data_t (dir (all)))
+(allow openwave_app_t openwave_app_data_t (file (read write append open create getattr setattr unlink link rename lock map ioctl watch)))
+(allow openwave_app_t openwave_shared_t (file (read write open getattr map lock ioctl)))
+(allow openwave_app_t openwave_app_data_t (lnk_file (all)))
+(allow openwave_app_t openwave_app_data_t (sock_file (all)))
+(allow openwave_app_t openwave_app_data_t (fifo_file (all)))
+(allow openwave_app_t openwave_app_data_t (filesystem (associate)))
+(allow openwave_app_t openwave_default_t (filesystem (associate)))
+(allow openwave_app_t openwave_runtime_t (filesystem (associate)))
+(allow openwave_app_t openwave_all_types (filesystem (getattr)))
+(allow openwave_app_t openwave_user_data_t (dir (search getattr read open)))
+(allow openwave_app_t openwave_user_data_t (file (read write append open getattr setattr lock map ioctl)))
+(allow openwave_app_t openwave_user_data_t (lnk_file (read getattr)))
+(allow openwave_app_t openwave_proc_t (dir (read open search getattr)))
+(allow openwave_app_t openwave_proc_t (file (read open getattr map)))
+(allow openwave_app_t openwave_proc_t (lnk_file (read getattr)))
+(allow openwave_app_t openwave_sysfs_t (dir (read open search getattr)))
+(allow openwave_app_t openwave_sysfs_t (file (read open getattr)))
+(allow openwave_app_t openwave_sysfs_t (lnk_file (read getattr)))
+(allow openwave_app_t openwave_cgroup_t (dir (read open search getattr)))
+(allow openwave_app_t openwave_cgroup_t (file (read open getattr)))
+(allow openwave_app_t openwave_device_t (dir (search getattr)))
+(allow openwave_app_t openwave_device_t (lnk_file (read getattr)))
+(allow openwave_app_t openwave_null_t (chr_file (read write append open getattr ioctl map)))
+(allow openwave_app_t openwave_gpu_t (chr_file (read write open getattr ioctl map)))
+(allow openwave_app_t self (fd (use)))
+(allow openwave_app_t self (dir (read open search getattr)))
+(allow openwave_app_t self (file (read write open getattr map)))
+(allow openwave_app_t self (lnk_file (read getattr)))
+(allow openwave_app_t openwave_console_t (chr_file (read write getattr ioctl)))
+(allow openwave_app_t openwave_gpu_t (dir (search read open getattr)))
+(allow openwave_app_t self (fifo_file (all)))
+(allow openwave_app_t self (unix_stream_socket (all)))
+(allow openwave_app_t self (unix_dgram_socket (all)))
+(allow openwave_app_t self (tcp_socket (all)))
+(allow openwave_app_t self (udp_socket (all)))
+(allow openwave_app_t self (netlink_route_socket (create read write bind getattr getopt setopt nlmsg_read)))
+(allow openwave_app_t self (netlink_selinux_socket (create read write bind getattr getopt setopt)))
+(allow openwave_app_t self (shm (all)))
+(allow openwave_app_t self (sem (all)))
+(allow openwave_app_t self (memfd_file (read write append create getattr setattr lock map execute execmod)))
+(allow openwave_app_t openwave_default_t (tcp_socket (name_connect node_bind recvfrom sendto)))
+(allow openwave_app_t openwave_default_t (udp_socket (name_bind node_bind recvfrom sendto)))
+(allow openwave_app_t openwave_default_t (node (recvfrom sendto)))
+(allow openwave_app_t openwave_default_t (netif (ingress egress)))
+(allow openwave_app_t openwave_security_t (dir (search read open getattr)))
+(allow openwave_app_t openwave_security_t (file (read open getattr map)))
+(allow openwave_app_t openwave_security_t (filesystem (getattr)))
+(neverallow openwave_app_t openwave_all_types (security (load_policy setenforce setbool setsecparam)))
+(neverallow openwave_app_t openwave_all_types (process (ptrace transition dyntransition setcurrent setexec)))
+(neverallow openwave_app_t openwave_private_t (file (all)))
+(neverallow openwave_app_t openwave_all_types (capability (all)))
+(neverallow openwave_app_t openwave_all_types (capability2 (all)))
+
+; Bootstrap/OpenRC must be able to execute the runtime dynamic loader.
+; The dedicated openwave_openrc_exec_t rule below only covers OpenRC itself,
+; not /lib64/ld-linux-x86-64.so.2 (openwave_runtime_t).
+(allow openwave_system_t openwave_runtime_t
+    (file (read open getattr map execute execute_no_trans)))
+
+; PID 1 and its child processes need these base permissions after enforcement.
+; Grant them only to the trusted system domain, not application domains.
+(allow openwave_system_t self (process (fork)))
+(allow openwave_system_t openwave_proc_t (dir (search getattr)))
+
+; The PID 1/OpenRC domain must traverse sysfs and selinuxfs.
+; Keep SELinux enforcement file access isolated from policy load and other
+; SELinux control files; do not grant setenforce to the shared system domain.
+(allow openwave_system_t openwave_sysfs_t (dir (search getattr)))
+(allow openwave_system_t openwave_security_t (dir (search getattr)))
+(allow openwave_system_t openwave_selinux_enforce_t (file (open read write getattr)))
+
+; The bootstrap's console is relabeled to openwave_console_t before enforcing.
+(allow openwave_system_t openwave_console_t (chr_file (open read write getattr ioctl)))
+
+; OpenRC manages the dedicated QA evidence directory.
+; The named directory receives its evidence type at creation.
+
+(allow openwave_system_t openwave_runtime_t (dir (search getattr)))
+
+(typetransition openwave_system_t openwave_run_t dir "openwave-logs" openwave_qa_evidence_t)
+
+; Allow the system supervisor to manage QA evidence.
+
+(allow openwave_system_t openwave_private_t (dir (search)))
+
+(allow openwave_system_t openwave_qa_evidence_t (dir (add_name create getattr open read remove_name search setattr write)))
+
+(allow openwave_system_t openwave_qa_evidence_t (file (append create getattr open read rename setattr unlink write)))
+
+; Application services can write to dedicated QA evidence,
+; not to unrelated private or runtime files.
+
+(allow openwave_appd_t openwave_qa_evidence_t (file (append getattr open write)))
+
+(allow openwave_wallpaper_t openwave_qa_evidence_t (file (append getattr open write)))
+
+(allow openwave_shell_t openwave_qa_evidence_t (file (append getattr open write)))
+
+; Permit use of log file descriptors inherited from OpenRC.
+
+(allow openwave_appd_t openwave_system_t (fd (use)))
+
+(allow openwave_wallpaper_t openwave_system_t (fd (use)))
+
+(allow openwave_shell_t openwave_system_t (fd (use)))
+
+
+; Read SELinux enforcement state without policy modification rights.
+(allow openwave_system_t openwave_security_t (file (open read getattr)))
+
+(allow openwave_system_t openwave_openrc_exec_t (file (getattr open read execute execute_no_trans map)))
+
+(allow openwave_system_t openwave_default_t (dir (search getattr)))
+
+; Writable supervisor state is distinct from immutable runtime code/config.
+(type openwave_run_t)
+(type openwave_state_t)
+(allow openwave_system_t openwave_runtime_t (lnk_file (read getattr)))
+(allow openwave_system_t openwave_runtime_t (dir (open read)))
+(allow openwave_system_t openwave_private_t (dir (open read getattr)))
+(allow openwave_system_t openwave_private_t (file (read open getattr map)))
+(allow openwave_system_t self (process (sigchld signal signull getsched setsched getpgid setpgid getsession getcap setcap getrlimit setrlimit)))
+(allow openwave_system_t self (capability (chown dac_override dac_read_search fowner fsetid kill setgid setuid setpcap sys_admin sys_tty_config sys_resource sys_boot sys_time mknod net_admin net_raw sys_chroot)))
+(allow openwave_system_t self (dir (read open search getattr)))
+(allow openwave_system_t self (file (read open getattr)))
+(allow openwave_system_t self (lnk_file (read getattr)))
+(allow openwave_system_t self (fd (use)))
+(allow openwave_system_t self (fifo_file (read write open create getattr ioctl)))
+(allow openwave_system_t self (unix_stream_socket (create connect connectto read write bind listen accept getattr getopt setopt shutdown)))
+(allow openwave_system_t self (unix_dgram_socket (create connect read write bind sendto getattr getopt setopt shutdown)))
+(allow openwave_system_t openwave_proc_t (dir (read open)))
+(allow openwave_system_t openwave_proc_t (file (read open getattr)))
+(allow openwave_system_t openwave_proc_t (lnk_file (read getattr)))
+(allow openwave_system_t openwave_sysfs_t (dir (read open)))
+(allow openwave_system_t openwave_sysfs_t (file (read open getattr)))
+(allow openwave_system_t openwave_sysfs_t (lnk_file (read getattr)))
+(allow openwave_system_t openwave_all_types (filesystem (getattr)))
+(allow openwave_system_t openwave_default_t (filesystem (mount remount unmount)))
+(allow openwave_system_t openwave_runtime_t (filesystem (mount remount unmount)))
+(allow openwave_system_t openwave_device_t (filesystem (mount remount unmount)))
+(allow openwave_system_t openwave_cgroup_t (filesystem (mount remount unmount)))
+(allow openwave_system_t openwave_proc_t (filesystem (mount remount unmount)))
+(allow openwave_system_t openwave_sysfs_t (filesystem (mount remount unmount)))
+(allow openwave_system_t openwave_cgroup_t (dir (read open search getattr create add_name remove_name write setattr mounton)))
+(allow openwave_system_t openwave_cgroup_t (file (read open getattr write)))
+(allow openwave_system_t openwave_device_t (dir (read open search getattr create add_name remove_name write setattr mounton)))
+(allow openwave_system_t openwave_device_t (lnk_file (read getattr create setattr unlink)))
+(allow openwave_system_t openwave_device_t (chr_file (read write open getattr setattr create unlink ioctl relabelfrom)))
+(allow openwave_system_t openwave_console_t (chr_file (relabelto)))
+(allow openwave_system_t openwave_null_t (chr_file (read write open getattr ioctl setattr relabelto)))
+(allow openwave_system_t openwave_gpu_t (dir (read open search getattr relabelto)))
+(allow openwave_system_t openwave_gpu_t (chr_file (read write open getattr ioctl setattr relabelto)))
+(allow openwave_system_t openwave_run_t (dir (read open search getattr create add_name remove_name write setattr rmdir mounton)))
+(allow openwave_system_t openwave_run_t (file (read open getattr create write append setattr unlink rename lock map)))
+(allow openwave_system_t openwave_run_t (lnk_file (read getattr create setattr unlink rename)))
+(allow openwave_system_t openwave_run_t (sock_file (create read write open getattr setattr unlink)))
+(allow openwave_system_t openwave_run_t (fifo_file (create read write open getattr setattr unlink)))
+(allow openwave_system_t openwave_state_t (dir (read open search getattr create add_name remove_name write setattr rmdir)))
+(allow openwave_system_t openwave_state_t (file (read open getattr create write append setattr unlink rename lock map)))
+(allow openwave_system_t openwave_state_t (lnk_file (read getattr create setattr unlink rename)))
+(allow openwave_system_t openwave_state_t (sock_file (create read write open getattr setattr unlink)))
+
+; OpenRC checkpath/root/bootmisc and the loopback/seedrng services.
+(allow openwave_system_t openwave_default_t (dir (read open write mounton)))
+(allow openwave_system_t openwave_state_t (dir (lock)))
+(allow openwave_system_t self (capability2 (syslog)))
+(allow openwave_system_t openwave_security_t (system (syslog_read syslog_mod)))
+(allow openwave_system_t self (netlink_route_socket (create read write bind getattr getopt setopt nlmsg_read nlmsg_write)))
+(allow openwave_system_t self (udp_socket (create ioctl read write getattr getopt setopt)))
+(allow openwave_system_t self (packet_socket (create ioctl read write getattr getopt setopt)))
+(allow openwave_system_t openwave_runtime_t (dir (write)))
+
+; Native services share only process basics and read-only runtime access.
+; Writable application/service state is authorized separately per domain.
+(typeattribute openwave_native_service)
+(typeattributeset openwave_native_service (openwave_power_t))
+(typeattributeset openwave_native_service (openwave_appd_t openwave_promptd_t openwave_permissiond_t openwave_portal_t openwave_xdg_portal_t openwave_wallpaper_t openwave_time_t openwave_connectivity_t openwave_audio_t openwave_shell_t openwave_settings_t openwave_files_t openwave_dbus_t openwave_udev_t openwave_networkmanager_t openwave_iwd_t openwave_bluetooth_t openwave_pipewire_t openwave_wireplumber_t openwave_avahi_t))
+(allow openwave_native_service openwave_runtime_t (dir (search read open getattr)))
+(allow openwave_native_service openwave_runtime_t (file (read open getattr map execute execute_no_trans)))
+(allow openwave_native_service openwave_runtime_t (lnk_file (read getattr)))
+(allow openwave_native_service openwave_default_t (dir (search read open getattr)))
+(allow openwave_native_service openwave_private_t (dir (search getattr)))
+(allow openwave_native_service openwave_state_t (dir (search getattr)))
+(allow openwave_native_service openwave_run_t (dir (search read open getattr)))
+(allow openwave_native_service openwave_run_t (file (read open getattr map)))
+(allow openwave_native_service openwave_run_t (lnk_file (read getattr)))
+(allow openwave_native_service openwave_run_t (sock_file (read write open getattr)))
+(allow openwave_native_service openwave_proc_t (dir (search read open getattr)))
+(allow openwave_native_service openwave_proc_t (file (read open getattr map)))
+(allow openwave_native_service openwave_proc_t (lnk_file (read getattr)))
+(allow openwave_native_service openwave_sysfs_t (dir (search read open getattr)))
+(allow openwave_native_service openwave_sysfs_t (file (read open getattr)))
+(allow openwave_native_service openwave_sysfs_t (lnk_file (read getattr)))
+(allow openwave_native_service openwave_security_t (dir (search read open getattr)))
+(allow openwave_native_service openwave_security_t (file (read open getattr map)))
+(allow openwave_native_service openwave_device_t (dir (search getattr)))
+(allow openwave_native_service openwave_null_t (chr_file (read write open getattr ioctl)))
+(allow openwave_native_service openwave_console_t (chr_file (read write open getattr ioctl)))
+(allow openwave_native_service self (process (fork sigchld signal signull getsched setsched getpgid setpgid getsession getcap getrlimit setrlimit)))
+(allow openwave_native_service self (dir (read open search getattr)))
+(allow openwave_native_service self (file (read open getattr)))
+(allow openwave_native_service self (lnk_file (read getattr)))
+(allow openwave_native_service self (fd (use)))
+(allow openwave_native_service self (fifo_file (read write open create getattr ioctl)))
+(allow openwave_native_service self (unix_stream_socket (create connect read write bind listen accept getattr getopt setopt shutdown)))
+(allow openwave_native_service self (unix_dgram_socket (create connect read write bind getattr getopt setopt shutdown)))
+(allow openwave_native_service openwave_native_service (unix_stream_socket (connectto)))
+(allow openwave_native_service openwave_native_service (unix_dgram_socket (sendto)))
+(allow openwave_native_service openwave_system_t (fd (use)))
+(allow openwave_native_service openwave_system_t (process (sigchld signull)))
+(allow openwave_native_service openwave_qa_evidence_t (file (getattr open write append)))
+(allow openwave_system_t openwave_native_service (process (signal signull sigkill sigstop getsched setsched getpgid getcap)))
+(allow openwave_system_t openwave_native_service (dir (search read open getattr)))
+(allow openwave_system_t openwave_native_service (file (read open getattr)))
+(allow openwave_system_t openwave_native_service (lnk_file (read getattr)))
+(allow openwave_system_t openwave_native_service (unix_stream_socket (connectto)))
+(allow openwave_system_t openwave_native_service (unix_dgram_socket (sendto)))
+(allow openwave_system_t openwave_app_exec_t (dir (search read open getattr)))
+(allow openwave_system_t openwave_service_identity_exec_t (file (read open getattr map execute execute_no_trans)))
+; Service domains cannot change SELinux enforcement or policy.
+(neverallow openwave_native_service openwave_all_types (security (load_policy setenforce setbool setsecparam)))
+
+; Evidence from OpenRC startup: /var/run symlink, mounts, and dmesg.
+(allow openwave_system_t openwave_private_t (lnk_file (read getattr)))
+(allow openwave_system_t openwave_sysfs_t (dir (mounton)))
+(allow openwave_system_t openwave_device_t (blk_file (getattr)))
+(allow openwave_system_t openwave_app_data_t (dir (getattr search)))
+(allow openwave_system_t self (system (syslog_read syslog_mod syslog_console)))
+(allow openwave_system_t openwave_run_t (dir (watch)))
+
+; Apps retain read-only runtime and IPC access after splitting mutable /run.
+(allow openwave_app_t openwave_run_t (dir (search read open getattr)))
+(allow openwave_app_t openwave_run_t (file (read open getattr)))
+(allow openwave_app_t openwave_run_t (lnk_file (read getattr)))
+(allow openwave_app_t openwave_run_t (sock_file (read write open getattr)))
+(allow openwave_app_t openwave_state_t (dir (search getattr)))
+(allow openwave_app_t openwave_dbus_t (unix_stream_socket (connectto)))
+
+; Only the device manager can replay kernel coldplug events through sysfs.
+(type openwave_udev_runtime_t)
+(typetransition openwave_system_t openwave_run_t dir "udev" openwave_udev_runtime_t)
+(allow openwave_udev_t openwave_sysfs_t (file (write)))
+(allow openwave_udev_t self (capability (chown dac_override dac_read_search fowner fsetid kill setuid setgid net_admin sys_admin sys_nice mknod)))
+(allow openwave_udev_t self (netlink_kobject_uevent_socket (create read write bind getattr getopt setopt)))
+(allow openwave_udev_t openwave_device_t (dir (read open search getattr write add_name remove_name create setattr)))
+(allow openwave_udev_t openwave_device_t (lnk_file (read getattr create unlink setattr)))
+(allow openwave_udev_t openwave_device_t (chr_file (read write open getattr setattr create unlink ioctl)))
+(allow openwave_udev_t openwave_device_t (blk_file (read open getattr setattr create unlink ioctl)))
+(allow openwave_udev_t openwave_gpu_t (dir (read open search getattr)))
+(allow openwave_udev_t openwave_gpu_t (chr_file (read write open getattr setattr ioctl)))
+(allow openwave_udev_t openwave_null_t (chr_file (setattr)))
+(allow openwave_udev_t openwave_console_t (chr_file (setattr)))
+(allow openwave_udev_t openwave_udev_runtime_t (dir (search read open getattr write add_name remove_name create setattr rmdir watch)))
+(allow openwave_udev_t openwave_udev_runtime_t (file (create read write append open getattr setattr unlink rename lock map)))
+(allow openwave_udev_t openwave_udev_runtime_t (lnk_file (read getattr create unlink setattr rename)))
+(allow openwave_udev_t openwave_udev_runtime_t (sock_file (create read write open getattr setattr unlink)))
+(allow openwave_system_t openwave_udev_runtime_t (dir (search read open getattr create setattr)))
+(allow openwave_system_t openwave_udev_runtime_t (file (read open getattr)))
+(allow openwave_native_service openwave_udev_runtime_t (dir (read open search getattr watch)))
+(allow openwave_native_service openwave_udev_runtime_t (file (read open getattr)))
+(allow openwave_native_service openwave_udev_runtime_t (lnk_file (read getattr)))
+
+; D-Bus manages its own sockets, pidfiles and authentication, not OpenRC identity files.
+(type openwave_dbus_runtime_t)
+(typetransition openwave_system_t openwave_run_t dir "dbus" openwave_dbus_runtime_t)
+(typetransition openwave_dbus_t openwave_run_t sock_file "bus" openwave_dbus_runtime_t)
+(allow openwave_system_t openwave_dbus_runtime_t (dir (search read open getattr create setattr)))
+(allow openwave_system_t openwave_dbus_runtime_t (sock_file (read write open getattr)))
+(allow openwave_dbus_t openwave_dbus_runtime_t (dir (search read open getattr write add_name remove_name create setattr)))
+(allow openwave_dbus_t openwave_dbus_runtime_t (file (create read write open getattr setattr unlink)))
+(allow openwave_dbus_t openwave_dbus_runtime_t (sock_file (create read write open getattr setattr unlink)))
+(allow openwave_dbus_t openwave_run_t (dir (write add_name remove_name)))
+(allow openwave_dbus_t self (capability (setuid setgid dac_override)))
+(allow openwave_dbus_t openwave_native_service (process (getattr)))
+(allow openwave_dbus_t openwave_system_t (process (getattr)))
+(allow openwave_native_service openwave_dbus_runtime_t (dir (search getattr)))
+(allow openwave_native_service openwave_dbus_runtime_t (sock_file (read write open getattr)))
+(allow openwave_app_t openwave_dbus_runtime_t (dir (search getattr)))
+(allow openwave_app_t openwave_dbus_runtime_t (sock_file (read write open getattr)))
+
+; OpenRC supervision data must not inherit the type of a service called dbus.
+(type openwave_openrc_state_t)
+(typetransition openwave_system_t openwave_run_t dir "openrc" openwave_openrc_state_t)
+(allow openwave_system_t openwave_openrc_state_t (dir (read open search getattr write add_name remove_name create setattr rmdir lock)))
+(allow openwave_system_t openwave_openrc_state_t (file (read open getattr write append create setattr unlink rename link lock map)))
+(allow openwave_system_t openwave_openrc_state_t (lnk_file (read getattr create unlink rename)))
+(allow openwave_system_t openwave_openrc_state_t (fifo_file (create read write open getattr setattr unlink)))
+(allow openwave_system_t openwave_openrc_state_t (sock_file (create read write open getattr setattr unlink)))
+
+; The power broker submits fixed commands to OpenRC; it cannot reboot directly
+; or write other supervisor state. Applications never receive this descriptor.
+(type openwave_power_fifo_t)
+(typetransition openwave_system_t openwave_openrc_state_t fifo_file "init.ctl" openwave_power_fifo_t)
+(allow openwave_system_t openwave_power_fifo_t (fifo_file (create read write open getattr setattr unlink)))
+(allow openwave_power_t openwave_openrc_state_t (dir (search getattr)))
+(allow openwave_power_t openwave_power_fifo_t (fifo_file (open write getattr)))
+; Settings authenticates the supervised power service before requesting power.
+(allow openwave_settings_t openwave_power_t (dir (search getattr)))
+(allow openwave_settings_t openwave_power_t (file (read open getattr)))
+(neverallow openwave_app_t openwave_power_fifo_t (fifo_file (all)))
+(neverallow openwave_native_renderer openwave_power_fifo_t (fifo_file (all)))
+(neverallow openwave_power_t self (capability (sys_boot sys_admin)))
+
+; Wireless 24: iwd's AF_ALG probes were denied despite the kernel APIs being
+; present, and NM could not create its runtime directory. Keep daemon state
+; and rfkill access distinct from arbitrary /run, /var/lib and device nodes.
+(type openwave_networkmanager_state_t)
+(type openwave_iwd_state_t)
+(type openwave_rfkill_t)
+(type openwave_dns_config_t)
+(type openwave_firmware_t)
+(type openwave_network_sysctl_t)
+(type openwave_interface_sysctl_t)
+(genfscon proc /sys/net (system_u object_r openwave_network_sysctl_t ((s0) (s0))))
+(genfscon proc /sys/net/ipv4/conf (system_u object_r openwave_interface_sysctl_t ((s0) (s0))))
+(genfscon proc /sys/net/ipv6/conf (system_u object_r openwave_interface_sysctl_t ((s0) (s0))))
+(allow openwave_system_t openwave_firmware_t (dir (search read open getattr)))
+(allow openwave_system_t openwave_firmware_t (file (read open getattr map)))
+(allow openwave_system_t openwave_firmware_t (system (firmware_load)))
+(neverallow openwave_system_t openwave_runtime_t (system (firmware_load)))
+(neverallow openwave_native_service openwave_firmware_t (file (write append create unlink rename)))
+(neverallow openwave_app_t openwave_firmware_t (file (write append create unlink rename)))
+(allow openwave_native_service openwave_firmware_t (dir (search read open getattr watch)))
+(allow openwave_native_service openwave_firmware_t (file (read open getattr map)))
+(allow openwave_native_service openwave_network_sysctl_t (dir (search read open getattr)))
+(allow openwave_native_service openwave_network_sysctl_t (file (read open getattr)))
+(allow openwave_app_t openwave_network_sysctl_t (dir (search read open getattr)))
+(allow openwave_app_t openwave_network_sysctl_t (file (read open getattr)))
+(allow openwave_system_t openwave_network_sysctl_t (dir (search read open getattr)))
+(allow openwave_system_t openwave_network_sysctl_t (file (read write open getattr)))
+(allow openwave_networkmanager_t openwave_network_sysctl_t (file (write)))
+; iwd keeps ARP/ND state across brief carrier drops during Wi-Fi roaming.
+; Limit its sysctl writes to per-interface IPv4/IPv6 configuration.
+(allow openwave_native_service openwave_interface_sysctl_t (dir (search read open getattr)))
+(allow openwave_native_service openwave_interface_sysctl_t (file (read open getattr)))
+(allow openwave_app_t openwave_interface_sysctl_t (dir (search read open getattr)))
+(allow openwave_app_t openwave_interface_sysctl_t (file (read open getattr)))
+(allow openwave_system_t openwave_interface_sysctl_t (dir (search read open getattr)))
+(allow openwave_system_t openwave_interface_sysctl_t (file (read write open getattr)))
+(allow openwave_networkmanager_t openwave_interface_sysctl_t (file (write)))
+(allow openwave_iwd_t openwave_interface_sysctl_t (file (write)))
+(neverallow openwave_app_t openwave_interface_sysctl_t (file (write append setattr)))
+(typetransition openwave_system_t openwave_device_t chr_file "rfkill" openwave_rfkill_t)
+(typetransition openwave_system_t openwave_run_t dir "NetworkManager" openwave_networkmanager_state_t)
+(typetransition openwave_system_t openwave_state_t dir "NetworkManager" openwave_networkmanager_state_t)
+(typetransition openwave_system_t openwave_state_t dir "iwd" openwave_iwd_state_t)
+(allow openwave_system_t openwave_networkmanager_state_t (dir (create read open search getattr setattr)))
+(allow openwave_system_t openwave_iwd_state_t (dir (create read open search getattr setattr)))
+(allow openwave_networkmanager_t openwave_networkmanager_state_t (dir (create read write open search getattr add_name remove_name setattr rmdir watch)))
+(allow openwave_networkmanager_t openwave_networkmanager_state_t (file (create read write append open getattr setattr unlink rename lock map)))
+; NM writes the fixed resolv.conf.tmp and renames it over resolv.conf. Label
+; both names publicly readable, while connection profiles remain private.
+(typetransition openwave_networkmanager_t openwave_networkmanager_state_t file "resolv.conf.tmp" openwave_dns_config_t)
+(typetransition openwave_networkmanager_t openwave_networkmanager_state_t file "resolv.conf" openwave_dns_config_t)
+(allow openwave_networkmanager_t openwave_dns_config_t (file (create read write append open getattr setattr unlink rename)))
+(allow openwave_native_service openwave_networkmanager_state_t (dir (search getattr)))
+(allow openwave_appd_t openwave_networkmanager_state_t (dir (read open)))
+(allow openwave_app_t openwave_networkmanager_state_t (dir (search getattr)))
+(allow openwave_native_service openwave_dns_config_t (file (read open getattr map)))
+(allow openwave_system_t openwave_dns_config_t (file (read open getattr map)))
+(allow openwave_app_t openwave_dns_config_t (file (read open getattr map)))
+(neverallow openwave_app_t openwave_networkmanager_state_t (file (all)))
+(neverallow openwave_native_renderer openwave_networkmanager_state_t (file (all)))
+(allow openwave_iwd_t openwave_iwd_state_t (dir (create read write open search getattr add_name remove_name setattr rmdir watch watch_reads)))
+(allow openwave_iwd_t openwave_iwd_state_t (file (create read write append open getattr setattr unlink rename lock map)))
+(allow openwave_iwd_t self (alg_socket (create bind accept read write getattr getopt setopt)))
+(allow openwave_iwd_t self (key (view read write search link setattr create)))
+(allow openwave_iwd_t self (netlink_generic_socket (create bind read write getattr getopt setopt)))
+(allow openwave_iwd_t self (netlink_kobject_uevent_socket (create bind read write getattr getopt setopt)))
+(allow openwave_iwd_t self (netlink_route_socket (create bind read write getattr getopt setopt nlmsg_read nlmsg_write)))
+(allow openwave_iwd_t self (packet_socket (create bind read write getattr getopt setopt ioctl)))
+(allow openwave_iwd_t self (capability (net_admin net_raw)))
+(allow openwave_networkmanager_t self (netlink_generic_socket (create bind read write getattr getopt setopt)))
+(allow openwave_networkmanager_t self (netlink_route_socket (create bind read write getattr getopt setopt nlmsg_read nlmsg_write)))
+(allow openwave_networkmanager_t self (capability (net_admin net_raw)))
+; DHCP accepts the offered lease by binding the reserved client port.
+(allow openwave_networkmanager_t self (capability (net_bind_service)))
+; IPv6 router discovery and cleanup of the daemon's own resolver helper.
+(allow openwave_networkmanager_t self (rawip_socket (create bind read write getattr getopt setopt ioctl)))
+(allow openwave_networkmanager_t openwave_default_t (rawip_socket (node_bind recvfrom sendto)))
+(allow openwave_networkmanager_t self (process (sigkill)))
+(allow openwave_iwd_t openwave_rfkill_t (chr_file (read write open getattr ioctl)))
+(allow openwave_networkmanager_t openwave_rfkill_t (chr_file (read write open getattr ioctl)))
+(allow openwave_networkmanager_t openwave_namespace_t (file (read open getattr)))
+(allow openwave_networkmanager_t openwave_system_t (dir (search getattr)))
+(allow openwave_networkmanager_t openwave_system_t (lnk_file (read getattr)))
+(allow openwave_networkmanager_t openwave_system_t (file (read open getattr)))
+; NM verifies the native connectivity broker's D-Bus process credentials.
+(allow openwave_networkmanager_t openwave_connectivity_t (dir (search getattr)))
+(allow openwave_networkmanager_t openwave_connectivity_t (file (read open getattr)))
+(allow openwave_networkmanager_t openwave_connectivity_t (lnk_file (read getattr)))
+(allow openwave_networkmanager_t openwave_connectivity_t (process (signull)))
+(allow openwave_networkmanager_t self (netlink_kobject_uevent_socket (create bind read write getattr getopt setopt)))
+(allow openwave_networkmanager_t self (udp_socket (create bind connect read write getattr getopt setopt ioctl)))
+; NetworkManager's internal DHCP client uses AF_PACKET for initial leases.
+(allow openwave_networkmanager_t self (packet_socket (create bind read write getattr getopt setopt ioctl)))
+(allow openwave_networkmanager_t openwave_default_t (udp_socket (name_bind node_bind recvfrom sendto)))
+(allow openwave_networkmanager_t openwave_default_t (node (recvfrom sendto)))
+(allow openwave_networkmanager_t openwave_default_t (netif (ingress egress)))
+(allow openwave_networkmanager_t self (unix_dgram_socket (ioctl)))
+(allow openwave_networkmanager_t openwave_runtime_t (dir (watch)))
+(allow openwave_udev_t openwave_rfkill_t (chr_file (read write open getattr setattr ioctl)))
+(allow openwave_system_t openwave_rfkill_t (chr_file (read write open getattr setattr ioctl relabelto)))
+(allow openwave_system_t openwave_cgroup_t (dir (rmdir)))
+(allow openwave_system_t openwave_device_t (dir (watch)))
+(allow openwave_system_t openwave_device_t (blk_file (read open ioctl)))
+(allow openwave_system_t openwave_run_t (file (link)))
+(allow openwave_native_service openwave_all_types (filesystem (getattr)))
+(allow openwave_system_t self (netlink_generic_socket (create read write bind getattr getopt setopt)))
+(typetransition openwave_system_t openwave_service_run_t file "appd.stdout.log" openwave_qa_evidence_t)
+(typetransition openwave_system_t openwave_service_run_t file "powerd.stdout.log" openwave_qa_evidence_t)
+(typetransition openwave_system_t openwave_service_run_t file "powerd.stderr.log" openwave_qa_evidence_t)
+(typetransition openwave_system_t openwave_service_run_t file "iwd.stdout.log" openwave_qa_evidence_t)
+(typetransition openwave_system_t openwave_service_run_t file "iwd.stderr.log" openwave_qa_evidence_t)
+(typetransition openwave_system_t openwave_service_run_t file "networkmanager.stdout.log" openwave_qa_evidence_t)
+(typetransition openwave_system_t openwave_service_run_t file "networkmanager.stderr.log" openwave_qa_evidence_t)
+(typetransition openwave_system_t openwave_service_run_t file "appd.stderr.log" openwave_qa_evidence_t)
+(typetransition openwave_system_t openwave_service_run_t file "permissiond.stdout.log" openwave_qa_evidence_t)
+(typetransition openwave_system_t openwave_service_run_t file "permissiond.stderr.log" openwave_qa_evidence_t)
+(typetransition openwave_system_t openwave_service_run_t file "portal.stdout.log" openwave_qa_evidence_t)
+(typetransition openwave_system_t openwave_service_run_t file "portal.stderr.log" openwave_qa_evidence_t)
+(typetransition openwave_system_t openwave_service_run_t file "promptd.stdout.log" openwave_qa_evidence_t)
+(typetransition openwave_system_t openwave_service_run_t file "promptd.stderr.log" openwave_qa_evidence_t)
+(typetransition openwave_system_t openwave_service_run_t file "xdg-portal.stdout.log" openwave_qa_evidence_t)
+(typetransition openwave_system_t openwave_service_run_t file "xdg-portal.stderr.log" openwave_qa_evidence_t)
+; Preserve supervisor-configured limits and signal state across service exec.
+(allow openwave_system_t openwave_native_service (process (rlimitinh siginh)))
+(allow openwave_system_t self (process (getattr)))
+
+; Enforcing Unix-socket boot: acpid sets its socket mode; ip queries loopback.
+(allow openwave_system_t self (unix_stream_socket (setattr ioctl)))
+(allow openwave_system_t self (unix_dgram_socket (ioctl)))
+; Read the identity of non-dumpable service processes, with SELinux process
+; getattr checks still enforced. This does not authorize process ptrace.
+(allow openwave_system_t self (capability (sys_ptrace)))
+(allow openwave_system_t openwave_native_service (process (getattr)))
+(allow openwave_system_t openwave_dbus_runtime_t (dir (rmdir)))
+; D-Bus authenticates supervised peers through their read-only proc identity.
+(allow openwave_dbus_t openwave_system_t (dir (search read open getattr)))
+(allow openwave_dbus_t openwave_system_t (file (read open getattr)))
+(allow openwave_dbus_t openwave_system_t (lnk_file (read getattr)))
+(allow openwave_dbus_t openwave_native_service (dir (search read open getattr)))
+(allow openwave_dbus_t openwave_native_service (file (read open getattr)))
+(allow openwave_dbus_t openwave_native_service (lnk_file (read getattr)))
+(allow openwave_dbus_t openwave_runtime_t (dir (watch)))
+; The privileged system bus raises its descriptor limit at initialization.
+(allow openwave_dbus_t self (capability (sys_resource)))
+; eudev watches rules, adjusts only its own worker OOM score, and creates
+; GPU device links while replaying coldplug events.
+(allow openwave_udev_t openwave_runtime_t (dir (watch)))
+(allow openwave_udev_t self (file (write)))
+(allow openwave_udev_t openwave_gpu_t (dir (write add_name remove_name)))
+(allow openwave_udev_t openwave_gpu_t (lnk_file (read getattr create unlink setattr)))
+(allow openwave_udev_t openwave_device_t (blk_file (lock)))
+
+; Dedicated writable state for the core native services.
+(type openwave_appd_runtime_t)
+(type openwave_appd_state_t)
+(type openwave_permission_state_t)
+(type openwave_shell_state_t)
+(type openwave_wallpaper_state_t)
+
+; OpenRC creates the protected top-level directories. Services only manage
+; entries below their own directory, never generic /var/lib or /run parents.
+(typetransition openwave_system_t openwave_service_run_t dir "appd" openwave_appd_runtime_t)
+(typetransition openwave_system_t openwave_state_t dir "app-identities" openwave_appd_state_t)
+(typetransition openwave_system_t openwave_state_t dir "permissions" openwave_permission_state_t)
+(typetransition openwave_system_t openwave_state_t dir "ocean" openwave_shell_state_t)
+(allow openwave_system_t openwave_appd_runtime_t (dir (search read open getattr create setattr)))
+(allow openwave_system_t openwave_appd_runtime_t (file (read open getattr)))
+(allow openwave_system_t openwave_appd_state_t (dir (search read open getattr create setattr)))
+(allow openwave_system_t openwave_permission_state_t (dir (search read open getattr create setattr)))
+(allow openwave_system_t openwave_shell_state_t (dir (search read open getattr create setattr write add_name)))
+(allow openwave_system_t openwave_wallpaper_state_t (dir (search read open getattr create setattr)))
+
+(allow openwave_appd_t openwave_appd_runtime_t (dir (read open search getattr create write add_name remove_name setattr rmdir)))
+(allow openwave_appd_t openwave_appd_runtime_t (file (read open getattr create write append setattr unlink rename lock map)))
+(allow openwave_appd_t openwave_appd_state_t (dir (read open search getattr create write add_name remove_name setattr rmdir)))
+(allow openwave_appd_t openwave_appd_state_t (file (read open getattr create write append setattr unlink rename lock map)))
+(allow openwave_permissiond_t openwave_permission_state_t (dir (read open search getattr create write add_name remove_name setattr rmdir)))
+; Portal 20: QSaveFile publishes its O_TMPFILE inode with linkat before rename.
+(allow openwave_permissiond_t openwave_permission_state_t (file (read open getattr create write append setattr unlink rename lock map link)))
+(allow openwave_shell_t openwave_shell_state_t (dir (read open search getattr create write add_name remove_name setattr rmdir watch)))
+(allow openwave_shell_t openwave_shell_state_t (file (read open getattr create write append setattr unlink rename lock map watch)))
+(allow openwave_shell_t openwave_shell_state_t (lnk_file (read getattr create unlink rename)))
+(allow openwave_xdg_portal_t openwave_shell_state_t (dir (read open search getattr)))
+(allow openwave_xdg_portal_t openwave_shell_state_t (file (read open getattr watch)))
+(allow openwave_wallpaper_t openwave_wallpaper_state_t (dir (read open search getattr create write add_name remove_name setattr rmdir)))
+(allow openwave_wallpaper_t openwave_wallpaper_state_t (file (read open getattr create write append setattr unlink rename lock map)))
+(allow openwave_shell_t openwave_wallpaper_state_t (dir (read open search getattr)))
+(allow openwave_shell_t openwave_wallpaper_state_t (file (read open getattr map)))
+
+; Keep service-private state out of application descriptor/ordinary access.
+; No broad service attr grant is used here.
+(neverallow openwave_app_t openwave_appd_runtime_t (file (all)))
+(neverallow openwave_app_t openwave_appd_state_t (file (all)))
+(neverallow openwave_app_t openwave_permission_state_t (file (all)))
+(neverallow openwave_app_t openwave_shell_state_t (file (all)))
+(neverallow openwave_appd_t openwave_permission_state_t (file (write append create unlink rename)))
+(neverallow openwave_permissiond_t openwave_appd_runtime_t (file (write append create unlink rename)))
+(neverallow openwave_permissiond_t openwave_appd_state_t (file (write append create unlink rename)))
+
+; checkpath verifies write access to preprovisioned service directories.
+; It cannot add/remove entries in these directories on behalf of services.
+(allow openwave_system_t openwave_appd_runtime_t (dir (write)))
+(allow openwave_system_t openwave_appd_state_t (dir (write)))
+(allow openwave_system_t openwave_permission_state_t (dir (write)))
+(allow openwave_system_t openwave_wallpaper_state_t (dir (write)))
+; Ocean retains its dedicated domain with OpenRC's no_new_privs enabled.
+(allow openwave_system_t openwave_shell_t (process2 (nnp_transition)))
+(allow openwave_udev_t openwave_gpu_t (dir (create setattr)))
+(allow openwave_udev_t openwave_device_t (blk_file (watch)))
+(allow openwave_system_t openwave_device_t (dir (ioctl)))
+
+; OpenRC constructs the trusted service environment (including fixed D-Bus
+; endpoints). Preserve it for these service transitions. Application exec from
+; appd retains secureexec and receives no corresponding noatsecure grant.
+(allow openwave_system_t openwave_native_service (process (noatsecure)))
+; Only the identity brokers inspect Ocean's executable across the UID boundary;
+; process ptrace remains unauthorized.
+(allow openwave_appd_t self (capability (sys_ptrace)))
+(allow openwave_portal_t self (capability (sys_ptrace)))
+(allow openwave_promptd_t self (capability (sys_ptrace)))
+(allow openwave_appd_t openwave_shell_t (dir (search read open getattr)))
+(allow openwave_appd_t openwave_shell_t (file (read open getattr)))
+(allow openwave_appd_t openwave_shell_t (lnk_file (read getattr)))
+(allow openwave_portal_t openwave_shell_t (dir (search read open getattr)))
+(allow openwave_portal_t openwave_shell_t (file (read open getattr)))
+(allow openwave_portal_t openwave_shell_t (lnk_file (read getattr)))
+(allow openwave_promptd_t openwave_shell_t (dir (search read open getattr)))
+(allow openwave_promptd_t openwave_shell_t (file (read open getattr)))
+(allow openwave_promptd_t openwave_shell_t (lnk_file (read getattr)))
+(allow openwave_appd_t openwave_app_exec_t (dir (read open search getattr)))
+(allow openwave_appd_t openwave_runtime_t (dir (watch)))
+; Explicit application context selection and the final no_new_privs exec.
+(allow openwave_appd_t self (process (setexec)))
+(allow openwave_appd_t self (file (write)))
+(allow openwave_appd_t openwave_app_exec_t (file (read open getattr map execute)))
+(allow openwave_appd_t openwave_app_t (process (transition)))
+; Bubblewrap bind mounts are nosuid, and child_setup sets no_new_privs.
+(allow openwave_appd_t openwave_app_t (process2 (nnp_transition nosuid_transition)))
+(allow openwave_appd_t openwave_settings_t (process2 (nnp_transition)))
+(allow openwave_appd_t openwave_files_t (process2 (nnp_transition)))
+
+
+; Supervised identities/IPC and appd's public preferences have separate labels.
+; appd cannot replace the supervisor's pidfiles or identity records.
+(type openwave_service_run_t)
+(type openwave_public_preferences_t)
+(typetransition openwave_system_t openwave_run_t dir "openwave" openwave_service_run_t)
+(typetransition openwave_appd_t openwave_service_run_t file openwave_public_preferences_t)
+(allow openwave_system_t openwave_service_run_t (dir (search read open getattr create write add_name remove_name setattr rmdir)))
+(allow openwave_system_t openwave_service_run_t (file (read open getattr create write append setattr unlink rename lock link)))
+(allow openwave_system_t openwave_service_run_t (lnk_file (read getattr create unlink rename setattr)))
+(allow openwave_system_t openwave_service_run_t (sock_file (read write open getattr create unlink setattr)))
+(allow openwave_native_service openwave_service_run_t (dir (search read open getattr)))
+(allow openwave_native_service openwave_service_run_t (file (read open getattr)))
+(allow openwave_native_service openwave_service_run_t (lnk_file (read getattr)))
+(allow openwave_native_service openwave_service_run_t (sock_file (read write open getattr)))
+(allow openwave_app_t openwave_service_run_t (dir (search read open getattr)))
+(allow openwave_app_t openwave_service_run_t (file (read open getattr)))
+(allow openwave_app_t openwave_service_run_t (lnk_file (read getattr)))
+(allow openwave_app_t openwave_service_run_t (sock_file (read write open getattr)))
+(allow openwave_appd_t openwave_service_run_t (dir (write add_name remove_name)))
+(allow openwave_appd_t openwave_public_preferences_t (file (read open getattr create write append setattr unlink rename lock)))
+(allow openwave_system_t openwave_public_preferences_t (file (read open getattr)))
+(allow openwave_native_service openwave_public_preferences_t (file (read open getattr map watch)))
+(allow openwave_app_t openwave_public_preferences_t (file (read open getattr map watch)))
+(neverallow openwave_app_t openwave_service_run_t (file (write append create unlink rename setattr)))
+(neverallow openwave_app_t openwave_public_preferences_t (file (write append create unlink rename setattr)))
+
+; The mutable passwd backing remains readable like /etc/passwd, while only the
+; trusted account allocator can write it. Private UID maps retain their label.
+(type openwave_accounts_t)
+(allow openwave_system_t openwave_accounts_t (dir (search read open getattr write setattr)))
+(allow openwave_system_t openwave_accounts_t (file (read open getattr)))
+(allow openwave_native_service openwave_accounts_t (dir (search read open getattr)))
+(allow openwave_native_service openwave_accounts_t (file (read open getattr map)))
+(allow openwave_app_t openwave_accounts_t (dir (search read open getattr)))
+(allow openwave_app_t openwave_accounts_t (file (read open getattr map)))
+(allow openwave_appd_t openwave_accounts_t (dir (write add_name remove_name)))
+(allow openwave_appd_t openwave_accounts_t (file (create write append setattr unlink rename lock)))
+(neverallow openwave_app_t openwave_accounts_t (file (write append create unlink rename setattr)))
+
+; Observed core-service requirements: session directory traversal, D-Bus
+; credential pidfds, terminal probing of dedicated logs, and PID 1 shutdown.
+(allow openwave_promptd_t self (capability (dac_read_search)))
+(allow openwave_permissiond_t self (capability (dac_read_search)))
+(allow openwave_portal_t self (capability (dac_read_search)))
+(allow openwave_xdg_portal_t self (capability (dac_read_search)))
+(allow openwave_audio_t self (capability (dac_read_search)))
+(allow openwave_appd_t self (capability (dac_read_search)))
+(allow openwave_native_service openwave_dbus_t (fd (use)))
+(allow openwave_app_t openwave_dbus_t (fd (use)))
+(allow openwave_native_service openwave_qa_evidence_t (file (ioctl)))
+(allow openwave_native_service self (process (getattr)))
+(allow openwave_system_t self (process (sigkill sigstop)))
+(allow openwave_appd_t openwave_system_t (dir (search read open getattr)))
+(allow openwave_appd_t openwave_system_t (file (read open getattr)))
+(allow openwave_appd_t openwave_system_t (lnk_file (read getattr)))
+(allow openwave_appd_t openwave_user_data_t (dir (search read open getattr)))
+(allow openwave_appd_t openwave_user_data_t (file (read open getattr)))
+(allow openwave_appd_t openwave_user_data_t (lnk_file (read getattr)))
+
+; Only appd manages application cgroups and the root pids-controller switch.
+(type openwave_app_cgroup_t)
+(type openwave_app_cgroup_control_t)
+(typetransition openwave_appd_t openwave_cgroup_t dir "openwave-apps" openwave_app_cgroup_t)
+(genfscon cgroup2 /openwave-apps (system_u object_r openwave_app_cgroup_t ((s0) (s0))))
+; Moving from the root group requires access to its common-ancestor procs file.
+(genfscon cgroup2 /cgroup.procs (system_u object_r openwave_app_cgroup_control_t ((s0) (s0))))
+(genfscon cgroup2 /cgroup.subtree_control (system_u object_r openwave_app_cgroup_control_t ((s0) (s0))))
+(allow openwave_appd_t openwave_cgroup_t (dir (search read open getattr write add_name)))
+(allow openwave_appd_t openwave_app_cgroup_t (dir (search read open getattr create write add_name remove_name rmdir)))
+(allow openwave_appd_t openwave_app_cgroup_t (file (read open getattr write)))
+(allow openwave_appd_t openwave_app_cgroup_control_t (file (read open getattr write)))
+(allow openwave_system_t openwave_app_cgroup_t (dir (search read open getattr write remove_name rmdir)))
+(allow openwave_system_t openwave_app_cgroup_t (file (read open getattr write)))
+(allow openwave_system_t openwave_app_cgroup_control_t (file (read open getattr write)))
+(allow openwave_app_t openwave_app_cgroup_t (dir (search read open getattr)))
+(allow openwave_app_t openwave_app_cgroup_t (file (read open getattr)))
+
+; Public supervisor proofs plus proc start times let clients authenticate
+; broker bus owners. This authorizes no process tracing or private state reads.
+(typeattribute openwave_broker_identity_consumer)
+(typeattributeset openwave_broker_identity_consumer (openwave_power_t openwave_connectivity_t))
+(typeattributeset openwave_broker_identity_consumer (openwave_appd_t openwave_permissiond_t openwave_portal_t openwave_promptd_t openwave_wallpaper_t openwave_shell_t openwave_xdg_portal_t))
+(allow openwave_broker_identity_consumer openwave_system_domain (dir (search read open getattr)))
+(allow openwave_broker_identity_consumer openwave_system_domain (file (read open getattr)))
+(allow openwave_broker_identity_consumer openwave_system_domain (lnk_file (read getattr)))
+; File/prompt brokers verify /proc/<caller>/exe after appd resolves the live
+; identity. Confined apps have their own proc label, outside system_domain.
+; This permits executable-link verification without opening proc files or
+; tracing the application, and grants no application-storage access.
+(typeattribute openwave_application_executable_broker)
+(typeattributeset openwave_application_executable_broker (openwave_portal_t openwave_promptd_t))
+(allow openwave_application_executable_broker openwave_app_t (dir (search getattr)))
+(allow openwave_application_executable_broker openwave_app_t (lnk_file (read getattr)))
+; selinux_ptrace_access_check(PTRACE_MODE_READ) checks FILE__READ against the
+; task SID even for readlink(exe). Keep FILE__OPEN and PROCESS__PTRACE denied.
+(allow openwave_application_executable_broker openwave_app_t (file (read)))
+(allow openwave_xdg_portal_t openwave_shell_state_t (dir (watch)))
+
+; Native Qt renderers use DRM and shared buffers. Only Ocean handles global
+; input and VT control; applications retain the existing render-node policy.
+(typeattribute openwave_native_renderer)
+(typeattributeset openwave_native_renderer (openwave_shell_t openwave_settings_t openwave_files_t))
+(type openwave_input_t)
+(allow openwave_native_renderer openwave_gpu_t (dir (search read open getattr)))
+(allow openwave_native_renderer openwave_gpu_t (chr_file (read write open getattr ioctl map)))
+(allow openwave_native_renderer self (process (execmem)))
+(allow openwave_native_renderer self (memfd_file (read write append create getattr setattr lock map execute execmod)))
+(typetransition openwave_settings_t openwave_run_t file openwave_shared_t)
+(typetransition openwave_files_t openwave_run_t file openwave_shared_t)
+(allow openwave_native_renderer openwave_run_t (dir (write add_name remove_name)))
+(allow openwave_native_renderer openwave_shared_t (file (read write append open getattr create setattr unlink rename lock map)))
+(allow openwave_shell_t openwave_run_t (sock_file (create read write open getattr setattr unlink)))
+(allow openwave_shell_t openwave_input_t (dir (search read open getattr)))
+(allow openwave_shell_t openwave_input_t (chr_file (read write open getattr ioctl)))
+(allow openwave_shell_t openwave_console_t (chr_file (map)))
+(allow openwave_udev_t openwave_input_t (dir (search read open getattr write create add_name remove_name setattr)))
+(allow openwave_udev_t openwave_input_t (chr_file (read write open getattr ioctl setattr)))
+(allow openwave_udev_t openwave_input_t (lnk_file (read getattr create unlink setattr)))
+(allow openwave_system_t openwave_input_t (dir (search read open getattr ioctl)))
+(allow openwave_system_t openwave_input_t (chr_file (read open getattr ioctl)))
+(neverallow openwave_app_t openwave_input_t (chr_file (all)))
+; Compositor access to buffers explicitly received over the client connection.
+(allow openwave_shell_t openwave_app_t (fd (use)))
+(allow openwave_shell_t openwave_app_t (memfd_file (read write getattr map)))
+(allow openwave_shell_t openwave_app_data_t (file (read open getattr map)))
+
+; Broker identity checks use read-only proc metadata, never process tracing.
+; Service exec paths cannot return to the privileged supervisor domain.
+(neverallow openwave_native_service openwave_all_types (process (ptrace dyntransition)))
+(neverallow openwave_native_service openwave_system_t (process (transition)))
+
+; appd is the privileged namespace/account launcher. These capabilities cover
+; credential changes, owned socket publication, and Bubblewrap/setns/chroot;
+; the final application domain retains its all-capabilities neverallow.
+(allow openwave_appd_t self (capability (chown fowner dac_override setgid setuid setpcap kill sys_admin sys_chroot)))
+(allow openwave_appd_t self (process (setcap)))
+(allow openwave_appd_t self (process (sigkill sigstop)))
+(allow openwave_appd_t openwave_gpu_t (dir (search read open getattr)))
+(allow openwave_appd_t openwave_gpu_t (chr_file (getattr)))
+; Public aliases retain the original socket inode/label. appd validates the
+; configured session owner before publishing Wayland and session-bus links.
+(allow openwave_appd_t openwave_run_t (sock_file (getattr setattr link rename unlink)))
+(allow openwave_appd_t openwave_dbus_runtime_t (sock_file (getattr setattr link rename unlink)))
+(allow openwave_appd_t openwave_app_t (process (getattr signal signull sigkill getpgid)))
+(allow openwave_appd_t openwave_app_t (dir (search read open getattr)))
+(allow openwave_appd_t openwave_app_t (file (read open getattr)))
+(allow openwave_appd_t openwave_app_t (lnk_file (read getattr)))
+; The supervisor can inspect application liveness/confinement during QA and
+; shutdown. This grants no tracing or application storage writes.
+(allow openwave_system_t openwave_app_t (process (getattr)))
+(allow openwave_system_t openwave_app_t (dir (search read open getattr)))
+(allow openwave_system_t openwave_app_t (file (read open getattr)))
+(allow openwave_system_t openwave_app_t (lnk_file (read getattr)))
+
+; Managed profile parents are distinct from ordinary Documents/Pictures.
+; New per-application directories inherit app_data_t before any files exist.
+(type openwave_app_storage_t)
+(typetransition openwave_appd_t openwave_user_data_t dir ".DataLocation" openwave_app_storage_t)
+(typetransition openwave_appd_t openwave_app_storage_t dir "Applications" openwave_app_storage_t)
+(typetransition openwave_appd_t openwave_service_run_t dir "apps" openwave_app_storage_t)
+(typetransition openwave_appd_t openwave_app_storage_t dir openwave_app_data_t)
+(allow openwave_appd_t openwave_user_data_t (dir (write add_name setattr)))
+(allow openwave_appd_t openwave_app_storage_t (dir (search read open getattr create write add_name remove_name setattr rmdir)))
+(allow openwave_appd_t openwave_app_data_t (dir (search read open getattr create write add_name remove_name setattr rmdir rename)))
+(allow openwave_appd_t openwave_app_data_t (file (read write append open getattr create setattr unlink rename link lock map)))
+(allow openwave_appd_t openwave_app_data_t (lnk_file (read getattr create setattr unlink rename)))
+(allow openwave_app_t openwave_app_storage_t (dir (search getattr)))
+(allow openwave_native_renderer openwave_app_storage_t (dir (search getattr)))
+(allow openwave_native_renderer openwave_app_data_t (dir (search read open getattr create write add_name remove_name setattr rmdir watch)))
+(allow openwave_native_renderer openwave_app_data_t (file (read write append open getattr create setattr unlink rename lock map watch)))
+(allow openwave_native_renderer openwave_app_data_t (lnk_file (read getattr create setattr unlink rename)))
+
+; restorecon needs the labeling specifications, never the private policy image.
+(type openwave_label_config_t)
+(allow openwave_system_t openwave_label_config_t (dir (search read open getattr)))
+(allow openwave_system_t openwave_label_config_t (file (read open getattr map)))
+(allow openwave_appd_t openwave_label_config_t (dir (search read open getattr)))
+(allow openwave_appd_t openwave_label_config_t (file (read open getattr map)))
+(neverallow openwave_native_service openwave_label_config_t (file (write append create unlink rename setattr)))
+(neverallow openwave_app_t openwave_label_config_t (file (all)))
+
+; Evidence: qt610-core2 enforcing boot. Qt probes the bundle directory,
+; discovers input via libudev, and atomically links its private cache files.
+(allow openwave_shell_t openwave_app_exec_t (dir (search read open getattr)))
+(allow openwave_shell_t openwave_user_data_t (dir (search getattr)))
+; Portal 17: the embedded Files picker must list the user's folders and inspect
+; selected images. Ownership/DAC and its pinned per-user FilesBackend root still
+; apply; this grants no profile mutation or access to broker-private state.
+(allow openwave_shell_t openwave_user_data_t (dir (read open)))
+(allow openwave_shell_t openwave_user_data_t (file (read open getattr map)))
+; Portal 18: the supervised file broker validates the verified user's root,
+; inspects MIME headers, and opens read-only image grants. Imported Photos
+; live in application storage; no broker-private state is exposed.
+(allow openwave_portal_t self (capability (setuid setgid)))
+(allow openwave_portal_t openwave_user_data_t (dir (search read open getattr write add_name create)))
+(allow openwave_portal_t openwave_user_data_t (file (read open getattr create write)))
+(allow openwave_portal_t openwave_app_storage_t (dir (search getattr)))
+(allow openwave_portal_t openwave_app_data_t (dir (search read open getattr)))
+(allow openwave_portal_t openwave_app_data_t (file (read open getattr)))
+; SCM_RIGHTS keeps the broker's descriptor SID while the bus relays the grant.
+; D-Bus may relay/read existing descriptors, without permission to open paths.
+(allow openwave_dbus_t openwave_portal_t (fd (use)))
+; Relaying an O_WRONLY portal descriptor checks write as well as fd use.
+; D-Bus still cannot open paths or create/mutate directory entries.
+(allow openwave_dbus_t openwave_user_data_t (file (read write)))
+(allow openwave_dbus_t openwave_app_data_t (file (read)))
+(allow openwave_shell_t openwave_portal_t (fd (use)))
+(allow openwave_settings_t openwave_portal_t (fd (use)))
+(allow openwave_settings_t openwave_user_data_t (file (read getattr)))
+(allow openwave_shell_t self (netlink_kobject_uevent_socket (create read write bind getattr getopt setopt)))
+(allow openwave_shell_t openwave_shell_state_t (file (link)))
+(typetransition openwave_shell_t openwave_run_t dir openwave_shell_state_t)
+; D-Bus GetConnectionCredentials carries pidfds to root QA clients too.
+(allow openwave_system_t openwave_dbus_t (fd (use)))
+
+(allow openwave_shell_t openwave_state_t (lnk_file (read getattr)))
+
+; integration 04: trusted renderers consume the launcher's exec/log descriptors
+; and inherit its resource limits/signals across the dedicated domain change.
+(allow openwave_settings_t openwave_appd_t (fd (use)))
+(allow openwave_files_t openwave_appd_t (fd (use)))
+(allow openwave_appd_t openwave_settings_t (process (rlimitinh siginh)))
+(allow openwave_appd_t openwave_files_t (process (rlimitinh siginh)))
+; Bubblewrap makes the cloned mount namespace private and verifies nsfs handles.
+(type openwave_namespace_t)
+(genfscon nsfs / (system_u object_r openwave_namespace_t ((s0) (s0))))
+(allow openwave_appd_t openwave_namespace_t (file (read open getattr)))
+(allow openwave_system_t openwave_namespace_t (file (read open getattr)))
+(allow openwave_appd_t openwave_default_t (dir (mounton)))
+
+; integration 05: native clients traverse their installed bundles/profile and
+; receive keyboard/keymap descriptors from the authenticated compositor.
+(allow openwave_native_renderer openwave_app_exec_t (dir (search read open getattr)))
+(allow openwave_native_renderer openwave_user_data_t (dir (search read open getattr)))
+(allow openwave_settings_t openwave_shell_t (fd (use)))
+(allow openwave_files_t openwave_shell_t (fd (use)))
+(allow openwave_native_renderer openwave_shell_t (memfd_file (read getattr map)))
+(typetransition openwave_settings_t openwave_run_t dir openwave_app_data_t)
+(typetransition openwave_files_t openwave_run_t dir openwave_app_data_t)
+(typetransition openwave_settings_t openwave_run_t sock_file openwave_app_data_t)
+(typetransition openwave_files_t openwave_run_t sock_file openwave_app_data_t)
+(allow openwave_settings_t openwave_app_data_t (sock_file (create read write open getattr setattr unlink rename)))
+(allow openwave_files_t openwave_app_data_t (sock_file (create read write open getattr setattr unlink rename)))
+(allow openwave_appd_t openwave_app_data_t (sock_file (read write open getattr)))
+; Public broker proofs require public proc start times; private service state
+; and process tracing remain inaccessible to ordinary applications.
+(typeattribute openwave_public_identity_broker)
+(typeattributeset openwave_public_identity_broker (openwave_appd_t openwave_permissiond_t openwave_portal_t openwave_promptd_t))
+(typeattribute openwave_application_identity_client)
+(typeattributeset openwave_application_identity_client (openwave_settings_t openwave_files_t openwave_app_t))
+(allow openwave_application_identity_client openwave_public_identity_broker (dir (search read open getattr)))
+(allow openwave_application_identity_client openwave_public_identity_broker (file (read open getattr)))
+
+; Bubblewrap's temporary root has its own label. Installed runtime stays
+; immutable; only the launcher builds and mounts this disposable tree.
+(type openwave_sandbox_t)
+; selinuxfs control inodes use the fixed security SID in this kernel.
+; The separate security-class check permits only context validation.
+(allow openwave_appd_t openwave_security_t (file (read write open getattr)))
+(neverallow openwave_appd_t openwave_security_t (security (load_policy setenforce setbool)))
+(allow openwave_appd_t self (process (setfscreate)))
+(allow openwave_appd_t openwave_runtime_t (filesystem (relabelfrom)))
+(allow openwave_appd_t openwave_sandbox_t (filesystem (relabelto mount remount unmount getattr)))
+(allow openwave_appd_t openwave_default_t (filesystem (remount unmount)))
+(allow openwave_appd_t openwave_run_t (dir (mounton)))
+(allow openwave_appd_t openwave_app_storage_t (dir (mounton)))
+(allow openwave_appd_t openwave_appd_runtime_t (dir (mounton)))
+(allow openwave_appd_t openwave_sandbox_t (dir (read open getattr search create write add_name remove_name setattr rmdir mounton)))
+(allow openwave_appd_t openwave_sandbox_t (file (read open getattr create write setattr unlink mounton)))
+(allow openwave_appd_t openwave_sandbox_t (lnk_file (read getattr create unlink)))
+(allow openwave_app_t openwave_sandbox_t (dir (read open search getattr)))
+(allow openwave_app_t openwave_sandbox_t (file (read open getattr)))
+(allow openwave_app_t openwave_sandbox_t (lnk_file (read getattr)))
+
+; appd owns lifecycle operations for its two trusted native application roles.
+; This is the same bounded signal management used for its ordinary app role.
+(allow openwave_appd_t openwave_settings_t (process (getattr signal signull sigkill getpgid)))
+(allow openwave_appd_t openwave_files_t (process (getattr signal signull sigkill getpgid)))
+(allow openwave_settings_t openwave_appd_t (process (sigchld signull)))
+(allow openwave_files_t openwave_appd_t (process (sigchld signull)))
+; libselinux's context validator is a query, separate from loading policy.
+(allow openwave_appd_t openwave_security_t (security (check_context)))
+
+; integration 06: compositor receives native clients' DRM buffer descriptors.
+(allow openwave_shell_t openwave_settings_t (fd (use)))
+(allow openwave_shell_t openwave_files_t (fd (use)))
+; wl_shm cursor pools arrive as O_RDWR descriptors. security_file_receive
+; checks both access modes, even though the compositor only maps their pixels.
+; Limit this to client-owned anonymous memory, never installed/profile files.
+(allow openwave_shell_t openwave_native_renderer (memfd_file (read write getattr map)))
+(allow openwave_native_renderer openwave_app_data_t (file (link)))
+; Trusted native environments are constructed from a whitelist by appd.
+; Ordinary app transitions keep secureexec, no_new_privs and all isolation.
+(allow openwave_appd_t openwave_settings_t (process (noatsecure)))
+(allow openwave_appd_t openwave_files_t (process (noatsecure)))
+; Files owns user file management, subject to the session UID's Unix rights.
+(allow openwave_files_t openwave_user_data_t (dir (create write add_name remove_name setattr rmdir watch)))
+(allow openwave_files_t openwave_user_data_t (file (create read write append open getattr setattr unlink rename lock map)))
+(allow openwave_files_t openwave_user_data_t (lnk_file (create read getattr unlink rename)))
+; Retire only managed app-channel sockets from the shared session directory.
+(allow openwave_appd_t openwave_run_t (dir (write remove_name)))
+(allow openwave_appd_t openwave_app_data_t (sock_file (unlink)))
+; integration 07: Bubblewrap mounts its labeled temporary tmpfs. Bind imports
+; become read-only per-mount, including the imported pseudo filesystems.
+(allow openwave_appd_t openwave_runtime_t (filesystem (mount remount unmount)))
+(allow openwave_appd_t openwave_proc_t (filesystem (remount)))
+(allow openwave_appd_t openwave_sysfs_t (filesystem (remount)))
+(allow openwave_appd_t openwave_security_t (filesystem (remount)))
+(allow openwave_appd_t openwave_cgroup_t (filesystem (remount)))
+; integration 09: context-labeled nested tmpfs mounts validate the disposable
+; sandbox filesystem's existing label as well as the requested label.
+(allow openwave_appd_t openwave_sandbox_t (filesystem (relabelfrom)))
+; integration 10: ordinary app exec inherits bounded resource limits/signals;
+; secureexec remains enabled and service QA logs are not writable by apps.
+(allow openwave_appd_t openwave_app_t (process (rlimitinh siginh)))
+
+;; WAYDROID_SIOCGIFINDEX_60_BEGIN
+;; iproute2 uses SIOCGIFINDEX to look up a network interface index.
+;; Image 59 audit: openwave_waydroid_net_t self:unix_dgram_socket ioctlcmd=0x8933.
+;; Keep this limited to the Waydroid network helper and that request number.
+(allow openwave_waydroid_net_t self (unix_dgram_socket (ioctl)))
+(allowx openwave_waydroid_net_t self (ioctl unix_dgram_socket (0x8933)))
+;; WAYDROID_SIOCGIFINDEX_60_END
+
+(allow openwave_waydroid_net_t
+       openwave_networkmanager_state_t
+       (dir (watch)))
+
+(allow openwave_waydroid_manager_t
+       self
+       (capability (sys_admin)))
+
+;; Diagnostic 72: Waydroid EROFS mount authorization
+(allow openwave_waydroid_manager_t openwave_default_t (filesystem (mount)))
+
+;; Diagnostic 73: Waydroid rootfs mountpoint
+(allow openwave_waydroid_manager_t openwave_waydroid_state_t (dir (mounton)))
+
+;; Diagnostic 74: dedicated Waydroid loop device access
+(allow openwave_waydroid_manager_t openwave_loop_control_t (chr_file (open read write getattr ioctl)))
+(allow openwave_waydroid_manager_t openwave_loop_block_t (blk_file (open read write getattr ioctl)))
+(allow openwave_udev_t openwave_loop_control_t (chr_file (open read write getattr setattr ioctl)))
+(allow openwave_udev_t openwave_loop_block_t (blk_file (open read write getattr setattr ioctl)))
+
+;; Diagnostic 75: temporary vendor mount authorization
+(allow openwave_waydroid_manager_t
+       openwave_default_t
+       (dir (mounton)))
+
+;; Diagnostic 76: Android vendor file metadata
+(allow openwave_waydroid_manager_t openwave_default_t (file (getattr)))
+
+;; Diagnostic 77: Android property bind mount
+(allow openwave_waydroid_manager_t openwave_default_t (file (mounton)))
+
+(type openwave_lxc_exec_t)
+(type openwave_lxc_run_t)
+(allow openwave_waydroid_manager_t openwave_lxc_exec_t
+       (file (read open getattr map execute execute_no_trans)))
+
+(allow openwave_waydroid_manager_t openwave_lxc_run_t
+       (dir (create read write open search getattr add_name remove_name)))
+
+(allow openwave_waydroid_manager_t openwave_lxc_run_t
+       (file (create read write open getattr setattr unlink lock)))
+
+(typetransition openwave_system_t openwave_run_t
+       dir "lxc" openwave_lxc_run_t)
+
+(allow openwave_system_t openwave_lxc_run_t
+       (dir (create read write open search getattr setattr add_name remove_name)))
+
+(allow openwave_system_t openwave_lxc_run_t
+       (file (create read write open getattr setattr unlink lock)))
+
+(allow openwave_system_t openwave_lxc_exec_t (file (read open getattr map execute execute_no_trans)))
+
+(allow openwave_waydroid_net_t openwave_lxc_exec_t (file (read open getattr map execute execute_no_trans)))
+
+;; Diagnostic 80: LXC command socket binding
+(allow openwave_waydroid_manager_t self (unix_stream_socket (bind listen)))
+
+
+;; Diagnostic 82: LXC cgroup inspection
+(allow openwave_waydroid_manager_t
+       openwave_namespace_t
+       (file (getattr)))
+
+
+;; Diagnostic 82: LXC cgroup inspection
+(allow openwave_waydroid_manager_t
+       openwave_system_t
+       (dir (search)))
+
+
+;; Diagnostic 82: LXC cgroup inspection
+(allow openwave_waydroid_manager_t
+       openwave_cgroup_t
+       (dir (search)))
+
+;; Diagnostic 83: LXC procfs cgroup discovery
+(allow openwave_waydroid_manager_t
+       openwave_system_t
+       (file (read open getattr)))
+
+
+;; Diagnostic 84: LXC namespace/socket
+(allow openwave_waydroid_manager_t
+       openwave_namespace_t
+       (file (read)))
+
+
+;; Diagnostic 84: LXC namespace/socket
+(allow openwave_waydroid_manager_t
+       self
+       (unix_stream_socket (connectto)))
+
+
+;; Diagnostic 84: LXC namespace/socket
+(allow openwave_system_t
+       openwave_waydroid_manager_t
+       (unix_stream_socket (connectto)))
+
+;; OPENWAVE_LXC_DOMAIN_STAGE_BEGIN
+(type openwave_lxc_t)
+(type openwave_lxc_start_exec_t)
+(roletype system_r openwave_lxc_t)
+
+;; Authorization for LXC process transition (enabled in activation step).
+(allow openwave_waydroid_manager_t openwave_lxc_start_exec_t
+       (file (read open getattr execute)))
+(allow openwave_waydroid_manager_t openwave_lxc_t (process (transition)))
+(allow openwave_lxc_t openwave_lxc_start_exec_t
+       (file (entrypoint read open getattr execute map)))
+
+;; LXC server's abstract Unix command socket.
+(allow openwave_lxc_t self
+       (unix_stream_socket (create bind listen accept read write connectto)))
+(allow openwave_waydroid_manager_t openwave_lxc_t
+       (unix_stream_socket (connectto)))
+;; Existing OpenWave QA/system lifecycle clients need the same audited access.
+(allow openwave_system_t openwave_lxc_t
+       (unix_stream_socket (connectto)))
+
+;; LXC metadata and runtime area (not a general /run authorization).
+(allow openwave_lxc_t openwave_lxc_run_t
+       (dir (search read open getattr write add_name remove_name create)))
+(allow openwave_lxc_t openwave_lxc_run_t
+       (file (read open getattr write create unlink lock setattr)))
+
+;; Waydroid's LXC state/configuration area (audit further rights before release).
+(allow openwave_lxc_t openwave_waydroid_state_t
+       (dir (search read open getattr write add_name remove_name)))
+(allow openwave_lxc_t openwave_waydroid_state_t
+       (file (read open getattr write create setattr lock unlink)))
+(allow openwave_lxc_t openwave_waydroid_state_t
+       (sock_file (create read write getattr unlink)))
+
+;; LXC's known namespace and cgroup discovery reads.
+(allow openwave_lxc_t openwave_namespace_t (file (getattr read open)))
+(allow openwave_lxc_t openwave_cgroup_t (filesystem (getattr)))
+(allow openwave_lxc_t openwave_cgroup_t (dir (search read open getattr)))
+
+;; Diagnostic only: /proc/<pid>/cgroup commonly carries process domain type.
+;; Narrow these after runtime inspection instead of making them production defaults.
+(allow openwave_lxc_t openwave_system_t (dir (search)))
+(allow openwave_lxc_t openwave_system_t (file (read open getattr)))
+;; OPENWAVE_LXC_DOMAIN_STAGE_END
+
+;; OPENWAVE_LXC_DOMAIN_ACTIVATE_BEGIN
+;; Transition only lxc-start invoked from Waydroid manager.
+;; lxc-info, lxc-stop, etc retain their existing execution behavior.
+(typetransition openwave_waydroid_manager_t openwave_lxc_start_exec_t
+                process openwave_lxc_t)
+;; OPENWAVE_LXC_DOMAIN_ACTIVATE_END
+
+;; OPENWAVE_LXC_TRANSITION_IO_86
+
+;; Inherited Waydroid pipes and system descriptors.
+(allow openwave_lxc_t openwave_waydroid_manager_t
+       (fd (use)))
+
+(allow openwave_lxc_t openwave_system_t
+       (fd (use)))
+
+;; Waydroid-managed stdout/stderr pipes.
+(allow openwave_lxc_t openwave_waydroid_manager_t
+       (fifo_file (read write getattr)))
+
+;; Null device used during descriptor sanitization.
+(allow openwave_lxc_t openwave_null_t
+       (chr_file (open read write getattr)))
+
+;; Preserve normal process execution characteristics.
+(allow openwave_waydroid_manager_t openwave_lxc_t
+       (process (rlimitinh siginh)))
+
+;; Allow LXC to notify its parent on termination.
+(allow openwave_lxc_t openwave_waydroid_manager_t
+       (process (sigchld)))

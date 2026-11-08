@@ -1,5 +1,5 @@
 #include <QGuiApplication>
-#include <OpenWave/FontManager.h>
+#include <OpenWave/Application.h>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QIcon>
@@ -15,7 +15,6 @@
 int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
-    OpenWave::FontManager::initialize();
     QCoreApplication::setApplicationName(QStringLiteral("Ocean Files"));
     QCoreApplication::setOrganizationName(QStringLiteral("OpenWave"));
     QGuiApplication::setDesktopFileName(QStringLiteral("ocean-files"));
@@ -26,6 +25,7 @@ int main(int argc, char *argv[])
     MediaPlayerBackend media(files.rootPath());
     WallpaperClient wallpaper;
     QQmlApplicationEngine engine;
+    OpenWave::Application::initialize(&engine);
     engine.rootContext()->setContextProperty(QStringLiteral("Wallpaper"), &wallpaper);
     engine.setInitialProperties({
         {QStringLiteral("filesBackend"), QVariant::fromValue(&files)},

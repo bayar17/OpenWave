@@ -132,6 +132,12 @@ A durable pending-revocation marker is reconciled before a restarted daemon
 accepts requests. Revocation cannot erase bytes that an application already
 copied; applications must be reopened after an access-revoking policy change.
 
+The authenticated file broker uses `CheckLease` for repeated gallery listing
+and previews. It validates the current identity, policy, expiry and broker
+without consuming the request's lease. `ValidateLease` consumes a valid lease
+when delivering the final descriptors; `ReleaseLease` drops it on cancellation.
+Ordinary applications cannot call any of these broker operations.
+
 ## SDK
 
 Link `OpenWave::Permissions` and include `<OpenWave/PermissionClient.h>`.

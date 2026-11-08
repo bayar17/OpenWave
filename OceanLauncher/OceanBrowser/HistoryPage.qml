@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
+import OpenWave.Controls 1.0
 
 Rectangle {
     id: historyPage
@@ -66,12 +67,12 @@ Rectangle {
             TapHandler { onTapped: historyPage.deleteSelected() }
         }
     }
-    TextField {
+    WRTextField {
         id: searchInput
         x: 40; y: 115 + (historyPage.selecting ? 50 : 0); width: parent.width - 80; height: 48
         visible: historyPage.searchOpen
         placeholderText: qsTr("Search history")
-        color: "#222"; font.family: historyPage.fontFamily; font.pixelSize: 26
+        color: "#222"; fontPixelSize: 26; fontFamily: historyPage.fontFamily
         background: Rectangle { color: "#f4f4f4"; radius: 14 }
         onTextChanged: searchDelay.restart()
     }
@@ -218,21 +219,21 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 font.family: historyPage.fontFamily; font.weight: Font.ExtraLight; font.pixelSize: 36; color: "white"
             }
-            ComboBox {
+            WRComboBox {
                 id: period
                 width: deletion.availableWidth
                 model: [qsTr("All history"), qsTr("Today"), qsTr("Yesterday"), qsTr("Last 7 days"), qsTr("Date range")]
-                font.family: historyPage.fontFamily; font.pixelSize: 25
+                fontPixelSize: 25
             }
-            TextField {
+            WRTextField {
                 id: firstDate; width: deletion.availableWidth
                 visible: period.currentIndex === 4; placeholderText: qsTr("From: YYYY-MM-DD")
-                font.family: historyPage.fontFamily; font.pixelSize: 25
+                fontPixelSize: 25; fontFamily: historyPage.fontFamily
             }
-            TextField {
+            WRTextField {
                 id: lastDate; width: deletion.availableWidth
                 visible: period.currentIndex === 4; placeholderText: qsTr("Through: YYYY-MM-DD")
-                font.family: historyPage.fontFamily; font.pixelSize: 25
+                fontPixelSize: 25; fontFamily: historyPage.fontFamily
             }
             Item {
                 width: deletion.availableWidth; height: 55

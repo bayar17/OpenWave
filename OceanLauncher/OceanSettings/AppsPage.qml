@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import OpenWave.Fonts 1.0
 
 Item {
     id: page
@@ -52,12 +53,12 @@ Item {
             width: parent.width
             spacing: 12
             Text {
-                text: qsTr("Apps"); color: "white"; font.family: "Inter"; font.weight: Font.ExtraLight
+                text: qsTr("Apps"); color: "white"; font.family: Fonts.family; font.weight: Font.ExtraLight
                 font.pixelSize: page.largeText ? 44 : 40
                 width: parent.width; wrapMode: Text.Wrap; bottomPadding: 12
             }
             Text {
-                width: parent.width; wrapMode: Text.Wrap; color: "#d4dadd"; font.family: "Inter"
+                width: parent.width; wrapMode: Text.Wrap; color: "#d4dadd"; font.family: Fonts.family
                 font.pixelSize: page.largeText ? 30 : 25
                 visible: !page.backend || page.backend.busy || page.backend.error.length || !page.backend.applications.length
                 text: !page.backend ? qsTr("Application service unavailable") : page.backend.busy ? qsTr("Loading apps…")
@@ -131,7 +132,7 @@ Item {
                 onClicked: page.backend.requestUninstall(page.applicationId)
             }
             Text {
-                width: parent.width; wrapMode: Text.Wrap; color: "#ffd1d1"; font.family: "Inter"
+                width: parent.width; wrapMode: Text.Wrap; color: "#ffd1d1"; font.family: Fonts.family
                 font.pixelSize: page.largeText ? 30 : 25
                 visible: !!page.backend && page.backend.error.length > 0
                 text: page.backend ? page.backend.error : ""

@@ -1,0 +1,2 @@
+# Ocean's supervised input group can read events; app sandboxes omit /dev/input.
+SUBSYSTEM=="input", KERNEL=="event[0-9]*", GROUP="input", MODE="0660"

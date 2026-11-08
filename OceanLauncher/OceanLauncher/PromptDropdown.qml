@@ -1,13 +1,16 @@
 import QtQuick
 import QtQuick.Controls
+import OpenWave.Controls 1.0
+import OpenWave.Theme 1.0
+import OpenWave.Fonts 1.0
 
-ComboBox {
+WRComboBox {
     id: control
     property var choices: ({})
     property string value: ""
     property string label: ""
     property real uiScale: 1
-    property bool reduceMotion: false
+    reduceMotion: WaterRouge.reducedMotion
     property real reveal: 0
     property real sceneScale: 1
     signal selected(string value)
@@ -17,15 +20,20 @@ ComboBox {
     currentIndex: Math.max(0, Object.keys(choices).indexOf(value))
     onActivated: index => selected(model[index].value)
     Accessible.name: label
+    fontPixelSize: Math.max(1, Math.round(26 * uiScale))
+    itemTextColor: WaterRouge.textColor
+    menuColor: WaterRouge.raisedSurfaceColor
     leftPadding: 0; rightPadding: 38 * uiScale
     contentItem: Text {
         text: (control.label.length ? control.label + ": " : "") + control.currentText
-        textFormat: Text.PlainText; color: "white"; font: control.font
+        textFormat: Text.PlainText; color: "white"
+        font: Fonts.font(Math.round(control.fontPixelSize * WaterRouge.textScale), Font.ExtraLight)
         verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
     }
     indicator: Text {
         anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-        text: "⌄"; color: "white"; font: control.font
+        text: "⌄"; color: "white"
+        font: Fonts.font(Math.round(control.fontPixelSize * WaterRouge.textScale), Font.ExtraLight)
     }
     background: Item {}
     Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 2 * control.uiScale; color: "#aaffffff"; antialiasing: true }
@@ -57,9 +65,9 @@ ComboBox {
             clip: true
             Item {
                 objectName: "systemPromptDropdownSurface"
-                y: -height * (1 - control.reveal)
+                y: control.reveal >= 1 ? 0 : -height * (1 - control.reveal)
                 width: parent.width; height: parent.height
-                Rectangle { anchors.fill: parent; radius: 14 * control.uiScale; color: "#e07b7d7e" }
+                Rectangle { anchors.fill: parent; radius: WaterRouge.cornerRadiusMedium * control.uiScale; color: WaterRouge.raisedSurfaceColor }
                 ListView {
                     anchors.fill: parent; clip: true
                     model: control.delegateModel
@@ -78,12 +86,14 @@ ComboBox {
         font: control.font
         contentItem: Text {
             text: modelData.label; textFormat: Text.PlainText
-            color: "white"; font: control.font; elide: Text.ElideRight
+            color: WaterRouge.textColor
+            font: Fonts.font(Math.round(control.fontPixelSize * WaterRouge.textScale), Font.ExtraLight)
+            elide: Text.ElideRight
             verticalAlignment: Text.AlignVCenter
         }
         background: Rectangle {
             color: parent.down || parent.highlighted ? "#24ffffff" : "transparent"
-            radius: 14 * control.uiScale
+            radius: WaterRouge.cornerRadiusMedium * control.uiScale
         }
     }
 }

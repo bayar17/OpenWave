@@ -7,18 +7,22 @@ OPENWAVE_SDK="${OPENWAVE_SDK:-$OPENWAVE_REPO/toolchain}"
 OPENWAVE_TARGET_TRIPLE="${OPENWAVE_TARGET_TRIPLE:-x86_64-unknown-openwave}"
 OPENWAVE_AUTOTOOLS_HOST="${OPENWAVE_TARGET_TRIPLE%%-*}-unknown-linux-gnu"
 OPENWAVE_ROOTFS="${OPENWAVE_ROOTFS:-$OPENWAVE_REPO/rootfs}"
-export OPENWAVE_SDK OPENWAVE_TARGET_TRIPLE OPENWAVE_ROOTFS
+OPENWAVE_CROSS="$OPENWAVE_REPO/cross"
+export OPENWAVE_CROSS
+export OPENWAVE_REPO OPENWAVE_SDK OPENWAVE_TARGET_TRIPLE OPENWAVE_AUTOTOOLS_HOST OPENWAVE_ROOTFS
 OPENWAVE_SYSROOT="$OPENWAVE_SDK/sysroot/$OPENWAVE_TARGET_TRIPLE"
 OPENWAVE_QT_HOST="$OPENWAVE_SDK"
 OPENWAVE_RUNTIME_STAGE="$OPENWAVE_REPO/out/staging/$OPENWAVE_TARGET_TRIPLE/userspace"
 OPENWAVE_DEPENDENCY_BUILD="$OPENWAVE_REPO/out/sdk-dependencies/$OPENWAVE_TARGET_TRIPLE"
-if [[ ! -d "$OPENWAVE_SYSROOT/usr/include" ]]; then
+if [[ "${1:-}" != --bootstrap && ! -d "$OPENWAVE_SYSROOT/usr/include" ]]; then
     echo "Missing target SDK: $OPENWAVE_SYSROOT. Run scripts/export-openwave-sdk.py first." >&2
     return 1
 fi
 # Exported machine files are per SDK location and target, never shared by ARM64.
 OPENWAVE_CMAKE_TOOLCHAIN="$OPENWAVE_SDK/cmake/openwave-${OPENWAVE_TARGET_TRIPLE%%-*}.cmake"
 OPENWAVE_MESON_TOOLCHAIN="$OPENWAVE_SDK/cmake/openwave-${OPENWAVE_TARGET_TRIPLE%%-*}.ini"
+export OPENWAVE_SYSROOT OPENWAVE_QT_HOST OPENWAVE_RUNTIME_STAGE OPENWAVE_DEPENDENCY_BUILD
+export OPENWAVE_CMAKE_TOOLCHAIN OPENWAVE_MESON_TOOLCHAIN
 mkdir -p "$OPENWAVE_RUNTIME_STAGE" "$OPENWAVE_DEPENDENCY_BUILD"
 
 openwave_cmake_configure() {
@@ -27,7 +31,7 @@ openwave_cmake_configure() {
 }
 
 # Build helpers need SDK paths without target flags in host-tool builds.
-if [[ "${1:-}" == --build ]]; then
+if [[ "${1:-}" == --build || "${1:-}" == --bootstrap ]]; then
     return 0
 fi
 

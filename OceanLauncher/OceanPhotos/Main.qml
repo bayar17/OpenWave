@@ -2,8 +2,12 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Effects
+import OpenWave.Application 1.0
+import OpenWave.Controls 1.0
+import OpenWave.Fonts 1.0
+import OpenWave.Theme 1.0
 
-ApplicationWindow {
+WRApplicationWindow {
     id: root
     required property var library
     property var portalClient: null
@@ -40,6 +44,7 @@ ApplicationWindow {
     }
     width: 768; height: 1366
     visible: true; title: qsTr("Gallery"); color: "#454e53"
+    font.family: Fonts.family
     flags: Qt.Window | Qt.FramelessWindowHint
     Component.onCompleted: if (library.error.length) imageError.open()
     function openPhoto(index) {
@@ -75,7 +80,7 @@ ApplicationWindow {
     Shortcut { sequence: "Left"; enabled: root.viewerOpen; onActivated: root.step(-1) }
     QtObject {
         id: theme
-        readonly property color accent: "#00b7f0"
+        readonly property color accent: Theme.accentColor
         readonly property color muted: "#a6ffffff"
         readonly property color surface: "#bd9a9e9f"
         readonly property color viewerBackground: "#161d21"
@@ -90,11 +95,15 @@ ApplicationWindow {
             GalleryGlyph { anchors.centerIn: parent; width: 40; height: 40; kind: control.kind; color: control.glyphColor }
         }
     }
-    component TextAction: AbstractButton {
+    component TextAction: WRButton {
         id: control
+        surfaceColor: "transparent"
+        pressedSurfaceColor: "#20ffffff"
+        fontPixelSize: 32
+        fontWeight: Font.Light
         contentItem: Text {
-            text: control.text; color: "white"; font.family: root.font.family
-            font.pixelSize: 32; font.weight: Font.Light
+            text: control.text; color: control.enabled ? control.textColor : "#90ffffff"; font.family: Fonts.family
+            font.pixelSize: Math.round(control.fontPixelSize * WaterRouge.textScale); font.weight: control.fontWeight
             verticalAlignment: Text.AlignVCenter; horizontalAlignment: Text.AlignHCenter
         }
         background: Rectangle { radius: 28; color: control.down ? "#20ffffff" : "transparent" }
@@ -154,13 +163,13 @@ ApplicationWindow {
                 onClicked: menu.open()
             }
             Rectangle { x: 40; y: 158; width: parent.width - 80; height: 1; color: "#80ffffff" }
-            TextField {
+            WRTextField {
                 id: search
                 objectName: "gallerySearch"
                 x: 48; y: 178; width: parent.width - 96; height: 65
                 visible: root.searching
                 placeholderText: qsTr("Search photos or albums"); color: "white"
-                font.pixelSize: 32; font.weight: Font.Light
+                fontPixelSize: 32; fontWeight: Font.Light
                 background: Rectangle { color: "transparent"; Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: theme.muted } }
             }
             ListView {

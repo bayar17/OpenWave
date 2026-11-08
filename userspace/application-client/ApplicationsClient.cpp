@@ -1,5 +1,6 @@
 #include "ApplicationsClient.h"
 #include <QFile>
+#include <QDebug>
 #include <QMetaObject>
 #include <thread>
 #undef signals
@@ -64,6 +65,9 @@ struct ApplicationsClient::Transport {
     GMainLoop *loop = g_main_loop_new(context, false);
     GDBusConnection *bus = nullptr;
     QString owner;
+    QString lastFailure;
+    bool announced = false;
+    GSource *retry = nullptr;
     std::thread thread;
     explicit Transport(ApplicationsClient *object) : client(object), thread([this] { run(); }) {}
     ~Transport() {
@@ -79,7 +83,9 @@ struct ApplicationsClient::Transport {
         GError *failure = nullptr;
         GVariant *reply = g_dbus_connection_call_sync(bus, destination, object, iface, method,
             arguments, nullptr, G_DBUS_CALL_FLAGS_NONE, !strcmp(method, "UninstallWebApp") ? 120000 : 2000, nullptr, &failure);
-        if (failure) { *error = QString::fromUtf8(failure->message); g_clear_error(&failure); }
+        if (failure) { *error = QString::fromUtf8(failure->message);
+            qWarning().noquote() << "ApplicationsClient: D-Bus method=" << method << "error=" << *error;
+            g_clear_error(&failure); }
         return reply;
     }
     bool verify(QString *error) {
@@ -95,8 +101,9 @@ struct ApplicationsClient::Transport {
         bool okay = g_variant_lookup(credentials, "UnixUserID", "u", &uid) && uid == 0
             && g_variant_lookup(credentials, "ProcessID", "u", &pid);
         g_variant_unref(credentials); g_variant_unref(reply);
-        okay = okay && openwave_supervised_process(uid, pid, "/run/openwave/appd.pid");
-        if (!okay) { owner.clear(); *error = QStringLiteral("The application service could not be authenticated."); return false; }
+        if (!okay) { owner.clear(); *error = QStringLiteral("appd D-Bus credentials are invalid (uid=%1 pid=%2)").arg(uid).arg(pid); return false; }
+        okay = openwave_supervised_process(uid, pid, "/run/openwave/appd.pid");
+        if (!okay) { owner.clear(); *error = QStringLiteral("appd supervisor proof rejected (uid=%1 pid=%2; check appd.pid.identity, its SELinux label and /proc start time)").arg(uid).arg(pid); return false; }
         owner = next; return true;
     }
     static void received(GDBusConnection *, const char *sender, const char *, const char *, const char *member,
@@ -116,13 +123,22 @@ struct ApplicationsClient::Transport {
             else if (signal == "RegistryChanged") emit client->registryChanged();
         }, Qt::QueuedConnection);
     }
-    static void changed(GDBusConnection *, const char *, const char *, const char *, const char *, GVariant *parameters, gpointer data) {
-        auto *self = static_cast<Transport *>(data); const char *name, *old, *next;
-        g_variant_get(parameters, "(&s&s&s)", &name, &old, &next);
-        Q_UNUSED(name); Q_UNUSED(old); QString error;
-        const bool available = *next && self->verify(&error);
-        if (!available) self->owner.clear();
-        QMetaObject::invokeMethod(self->client, [client = self->client, available] { emit client->serviceChanged(available); }, Qt::QueuedConnection);
+    void checkAvailability() {
+        QString failure;
+        const QString previous = owner;
+        const bool available = verify(&failure);
+        if (!available) owner.clear();
+        if (!available && failure != lastFailure)
+            qWarning().noquote() << "ApplicationsClient: authentication unavailable:" << failure;
+        lastFailure = failure;
+        if (!announced || previous != owner) {
+            announced = true;
+            qInfo().noquote() << "ApplicationsClient: authenticated-owner=" << owner << "available=" << available;
+            QMetaObject::invokeMethod(client, [object = client, available] { emit object->serviceChanged(available); }, Qt::QueuedConnection);
+        }
+    }
+    static void changed(GDBusConnection *, const char *, const char *, const char *, const char *, GVariant *, gpointer data) {
+        static_cast<Transport *>(data)->checkAvailability();
     }
     void run() {
         g_main_context_push_thread_default(context);
@@ -138,9 +154,27 @@ struct ApplicationsClient::Transport {
             g_dbus_connection_signal_subscribe(bus, "org.freedesktop.DBus", "org.freedesktop.DBus", "NameOwnerChanged",
                 "/org/freedesktop/DBus", service, G_DBUS_SIGNAL_FLAGS_NONE, changed, this, nullptr);
         }
-        g_clear_error(&error); QString failure; const bool available = verify(&failure);
-        QMetaObject::invokeMethod(client, [object = client, available] { emit object->serviceChanged(available); }, Qt::QueuedConnection);
+        if (error) qWarning() << "ApplicationsClient: system bus unavailable:" << error->message;
+        g_clear_error(&error);
+        if (bus && qEnvironmentVariable("OPENWAVE_TRUSTED_SHELL") == QStringLiteral("1")) {
+            QString failure;
+            GVariant *reply = rpc("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "RequestName",
+                g_variant_new("(su)", "org.openwave.Shell", 4u), &failure);
+            guint result = 0;
+            if (reply) { g_variant_get(reply, "(u)", &result); g_variant_unref(reply); }
+            if (result != 1 && result != 4) qWarning() << "ApplicationsClient: shell name registration failed" << result << failure;
+            else qInfo() << "ApplicationsClient: shell name registered";
+        }
+        checkAvailability();
+        // Name ownership precedes OpenRC start_post publishing the proof. Recheck
+        // authenticated availability so this race and proof replacement recover.
+        retry = g_timeout_source_new(1000);
+        g_source_set_callback(retry, [](gpointer data) -> gboolean {
+            static_cast<Transport *>(data)->checkAvailability(); return G_SOURCE_CONTINUE;
+        }, this, nullptr);
+        g_source_attach(retry, context);
         g_main_loop_run(loop);
+        g_source_destroy(retry); g_source_unref(retry);
         if (bus) { g_dbus_connection_close_sync(bus, nullptr, nullptr); g_object_unref(bus); }
         g_main_context_pop_thread_default(context);
     }

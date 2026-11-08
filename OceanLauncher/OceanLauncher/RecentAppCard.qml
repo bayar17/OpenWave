@@ -17,6 +17,7 @@ Item {
     property bool armed: false
     property bool terminating: false
     property bool moved: false
+    readonly property int holdDuration: 650
     property real pressX: 0
     property real pressY: 0
     property real dragProgress: 0
@@ -44,6 +45,12 @@ Item {
             card.activated(card.appId, card)
     }
     Component.onDestruction: card.edgeProximity(0)
+    onReduceMotionChanged: {
+        if (reduceMotion) {
+            pulse.stop()
+            visual.scale = 1
+        }
+    }
 
     function updateDrag(pointerX) {
         const startX = viewportItem ? mapToItem(viewportItem, 0, 0).x : x
@@ -52,7 +59,7 @@ Item {
         const leftEdge = startX + visual.x
         dragProgress = Math.max(0, Math.min(1, (220 - leftEdge) / 220))
         edgeProximity(dragProgress)
-        if (leftEdge <= 18 && !terminating) {
+        if (leftEdge <= Math.max(18, startX - width * 0.42) && !terminating) {
             terminating = true
             dragProgress = 1
             edgeProximity(1)
@@ -75,12 +82,12 @@ Item {
 
     Timer {
         id: holdTimer
-        interval: 3000
+        interval: card.holdDuration
         repeat: false
         onTriggered: {
             if (gesture.pressed && !card.moved && card.interactionEnabled) {
                 card.armed = true
-                pulse.start()
+                if (!card.reduceMotion) pulse.start()
             }
         }
     }

@@ -2,6 +2,7 @@
 #include <QFile>
 #include <QMetaObject>
 #include <unistd.h>
+#include <sys/auxv.h>
 #undef signals
 #include <gio/gio.h>
 #include "OpenWaveIdentity.h"
@@ -107,7 +108,14 @@ void PromptTransport::call(const QString &method, const QVariantList &arguments,
         }
         if (!bus) {
             GError *failure = nullptr;
-            char *address = g_dbus_address_get_for_bus_sync(G_BUS_TYPE_SESSION, nullptr, &failure);
+            // A confined app's SELinux transition sets AT_SECURE. GLib then
+            // ignores DBUS_SESSION_BUS_ADDRESS and tries autolaunch, while the
+            // app's private XDG_RUNTIME_DIR deliberately contains no bus. appd
+            // publishes this fixed session socket inside its protected /run
+            // directory and imports it read-only into the application sandbox.
+            char *address = getauxval(AT_SECURE)
+                ? g_strdup("unix:path=/run/openwave/session-bus")
+                : g_dbus_address_get_for_bus_sync(G_BUS_TYPE_SESSION, nullptr, &failure);
             if (address) {
                 bus = g_dbus_connection_new_for_address_sync(address,
                     GDBusConnectionFlags(G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT

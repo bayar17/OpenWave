@@ -1,0 +1,86 @@
+#!/bin/sh
+case " $(cat /proc/cmdline) " in *' openwave.qa=browser-actions '*) ;; *) exit 0 ;; esac
+exec >/dev/console 2>&1
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+printf 'BROWSER_QA BEGIN enforcing=%s\n' "$(cat /sys/fs/selinux/enforce)"
+rejected=$(/usr/bin/gdbus call --system --timeout 3 --dest org.openwave.Applications \
+    --object-path /org/openwave/Applications --method org.openwave.Applications1.CreateWebApp \
+    'Unauthorized fixture' 'http://10.0.2.2/unauthorized' 2>&1)
+case "$rejected" in
+    *'Only the installed Ocean Browser'*|*'managed application'*)
+        printf 'BROWSER_QA_PASS unregistered installer rejected\n' ;;
+    *) printf 'BROWSER_QA_FAIL unregistered installer: %s\n' "$rejected"; exit 1 ;;
+esac
+# This suite has one VirtIO NIC connected to the host-only HTTP fixture.
+# Assign its deterministic user-network address without depending on DHCP.
+for interface in /sys/class/net/*; do
+    # Ignore loopback/tunnel devices: assigning this subnet to sit0 would
+    # divert fixture traffic from the VirtIO Ethernet interface.
+    [ "$(cat "$interface/type")" = 1 ] && [ -e "$interface/device" ] || continue
+    name=${interface##*/}
+    /bin/busybox ip link set dev "$name" up || exit 1
+    /bin/busybox ip addr add 10.0.2.15/24 dev "$name" 2>/dev/null || true
+done
+attempt=0
+until /System/Services/openwave-launch com.openwave.ocean; do
+    attempt=$((attempt + 1)); [ "$attempt" -lt 60 ] || exit 1
+    sleep 0.5
+done
+attempt=0
+while ! grep -q 'BROWSER_QA_PASS Browser actions complete\|BROWSER_QA_FAIL' /run/openwave/appd.stderr.log; do
+    attempt=$((attempt + 1)); [ "$attempt" -lt 440 ] || break
+    sleep 0.25
+done
+installed=$(sed -n 's/.*BROWSER_QA_PASS installed \(org\.openwave\.webapp\.h[a-f0-9]*\).*/\1/p' /run/openwave/appd.stderr.log | tail -1)
+confined=0
+case "$installed" in org.openwave.webapp.h*)
+    info=$(/usr/bin/gdbus call --system --timeout 3 --dest org.openwave.Applications \
+        --object-path /org/openwave/Applications --method org.openwave.Applications1.GetApplicationInfo "$installed")
+    pid=$(printf '%s\n' "$info" | sed -n "s/.*'pid': <uint32 \([0-9][0-9]*\)>.*/\1/p")
+    case "$pid" in ''|0|*[!0-9]*) ;; *)
+        context=$(tr -d '\000' <"/proc/$pid/attr/current")
+        uid=$(awk '/^Uid:/ {print $2}' "/proc/$pid/status")
+        nnp=$(awk '/^NoNewPrivs:/ {print $2}' "/proc/$pid/status")
+        seccomp=$(awk '/^Seccomp:/ {print $2}' "/proc/$pid/status")
+        caps=$(awk '/^CapEff:/ {print $2}' "/proc/$pid/status")
+        if [ "$context" = system_u:system_r:openwave_app_t:s0 ] \
+            && [ "$uid" -ge 200000 ] && [ "$uid" -lt 300000 ] \
+            && [ "$nnp" = 1 ] && [ "$seccomp" = 2 ] && [ "$caps" = 0000000000000000 ] \
+            && [ "$(readlink /proc/1/ns/mnt)" != "$(readlink /proc/$pid/ns/mnt)" ] \
+            && grep -q "OCEAN_QA surface-present appId=$installed pid=$pid " /run/user/1000/openwave-logs/ocean.stderr.log; then
+            confined=1
+            printf 'BROWSER_QA_PASS web app live surface and confinement\n'
+        fi ;;
+    esac ;;
+esac
+uninstalled=0
+if [ "$confined" = 1 ]; then
+    /System/Services/openwave-launch com.openwave.settings
+    attempt=0
+    while ! grep -q 'UNINSTALL_QA_PASS removed from Settings registry\|UNINSTALL_QA_FAIL' /run/openwave/appd.stderr.log; do
+        attempt=$((attempt + 1)); [ "$attempt" -lt 160 ] || break
+        sleep 0.25
+    done
+    if grep -q 'UNINSTALL_QA_PASS removed from Settings registry' /run/openwave/appd.stderr.log \
+        && [ ! -e "/Applications/$installed" ] && [ ! -e "/Applications/.uninstall-$installed" ]; then
+        uninstalled=1
+        printf 'UNINSTALL_QA_PASS bundle and private data cleanup completed\n'
+    fi
+fi
+for file in /run/openwave/appd.stderr.log /run/openwave/portal.stderr.log \
+    /run/openwave/promptd.stderr.log /run/openwave/permissiond.stderr.log \
+    /run/user/1000/openwave-logs/ocean.stderr.log; do
+    printf '\nBROWSER_ACTION_LOG %s\n' "$file"
+    tail -100 "$file"
+done
+if grep -q 'BROWSER_QA_PASS Browser actions complete' /run/openwave/appd.stderr.log \
+    && grep -q 'BROWSER_QA_PASS saved payload and owner ow-browser-actions-qa.bin' /run/user/1000/openwave-logs/ocean.stderr.log \
+    && grep -q 'BROWSER_QA_PASS saved payload and owner ow-browser-actions-qa (1).bin' /run/user/1000/openwave-logs/ocean.stderr.log \
+    && ! grep -q 'BROWSER_QA_FAIL' /run/openwave/appd.stderr.log \
+    && [ "$confined" = 1 ] \
+    && [ "$uninstalled" = 1 ] \
+    && [ "$(cat /sys/fs/selinux/enforce)" = 1 ]; then
+    printf 'BROWSER_QA PASS download bytes, owner, prompts and web app enforcing=1\n'
+else
+    printf 'BROWSER_QA_FAIL end-to-end actions\n'
+fi

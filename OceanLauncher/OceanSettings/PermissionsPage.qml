@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import OpenWave.Fonts 1.0
 
 Flickable {
     id: page
@@ -67,33 +68,33 @@ Flickable {
             onClicked: page.backRequested()
             background: Rectangle { color: parent.down ? "#18ffffff" : "transparent" }
             contentItem: Text {
-                text: qsTr("‹  Permissions"); color: "white"; font.family: "Inter"
+                text: qsTr("‹  Permissions"); color: "white"; font.family: Fonts.family
                 font.pixelSize: page.largeText ? 38 : 34; verticalAlignment: Text.AlignVCenter
             }
         }
         Text {
             width: parent.width; wrapMode: Text.Wrap; color: "#d4dadd"
-            font.family: "Inter"; font.pixelSize: page.largeText ? 30 : 25
+            font.family: Fonts.family; font.pixelSize: page.largeText ? 30 : 25
             text: page.applicationId.length ? page.applicationName
                 : qsTr("Review application permissions and control access to protected capabilities.")
             textFormat: Text.PlainText
         }
         Text {
             width: parent.width; wrapMode: Text.Wrap; color: "#d4dadd"
-            font.family: "Inter"; font.pixelSize: page.largeText ? 30 : 25
+            font.family: Fonts.family; font.pixelSize: page.largeText ? 30 : 25
             visible: page.trustedApplication
             text: qsTr("This app is a trusted system component. Its system access cannot be changed here.")
         }
         Text {
             width: parent.width; wrapMode: Text.Wrap; color: "#d4dadd"
-            font.family: "Inter"; font.pixelSize: page.largeText ? 30 : 25
+            font.family: Fonts.family; font.pixelSize: page.largeText ? 30 : 25
             visible: !page.client || page.client.busy || page.client.error.length
             text: page.client ? page.client.busy ? qsTr("Loading permissions…") : page.client.error : qsTr("Permission service unavailable")
         }
         Text {
             objectName: "permissionsEmptyState"
             width: parent.width; wrapMode: Text.Wrap; color: "#d4dadd"
-            font.family: "Inter"; font.pixelSize: page.largeText ? 30 : 25
+            font.family: Fonts.family; font.pixelSize: page.largeText ? 30 : 25
             visible: page.client && !page.client.busy && !page.client.error.length && !page.entries.length
             text: page.requestedOnly ? qsTr("This app has not requested any permissions.") : qsTr("No permissions available")
         }

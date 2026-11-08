@@ -174,6 +174,7 @@ GVariant *appd_info(Manager *m, App *a, Instance *instance)
     if (!instance) instance = appd_instance(m, a);
     GVariantBuilder info;
     g_variant_builder_init(&info, G_VARIANT_TYPE("a{sv}"));
+    g_variant_builder_add(&info, "{sv}", "launchable", g_variant_new_boolean(!a->removing && strcmp(a->id, "com.openwave.shell") != 0));
     g_variant_builder_add(&info, "{sv}", "appId", g_variant_new_string(a->id));
     g_variant_builder_add(&info, "{sv}", "manifestDigest", g_variant_new_string(a->digest));
     g_variant_builder_add(&info, "{sv}", "declaredPermissions", g_variant_new_strv((const char *const *)a->permissions, -1));

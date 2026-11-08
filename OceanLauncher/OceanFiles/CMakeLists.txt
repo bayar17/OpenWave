@@ -12,7 +12,7 @@ else()
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
 endif()
-find_package(OpenWaveSDK REQUIRED COMPONENTS Fonts Applications Wallpaper Prompts ApplicationData)
+find_package(OpenWaveSDK REQUIRED COMPONENTS Fonts Theme Controls Applications Wallpaper Prompts ApplicationData Application)
 qt_standard_project_setup(REQUIRES 6.10)
 
 qt_add_executable(appOceanFiles main.cpp FilesBackend.cpp FilesBackend.h
@@ -27,8 +27,6 @@ qt_add_qml_module(appOceanFiles
         assets/icon.svg
         assets/folder-outline.svg assets/file-outline.svg
         assets/search.svg assets/chevron.svg assets/music-outline.svg
-        assets/fonts/Inter-Regular.otf assets/fonts/Inter-Light.otf
-        assets/fonts/Inter-SemiBold.otf
 )
 set_target_properties(appOceanFiles PROPERTIES
     OUTPUT_NAME ocean-files
@@ -39,7 +37,7 @@ set_target_properties(appOceanFiles PROPERTIES
 )
 target_link_libraries(appOceanFiles PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Svg Qt6::Network
     MPG123::libmpg123)
-target_link_libraries(appOceanFiles PRIVATE OpenWave::Fonts OpenWave::Applications OpenWave::Wallpaper OpenWave::Prompts OpenWave::ApplicationData)
+target_link_libraries(appOceanFiles PRIVATE OpenWave::Fonts OpenWave::Theme OpenWave::Controls OpenWave::Application OpenWave::Applications OpenWave::Wallpaper OpenWave::Prompts OpenWave::ApplicationData)
 if(CMAKE_CROSSCOMPILING)
     target_include_directories(appOceanFiles PRIVATE
         "${CMAKE_SYSROOT}/usr/include/pipewire-0.3"
@@ -54,9 +52,6 @@ else()
 endif()
 install(FILES ocean-files.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES assets/icon.svg DESTINATION ${CMAKE_INSTALL_DATADIR}/pixmaps RENAME ocean-files.svg)
-install(FILES assets/fonts/Inter-Regular.otf assets/fonts/Inter-Light.otf
-    assets/fonts/Inter-SemiBold.otf
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/fonts)
 install(FILES ../../third_party/mpg123-1.33.7/COPYING
     DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/ocean-files/mpg123)
 

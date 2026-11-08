@@ -15,7 +15,7 @@ frontend, change the init entry to run only `--backend`. Two processes must not
 own the public Desktop name.
 
 The API contracts live in `userspace/dbus/interfaces/` and are loaded through
-`OpenWave::Xml`, rather than embedded XML strings. `/init` supervises the public
+`OpenWave::Xml`, rather than embedded XML strings. OpenRC supervises the public
 service and backend in one process, sharing one preference snapshot and monitor.
 OpenWave's current D-Bus was built without traditional activation, so runtime
 startup does not depend on activation. The backend activation file supports

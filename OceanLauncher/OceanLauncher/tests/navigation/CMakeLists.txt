@@ -3,7 +3,7 @@ project(ShellNavigationTests LANGUAGES CXX)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_CXX_STANDARD 17)
 find_package(Qt6 REQUIRED COMPONENTS Quick Test WaylandCompositor)
-add_executable(shell-navigation-tests navigation.cpp)
+add_executable(shell-navigation-tests navigation.cpp ../../LockController.cpp ../../LockController.h)
 target_link_libraries(shell-navigation-tests PRIVATE Qt6::Quick Qt6::Test Qt6::WaylandCompositor)
 target_compile_definitions(shell-navigation-tests PRIVATE
     GALLERY_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/../../../OceanPhotos/Main.qml")

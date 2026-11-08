@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "com.openwave.waterrouge-gallery",
+  "name": "Water Rouge Gallery",
+  "version": "0.1.0",
+  "type": "system",
+  "executable": "bin/water-rouge-gallery",
+  "runtime": "openwave-qt",
+  "sandbox": {
+    "enabled": true,
+    "profile": "standard"
+  },
+  "permissions": [],
+  "singleInstance": true,
+  "acceptsPaths": false
+}

@@ -53,7 +53,8 @@ GVariant *requestOptions(const QVariantMap &options)
         {"primaryTitle", "primary_title"},
         {"initialDirectory", "initial_directory"},
         {"suggestedFilename", "suggested_filename"},
-        {"directoryToken", "directory_token"}, {"parentWindow", "parent_window"}, {"requestIdentifier", "request_identifier"}
+        {"directoryToken", "directory_token"}, {"parentWindow", "parent_window"}, {"requestIdentifier", "request_identifier"},
+        {"imageSource", "image_source"}
     };
     for (const auto &field : strings) {
         const QString value = options.value(QString::fromLatin1(field.qml)).toString();
@@ -67,6 +68,9 @@ GVariant *requestOptions(const QVariantMap &options)
     for (const QVariant &mime : requested)
         g_variant_builder_add(&mimes, "s", mime.toString().toUtf8().constData());
     g_variant_builder_add(&values, "{sv}", "mime_types", g_variant_builder_end(&mimes));
+    if (options.contains(QStringLiteral("imageSources")))
+        g_variant_builder_add(&values, "{sv}", "image_sources",
+            g_variant_new_boolean(options.value(QStringLiteral("imageSources")).toBool()));
     return g_variant_new("(@a{sv})", g_variant_builder_end(&values));
 }
 }
@@ -163,6 +167,22 @@ OpenWavePortals::~OpenWavePortals()
 
 void OpenWavePortals::openFile(const QVariantMap &options) { start(QStringLiteral("OpenFile"), options); }
 void OpenWavePortals::openFiles(const QVariantMap &options) { start(QStringLiteral("OpenFiles"), options); }
+void OpenWavePortals::openPhoto(const QVariantMap &options)
+{
+    QVariantMap photo = options;
+    photo.insert(QStringLiteral("mimeTypes"), QVariantList{QStringLiteral("image/*")});
+    photo.insert(QStringLiteral("imageSources"), true);
+    photo.insert(QStringLiteral("imageSource"), QStringLiteral("gallery"));
+    start(QStringLiteral("OpenFile"), photo);
+}
+void OpenWavePortals::openPhotos(const QVariantMap &options)
+{
+    QVariantMap photo = options;
+    photo.insert(QStringLiteral("mimeTypes"), QVariantList{QStringLiteral("image/*")});
+    photo.insert(QStringLiteral("imageSources"), true);
+    photo.insert(QStringLiteral("imageSource"), QStringLiteral("gallery"));
+    start(QStringLiteral("OpenFiles"), photo);
+}
 void OpenWavePortals::saveFile(const QVariantMap &options) { start(QStringLiteral("SaveFile"), options); }
 void OpenWavePortals::createFile(const QString &token, const QString &name) { start(QStringLiteral("CreateFile"), {{"directoryToken", token}, {"suggestedFilename", name}}); }
 void OpenWavePortals::selectDirectory(const QVariantMap &options) { start(QStringLiteral("SelectDirectory"), options); }

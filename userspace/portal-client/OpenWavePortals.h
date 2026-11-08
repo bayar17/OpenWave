@@ -49,6 +49,8 @@ public:
     bool busy() const { return m_busy; }
     Q_INVOKABLE void openFile(const QVariantMap &options = {});
     Q_INVOKABLE void openFiles(const QVariantMap &options = {});
+    Q_INVOKABLE void openPhoto(const QVariantMap &options = {});
+    Q_INVOKABLE void openPhotos(const QVariantMap &options = {});
     Q_INVOKABLE void saveFile(const QVariantMap &options = {});
     Q_INVOKABLE void createFile(const QString &directoryToken, const QString &filename);
     Q_INVOKABLE void selectDirectory(const QVariantMap &options = {});

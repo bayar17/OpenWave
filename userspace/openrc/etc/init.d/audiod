@@ -1,0 +1,11 @@
+#!/sbin/openrc-run
+description="OpenWave audio policy service"
+command="/System/Services/audiod"
+command_background="yes"
+pidfile="/run/openwave/audiod.pid"
+export XDG_RUNTIME_DIR="/run/user/1000"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/bus"
+
+depend() {
+	need dbus pipewire wireplumber
+}

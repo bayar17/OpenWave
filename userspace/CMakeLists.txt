@@ -5,14 +5,20 @@ install(DIRECTORY dbus/interfaces/ DESTINATION share/dbus-1/interfaces
     FILES_MATCHING PATTERN "*.xml")
 add_subdirectory(security/selinux)
 
-add_executable(openwave-init init.c)
+add_executable(openwave-init EXCLUDE_FROM_ALL init.c)
 target_compile_options(openwave-init PRIVATE -Wall -Wextra)
 target_link_libraries(openwave-init PRIVATE openwave-selinux)
-set_target_properties(openwave-init PROPERTIES OUTPUT_NAME init)
-install(TARGETS openwave-init RUNTIME DESTINATION /)
+set_target_properties(openwave-init PROPERTIES OUTPUT_NAME init-legacy)
+add_executable(openwave-bootstrap openrc/bootstrap.c)
+target_compile_options(openwave-bootstrap PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(openwave-bootstrap PRIVATE openwave-selinux)
+set_target_properties(openwave-bootstrap PROPERTIES OUTPUT_NAME init)
+install(TARGETS openwave-bootstrap RUNTIME DESTINATION /)
 
 add_subdirectory(connectivityd)
 add_subdirectory(timed)
+add_subdirectory(powerd)
+add_subdirectory(waydroid)
 add_subdirectory(audiod)
 add_subdirectory(wallpaperagentd)
 add_subdirectory(openwave-portal)
@@ -21,6 +27,7 @@ add_subdirectory(promptd)
 add_subdirectory(appd)
 add_subdirectory(permissiond)
 add_subdirectory(webapp)
+add_subdirectory(controls-gallery)
 
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../OceanLauncher/OceanLauncher"
                  "OceanLauncher")
@@ -35,6 +42,7 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../OceanLauncher/OceanPhotos"
 
 install(FILES config/kms.json DESTINATION /etc/openwave)
 install(FILES config/machine-info DESTINATION /etc)
+install(FILES config/NetworkManager.conf DESTINATION /etc/NetworkManager)
 install(FILES config/avahi-daemon.conf DESTINATION /etc/avahi)
 install(FILES config/99-openwave-pipewire.conf DESTINATION /etc/alsa/conf.d)
 install(FILES config/10-openwave-wireplumber.conf

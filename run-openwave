@@ -4,6 +4,7 @@ set -Eeuo pipefail
 ROOT="${OPENWAVE_ROOT:-$(pwd)}"
 KERNEL=""
 IMAGE=""
+IMAGE_FORMAT="${OPENWAVE_QEMU_IMAGE_FORMAT:-raw}"
 QEMU="${QEMU_BIN:-qemu-system-x86_64}"
 MEMORY="${OPENWAVE_QEMU_MEMORY:-2048}"
 CPUS="${OPENWAVE_QEMU_CPUS:-4}"
@@ -16,6 +17,7 @@ USB_BLUETOOTH="${OPENWAVE_QEMU_USB_BLUETOOTH:-auto}"
 AUDIO_BACKEND="${OPENWAVE_QEMU_AUDIO_BACKEND:-auto}"
 VNC_HOST="${OPENWAVE_QEMU_VNC_HOST:-auto}"
 VNC_PORT="${OPENWAVE_QEMU_VNC_PORT:-5900}"
+QMP_SOCKET=""
 MODE="${1:-run}"
 
 usage() {
@@ -30,8 +32,9 @@ Usage:
 
 Options:
   --root PATH       OpenWave repository root
-  --kernel PATH     Kernel bzImage path
+  --kernel PATH     Kernel bzImage path (default: out/linux/arch/x86/boot/bzImage)
   --image PATH      OpenWave root filesystem image
+  --image-format FORMAT  Root image format: raw or qcow2 (default: raw)
   --memory MB       Guest RAM in MiB (default: 2048)
   --cpus N          Guest vCPU count (default: 4)
   --resolution WxH  Guest framebuffer pixels (default: 544x960)
@@ -50,6 +53,7 @@ Options:
   --vnc-host IPv4    VNC bind address (default: host's primary IPv4 address)
                     Use auto to detect it, or none to disable VNC
   --vnc-port PORT    VNC TCP port (default: 5900; range: 5900..65535)
+  --qmp-socket PATH  Enable a private QMP socket for bounded QA shutdown control
   -h, --help        Show this help
 
 Environment:
@@ -93,7 +97,7 @@ fi
 i=0
 while [[ $i -lt ${#args[@]} ]]; do
     case "${args[$i]}" in
-        --root|--kernel|--image|--memory|--cpus|--resolution|--qemu|--display|--append|--usb-wifi|--usb-bluetooth|--audio-backend|--vnc-host|--vnc-port)
+        --root|--kernel|--image|--image-format|--memory|--cpus|--resolution|--qemu|--display|--append|--usb-wifi|--usb-bluetooth|--audio-backend|--vnc-host|--vnc-port|--qmp-socket)
             if ((i + 1 >= ${#args[@]})); then
                 echo "Missing value for ${args[$i]}" >&2
                 exit 2
@@ -121,6 +125,10 @@ while [[ $i -lt ${#args[@]} ]]; do
         --image)
             ((i+=1))
             IMAGE="${args[$i]}"
+            ;;
+        --image-format)
+            ((i+=1))
+            IMAGE_FORMAT="${args[$i]:-}"
             ;;
         --memory)
             ((i+=1))
@@ -165,6 +173,10 @@ while [[ $i -lt ${#args[@]} ]]; do
         --vnc-port)
             ((i+=1))
             VNC_PORT="${args[$i]:-}"
+            ;;
+        --qmp-socket)
+            ((i+=1))
+            QMP_SOCKET="${args[$i]:-}"
             ;;
         -h|--help)
             usage
@@ -480,6 +492,10 @@ preflight() {
 }
 
 run_openwave() {
+    case "$IMAGE_FORMAT" in
+        raw|qcow2) ;;
+        *) echo "Unsupported image format: $IMAGE_FORMAT (expected raw or qcow2)." >&2; exit 2 ;;
+    esac
     preflight
 
     local gpu display accel audio
@@ -537,6 +553,14 @@ run_openwave() {
     echo "Press Ctrl+C in this terminal to stop QEMU."
     echo
 
+    qmp_args=()
+    if [[ -n "$QMP_SOCKET" ]]; then
+        [[ "$QMP_SOCKET" != *','* ]] || { echo "QMP socket path cannot contain commas." >&2; exit 2; }
+        [[ ! -e "$QMP_SOCKET" ]] || { echo "Refusing to replace existing QMP socket path: $QMP_SOCKET" >&2; exit 2; }
+        mkdir -p -- "$(dirname -- "$QMP_SOCKET")"
+        qmp_args=(-qmp "unix:$QMP_SOCKET,server=on,wait=off")
+    fi
+
     exec "$QEMU" \
         -name "OpenWave" \
         -machine q35 \
@@ -545,7 +569,7 @@ run_openwave() {
         -m "$MEMORY" \
         -kernel "$KERNEL" \
         -append "$kernel_append" \
-        -drive if=none,id=openwave-root,file="$IMAGE",format=raw \
+        -drive if=none,id=openwave-root,file="$IMAGE",format="$IMAGE_FORMAT" \
         -device virtio-blk-pci,drive=openwave-root \
         -nic none \
         -audiodev "$audio,id=openwave-audio" \
@@ -558,7 +582,8 @@ run_openwave() {
         -device usb-tablet,bus=openwave-usb.0 \
         "${usb_device_args[@]}" \
         -serial stdio \
-        -monitor none
+        -monitor none \
+        "${qmp_args[@]}"
 }
 
 case "$MODE" in

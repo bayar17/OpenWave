@@ -23,6 +23,7 @@ private:
     struct Waiter;
     struct Pending;
     struct Lease;
+    bool bindApplicationRegistry(GError **error);
     bool identity(const char *sender, PermissionIdentity *identity);
     bool broker(const char *sender);
     void method(const char *sender, const char *method, GVariant *, GDBusMethodInvocation *);

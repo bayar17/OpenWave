@@ -24,6 +24,7 @@ ApplicationsBackend::ApplicationsBackend(QObject *parent) : QObject(parent)
     connect(&m_client, &ApplicationsClient::registryChanged, this, &ApplicationsBackend::refresh);
     connect(&m_client, &ApplicationsClient::serviceChanged, this, [this](bool) { refresh(); });
 }
+
 void ApplicationsBackend::refresh()
 {
     if (m_busy) { m_again = true; return; }

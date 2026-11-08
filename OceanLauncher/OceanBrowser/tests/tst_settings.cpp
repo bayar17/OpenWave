@@ -79,6 +79,8 @@ private slots:
         QTemporaryDir directory;
         BrowserPreferences settings(directory.path(), directory.path());
         QQuickView window;
+        window.engine()->addImportPath(QStringLiteral("/usr/qml"));
+        window.engine()->addImportPath(QStringLiteral("/usr/lib64/qt6/qml"));
         window.rootContext()->setContextProperty("BrowserPreferences", &settings);
         window.setResizeMode(QQuickView::SizeRootObjectToView);
         window.resize(733, 1276);

@@ -47,6 +47,36 @@ static gboolean caller_uid(Service *service, const char *sender, guint *uid)
     return TRUE;
 }
 
+/* Ocean is supervised by OpenRC and deliberately absent from appd's app
+ * registry. Authenticate its process proof, including calls on another bus
+ * connection in that same process. This permits wallpaper reads only. */
+static gboolean supervised_ocean(Service *service, const char *sender, guint uid)
+{
+    struct passwd *ocean = getpwnam("ocean");
+    if (!ocean || uid != ocean->pw_uid) return FALSE;
+    uid_t ocean_uid = ocean->pw_uid;
+    GVariant *reply = g_dbus_connection_call_sync(service->bus,
+        "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+        "GetConnectionCredentials", g_variant_new("(s)", sender),
+        G_VARIANT_TYPE("(a{sv})"), 0, 1000, NULL, NULL);
+    if (!reply) return FALSE;
+    GVariant *fields = g_variant_get_child_value(reply, 0);
+    guint pid = 0, credential_uid = 0;
+    gboolean okay = g_variant_lookup(fields, "UnixUserID", "u", &credential_uid)
+        && credential_uid == uid && g_variant_lookup(fields, "ProcessID", "u", &pid)
+        && openwave_supervised_process_uid(uid, pid, "/run/openwave/ocean.pid", ocean_uid);
+    g_variant_unref(fields); g_variant_unref(reply);
+    return okay;
+}
+
+static gboolean settings_identity(GVariant *identity)
+{
+    const char *app = NULL; gboolean trusted = FALSE;
+    return identity && g_variant_lookup(identity, "appId", "&s", &app)
+        && !strcmp(app, "com.openwave.settings")
+        && g_variant_lookup(identity, "trusted", "b", &trusted) && trusted;
+}
+
 static gboolean prepare_directory(Service *service, guint uid, const char *public_dir)
 {
     char *parent = at_root(service, "/var/openwave");
@@ -57,11 +87,13 @@ static gboolean prepare_directory(Service *service, guint uid, const char *publi
         okay = chown(parent, 0, 0) == 0 && chmod(parent, 0755) == 0
             && chown(base, 0, 0) == 0 && chmod(base, 0755) == 0;
         if (okay && uid != 0) {
-            struct passwd *user = getpwuid(uid);
             char *users = at_root(service, WALLPAPER_DIR "/users");
-            okay = user && chown(users, 0, 0) == 0 && chmod(users, 0755) == 0
-                && chown(directory, uid, user->pw_gid) == 0
-                && chmod(directory, 0700) == 0;
+            struct stat info;
+            /* Persisted selections belong to the broker, keyed by the
+             * authenticated session UID. Clients receive verified bytes. */
+            okay = chown(users, 0, 0) == 0 && chmod(users, 0755) == 0
+                && !lstat(directory, &info) && S_ISDIR(info.st_mode)
+                && info.st_uid == 0 && chmod(directory, 0700) == 0;
             g_free(users);
         }
     }
@@ -177,15 +209,22 @@ static void method_call(GDBusConnection *connection, const char *sender,
         return;
     }
     if (!strcmp(service->root, "/") && uid) {
-        if (!strcmp(method, "SetWallpaper")) {
-            g_dbus_method_invocation_return_dbus_error(invocation, BUS_NAME ".Unauthorized", "Only trusted system components may change the wallpaper"); return;
-        }
-        GVariant *identity = openwave_resolve_caller(service->bus, sender, NULL);
-        if (!identity || !g_variant_lookup(identity, "userId", "u", &uid)) {
+        gboolean ocean = supervised_ocean(service, sender, uid);
+        GVariant *identity = ocean ? NULL : openwave_resolve_caller(service->bus, sender, NULL);
+        if (ocean) {
+            /* Retain the authenticated session UID for its wallpaper. */
+        } else if (!identity || !g_variant_lookup(identity, "userId", "u", &uid)) {
             if (identity) g_variant_unref(identity);
             g_dbus_method_invocation_return_dbus_error(invocation, BUS_NAME ".Unauthorized", "Application identity is unavailable"); return;
         }
-        g_variant_unref(identity);
+        if (!strcmp(method, "SetWallpaper")) {
+            if (!settings_identity(identity)) {
+                if (identity) g_variant_unref(identity);
+                g_dbus_method_invocation_return_dbus_error(invocation, BUS_NAME ".Unauthorized",
+                    "Only the managed Settings application may change the user's wallpaper"); return;
+            }
+        }
+        if (identity) g_variant_unref(identity);
     }
     char *public_dir = user_directory(uid);
     if (!strcmp(method, "GetImage")) {
@@ -233,6 +272,7 @@ static void method_call(GDBusConnection *connection, const char *sender,
     } else {
         char *public_path = g_build_filename(public_dir, name, NULL);
         g_dbus_method_invocation_return_value(invocation, g_variant_new("(s)", hash));
+        g_message("wallpaper: updated user=%u sha256=%s", uid, hash);
         g_dbus_connection_emit_signal(connection, NULL, OBJECT_PATH, INTERFACE,
             "Changed", g_variant_new("(ss)", public_path, hash), NULL);
         g_free(public_path);

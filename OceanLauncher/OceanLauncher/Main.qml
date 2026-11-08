@@ -10,7 +10,16 @@ ApplicationWindow {
 
     // Preserve the portrait design on EGLFS and in resizable desktop previews.
     readonly property real contentScale: Math.min(width / 768, height / 1366)
+    readonly property var qaLaunchTargetIds: ["com.openwave.ocean", "com.openwave.photos",
+                                              "com.openwave.waterrouge-gallery"]
+    readonly property int qaLaunchTargetCount: qaLaunchTargetIds.filter(
+        appId => installedApps.indexOf(appId) >= 0).length
+    readonly property bool qaDrawerReady: drawerSheet.open && drawerSheet.progress > 0.999
+        && !drawerSheet.dragging && !snapAnimation.running && drawerSheet.enabled
+        && !appGrid.moving && !loadingView.active && !root.transitionBusy
     property var appController: null
+    property var lockController: null
+    property var powerController: null
     property var quickMenuBackend: null
     property var portalBackend: null
     property var promptBackend: null
@@ -34,12 +43,15 @@ ApplicationWindow {
     property real dismissalGlow: 0
     property string pendingTerminationAppId: ""
     property string pendingVisualLaunch: ""
+    property string deferredLockedAppId: ""
+    readonly property bool sessionLocked: lockController ? lockController.locked : false
     property bool terminationProcessExited: false
     property bool terminationSurfaceGone: false
     readonly property var appArtwork: appController ? appController.appArtwork : ({})
     readonly property bool reduceMotion: appController ? appController.reduceMotion : false
     readonly property bool appLoading: loadingView.active
     readonly property bool promptModal: systemPrompt.visible
+        || powerPrompt.visible || (powerController && powerController.request.id !== undefined)
         || (promptBackend && promptBackend.request.id !== undefined)
     readonly property var displayedPromptRequest: systemPrompt.shownRequest.id
         ? systemPrompt.shownRequest : promptBackend ? promptBackend.request : ({})
@@ -63,7 +75,7 @@ ApplicationWindow {
     onAppLoadingChanged: { presentPromptOwner(); Qt.callLater(root.presentPendingLaunch) }
     onPendingTerminationAppIdChanged: Qt.callLater(root.presentPendingLaunch)
     function presentPendingLaunch() {
-        if (!pendingVisualLaunch || appLoading || transitionBusy || pendingTerminationAppId) return
+        if (!pendingVisualLaunch || sessionLocked || appLoading || transitionBusy || pendingTerminationAppId) return
         const appId = pendingVisualLaunch
         pendingVisualLaunch = ""
         const artwork = appArtwork[appId]
@@ -94,6 +106,10 @@ ApplicationWindow {
     signal appLaunchRequested(string appId)
     signal appLaunchCancelled(string appId)
     onAppLaunchRequested: appId => {
+        if (root.sessionLocked) {
+            root.pendingVisualLaunch = appId
+            return
+        }
         if (appController) appController.launch(appId)
     }
     onAppLaunchCancelled: appId => {
@@ -128,6 +144,10 @@ ApplicationWindow {
             noticeTimer.restart()
         }
         function onShowExistingApp(appId) {
+            if (root.sessionLocked) {
+                root.deferredLockedAppId = appId
+                return
+            }
             const item = root.appSurfaces[appId]
             if (item) {
                 console.info("Ocean resuming the existing " + appId + " surface")
@@ -150,7 +170,28 @@ ApplicationWindow {
             noticeTimer.restart()
         }
     }
+    Connections {
+        target: root.powerController
+        function onErrorOccurred(message) {
+            appNotice.message = message
+            appNotice.visible = true
+            noticeTimer.restart()
+        }
+    }
+    function requestPower(action) {
+        if (!powerController || sessionLocked || promptModal || powerController.busy) return
+        quickMenu.settle(false)
+        edgeNavigation.close()
+        powerController.ask(action)
+    }
     Component.onCompleted: {
+        if (qaGraphicsDiagnostics)
+            console.info("OCEAN_QA root-created size=" + width + "x" + height
+                         + " scale=" + contentScale + " visible=" + visible
+                         + " apps=" + installedApps.length
+                         + " favorites=" + favoriteApps.length
+                         + " unpinned=" + unpinnedApps.length
+                         + " wallpaper=" + Wallpaper.source)
         if (resumeDrawer) {
             drawerSheet.open = true
             drawerSheet.y = drawerSheet.openY
@@ -161,6 +202,12 @@ ApplicationWindow {
             noticeTimer.restart()
         }
     }
+    onInstalledAppsChanged: if (qaGraphicsDiagnostics)
+        console.info("OCEAN_QA qml-apps=" + installedApps.length)
+    onFavoriteAppsChanged: if (qaGraphicsDiagnostics)
+        console.info("OCEAN_QA qml-favorites=" + favoriteApps.length)
+    onUnpinnedAppsChanged: if (qaGraphicsDiagnostics)
+        console.info("OCEAN_QA qml-unpinned=" + unpinnedApps.length)
 
     width: 768
     height: 1366
@@ -199,8 +246,51 @@ ApplicationWindow {
         }
     }
 
+    function lockSession() {
+        if (powerController && powerController.request.id)
+            powerController.respond(powerController.request.id, "cancelled", "")
+        if (portalFileChooser.phase !== "hidden" && portalBackend)
+            portalBackend.cancel()
+        if (systemPrompt.visible)
+            systemPrompt.respond("cancelled")
+        else if (promptBackend && promptBackend.request.id)
+            promptBackend.respond(promptBackend.request.id, "cancelled", "")
+        if (!lockController || !lockController.requestLock())
+            return
+        if (quickMenu.progress > 0) quickMenu.settle(false)
+        edgeNavigation.close()
+        drawerSheet.closeDrawer()
+        lockScreen.forceActiveFocus()
+    }
+
+    Connections {
+        target: root.lockController
+        function onStateChanged() {
+            if (root.sessionLocked) {
+                quickMenu.settle(false)
+                edgeNavigation.close()
+                drawerSheet.closeDrawer()
+                lockScreen.forceActiveFocus()
+            } else if (root.deferredLockedAppId) {
+                const appId = root.deferredLockedAppId
+                root.deferredLockedAppId = ""
+                const item = root.appSurfaces[appId]
+                if (item) root.presentApplication(item)
+            } else if (root.applicationVisible && root.foregroundSurface) {
+                root.foregroundSurface.forceActiveFocus()
+            }
+            if (!root.sessionLocked)
+                Qt.callLater(root.presentPendingLaunch)
+        }
+        function onPersistenceError(message) {
+            root.appNotice.message = message
+            root.appNotice.visible = true
+            root.noticeTimer.restart()
+        }
+    }
+
     function goHome() {
-        if (transitionBusy || promptModal)
+        if (sessionLocked || transitionBusy || promptModal)
             return
         if (quickMenu.open) {
             quickMenu.settle(false)
@@ -227,7 +317,7 @@ ApplicationWindow {
     }
 
     function navigateBack() {
-        if (transitionBusy || appLoading || promptModal || portalFileChooser.phase !== "hidden") return
+        if (sessionLocked || transitionBusy || appLoading || promptModal || portalFileChooser.phase !== "hidden") return
         if (applicationVisible && foregroundSurface && foregroundSurface.surface
             && foregroundSurface.surface.hasContent) {
             foregroundSurface.takeFocus(compositor.defaultSeat)
@@ -239,7 +329,13 @@ ApplicationWindow {
     }
 
     function requestAppLaunch(app) {
-        if (loadingView.active || transitionBusy || pendingTerminationAppId || quickMenu.progress > 0)
+        if (qaGraphicsDiagnostics) {
+            console.info("OCEAN_QA launch-activation appId=" + app.appId
+                + " drawerOpen=" + drawerSheet.open
+                + " view=" + (drawerSheet.open ? "drawer" : "home")
+                + " catalogCount=" + installedApps.length)
+        }
+        if (sessionLocked || loadingView.active || transitionBusy || pendingTerminationAppId || quickMenu.progress > 0)
             return
         if (installedApps.indexOf(app.appId) < 0) {
             showAppNotice(app.title)
@@ -296,6 +392,11 @@ ApplicationWindow {
     }
 
     function presentApplication(item) {
+        if (sessionLocked) {
+            deferredLockedAppId = item.appId
+            item.visible = false
+            return
+        }
         if (quickMenu.progress > 0)
             quickMenu.settle(false)
         if (foregroundSurface && foregroundSurface !== item)
@@ -307,6 +408,10 @@ ApplicationWindow {
         item.visible = true
         applicationVisible = true
         item.forceActiveFocus()
+        if (qaGraphicsDiagnostics)
+            console.info("OCEAN_QA surface-present appId=" + item.appId
+                + " pid=" + (item.surface && item.surface.client ? item.surface.client.processId : 0)
+                + " activeFocus=" + item.activeFocus)
         launchSourceSurface = null
         if (loadingView.crossfade)
             console.info("Ocean crossfading from loading to " + item.appId)
@@ -328,6 +433,9 @@ ApplicationWindow {
             delete appSurfaces[item.appId]
         item.appId = appId
         appSurfaces[appId] = item
+        if (qaGraphicsDiagnostics)
+            console.info("OCEAN_QA surface-associated appId=" + appId
+                + " pid=" + item.surface.client.processId)
         return true
     }
 
@@ -494,7 +602,11 @@ ApplicationWindow {
     }
 
     function attachApplication(xdgSurface, toplevel) {
-        console.info("Ocean received a Wayland application surface")
+        if (qaGraphicsDiagnostics)
+            console.info("OCEAN_QA surface-created pid=" + xdgSurface.surface.client.processId
+                + " title=" + toplevel.title)
+        else
+            console.info("Ocean received a Wayland application surface")
         const item = clientSurfaceComponent.createObject(applicationLayer,
             { "shellSurface": xdgSurface, "output": compositorOutput,
               "toplevel": toplevel, "visible": false })
@@ -566,7 +678,8 @@ ApplicationWindow {
     WaylandCompositor {
         id: compositor
         socketName: "wayland-0"
-        Component.onCompleted: if (root.appController) root.appController.setSessionReady(true)
+        onCreatedChanged: if (root.appController) root.appController.setSessionReady(created)
+        Component.onCompleted: if (root.appController) root.appController.setSessionReady(created)
         WaylandOutput {
             id: compositorOutput
             window: root
@@ -580,12 +693,12 @@ ApplicationWindow {
 
     Shortcut {
         sequences: ["Home"]
-        enabled: !root.promptModal
+        enabled: !root.sessionLocked && !root.promptModal
         onActivated: root.goHome()
     }
     Shortcut {
         sequences: ["Escape", "Back"]
-        enabled: !root.applicationVisible && portalFileChooser.phase === "hidden" && !root.promptModal
+        enabled: !root.sessionLocked && !root.applicationVisible && portalFileChooser.phase === "hidden" && !root.promptModal
         onActivated: root.goHome()
     }
 
@@ -606,13 +719,69 @@ ApplicationWindow {
         Rectangle { anchors.fill: parent; color: "black" }
         Image {
             id: wallpaperImage
+            objectName: "homeWallpaperImage"
 
             anchors.fill: parent
-            source: Wallpaper.source
+            source: qaGraphicsDiagnostics && qaWallpaperImageOverride.length > 0
+                ? (qaWallpaperImageOverride === "bundled-svg"
+                    ? Qt.resolvedUrl("assets/status/wifi.svg") : qaWallpaperImageOverride)
+                : Wallpaper.source
             fillMode: Image.PreserveAspectCrop
             asynchronous: true
             smooth: true
             mipmap: true
+
+            function statusName(value) {
+                if (value === Image.Null) return "Null"
+                if (value === Image.Loading) return "Loading"
+                if (value === Image.Ready) return "Ready"
+                if (value === Image.Error) return "Error"
+                return "Unknown(" + value + ")"
+            }
+
+            function reportQaState(reason) {
+                if (!qaGraphicsDiagnostics)
+                    return
+                console.info("OCEAN_QA wallpaper-qml reason=" + reason
+                    + " wallpaperSource=" + Wallpaper.source
+                    + " source=" + source
+                    + " status=" + statusName(status)
+                    + " progress=" + progress
+                    + " sourceSize=" + sourceSize.width + "x" + sourceSize.height
+                    + " geometry=" + x + "," + y + "," + width + "x" + height
+                    + " visible=" + visible + " opacity=" + opacity
+                    + " fillMode=" + fillMode + " z=" + z
+                    + " parentVisible=" + (parent ? parent.visible : false)
+                    + " parentGeometry=" + (parent ? parent.width + "x" + parent.height : "none")
+                    + " parentClip=" + (parent ? parent.clip : false)
+                    + " oceanApplicationVisible=" + root.applicationVisible
+                    + " topShadeVisible=" + topShade.visible
+                    + " dismissalScrimVisible=" + dismissalScrim.visible
+                    + " dismissalScrimOpacity=" + dismissalScrim.opacity
+                    + " recentGridVisible=" + recentGrid.visible
+                    + " appLoadingVisible=" + loadingView.visible
+                    + " quickMenuVisible=" + quickMenu.visible
+                    + " statusBarVisible=" + statusBar.visible
+                    + " edgeNavigationVisible=" + edgeNavigation.visible
+                    + " drawerOpen=" + drawerSheet.open
+                    + " portalVisible=" + portalFileChooser.visible
+                    + " promptVisible=" + systemPrompt.visible
+                    + " lockVisible=" + lockScreen.visible)
+            }
+
+            onStatusChanged: {
+                reportQaState("status-changed")
+                if (status === Image.Error)
+                    console.warn("Ocean wallpaper image load failed:", errorString)
+            }
+            onSourceChanged: reportQaState("source-changed")
+            onProgressChanged: if (qaGraphicsDiagnostics && progress > 0 && progress < 1)
+                                   reportQaState("progress-changed")
+            onWidthChanged: reportQaState("width-changed")
+            onHeightChanged: reportQaState("height-changed")
+            onVisibleChanged: reportQaState("visibility-changed")
+            onOpacityChanged: reportQaState("opacity-changed")
+            Component.onCompleted: reportQaState("completed")
         }
 
         Rectangle {
@@ -668,7 +837,8 @@ ApplicationWindow {
             renderScale: root.contentScale
             fontFamily: root.font.family
             reduceMotion: root.reduceMotion
-            interactionEnabled: !root.transitionBusy && root.pendingTerminationAppId === ""
+            interactionEnabled: !root.sessionLocked && !root.transitionBusy
+                && root.pendingTerminationAppId === ""
             z: root.dismissalGlow > 0 || root.pendingTerminationAppId ? 30 : 10
 
             onActivated: (appId, cardItem) => root.startRecentEntry(appId, cardItem)
@@ -811,7 +981,7 @@ ApplicationWindow {
 
             property bool open: false
             enabled: !root.applicationVisible && !root.transitionBusy
-                     && quickMenu.progress === 0 && !root.promptModal
+                     && quickMenu.progress === 0 && !root.promptModal && !root.sessionLocked
 
             property color drawerColor: "#D9454E53"
 
@@ -863,7 +1033,8 @@ ApplicationWindow {
             function favoriteInsertionIndex(x, y) {
                 const point = favoriteRow.mapFromItem(drawerSheet, x, y)
                 return Math.max(0, Math.min(root.favoriteApps.length,
-                    Math.floor((point.x + 65 + favoriteRow.spacing) / (130 + favoriteRow.spacing))))
+                    Math.floor((point.x + dock.iconSize / 2 + favoriteRow.spacing / 2)
+                               / (dock.iconSize + favoriteRow.spacing))))
             }
 
             function updateGridInsertion() {
@@ -1038,6 +1209,8 @@ ApplicationWindow {
 
                 TapHandler {
                     onTapped: {
+                        if (qaGraphicsDiagnostics)
+                            console.info("OCEAN_QA drawer-handle-tapped")
                         drawerSheet.toggleDrawer()
                     }
                 }
@@ -1045,11 +1218,27 @@ ApplicationWindow {
 
             Item {
                 id: dock
-                opacity: 1 - Math.min(1, loadingView.progress * 3)
-                enabled: !loadingView.active
+                readonly property real unlockEntrance: !root.applicationVisible && lockScreen.revealActive
+                    ? (root.reduceMotion ? lockScreen.revealProgress
+                       : Math.max(0, Math.min(1, (lockScreen.revealProgress - 0.42) / 0.56)))
+                    : 1
+                y: (1 - unlockEntrance) * (root.reduceMotion ? 0 : 22)
+                opacity: (1 - Math.min(1, loadingView.progress * 3)) * unlockEntrance
+                enabled: !loadingView.active && !root.sessionLocked && !lockScreen.revealActive
 
                 width: parent.width
                 height: 185
+                readonly property int favoriteCount: root.favoriteApps.length
+                readonly property real viewportWidth: Math.max(0, width - 48)
+                readonly property real iconSize: favoriteCount > 0
+                    ? Math.max(64, Math.min(130,
+                        (viewportWidth - 18 * Math.max(0, favoriteCount - 1)) / favoriteCount))
+                    : 130
+                readonly property real spacingForFavorites: favoriteCount > 1
+                    ? (favoriteCount * iconSize >= viewportWidth
+                        ? 18 : Math.max(18, Math.min(54,
+                            (viewportWidth - favoriteCount * iconSize) / (favoriteCount - 1))))
+                    : 0
 
                 Rectangle {
                     anchors.fill: parent
@@ -1057,26 +1246,53 @@ ApplicationWindow {
                     color: "transparent"
                 }
 
-                Row {
-                    id: favoriteRow
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.top: parent.top
-                    anchors.topMargin: 25
+                Flickable {
+                    id: favoriteViewport
+                    anchors.fill: parent
+                    anchors.leftMargin: 24
+                    anchors.rightMargin: 24
+                    clip: true
+                    contentWidth: Math.max(width, favoriteRow.implicitWidth)
+                    contentHeight: height
+                    flickableDirection: Flickable.HorizontalFlick
+                    boundsBehavior: Flickable.StopAtBounds
+                    interactive: favoriteRow.implicitWidth > width
 
-                    spacing: 54
-                    Repeater {
-                        model: root.favoriteApps
-                        delegate: AppIcon {
-                            required property string modelData
-                            appId: modelData
-                            title: root.appArtwork[modelData][0]
-                            source: root.appArtwork[modelData][1]
-                            renderScale: root.contentScale
-                            draggable: drawerSheet.open && drawerSheet.progress > 0.95
-                            onClicked: app => root.requestAppLaunch(app)
-                            onDragStarted: (app, x, y) => drawerSheet.beginAppDrag(app, x, y)
-                            onDragMoved: (app, x, y) => drawerSheet.updateAppDrag(app, x, y)
-                            onDragFinished: (app, x, y) => drawerSheet.finishAppDrag(app, x, y)
+                    Row {
+                        id: favoriteRow
+                        x: favoriteRow.implicitWidth <= favoriteViewport.width
+                            ? (favoriteViewport.width - favoriteRow.implicitWidth) / 2 : 0
+                        y: 25
+                        spacing: dock.spacingForFavorites
+                        move: Transition {
+                            NumberAnimation {
+                                properties: "x,y"
+                                duration: root.reduceMotion ? 0 : 210
+                                easing.type: Easing.OutCubic
+                            }
+                        }
+                        Repeater {
+                            model: root.favoriteApps
+                            onItemAdded: (index, item) => {
+                                if (qaGraphicsDiagnostics)
+                                    console.info("OCEAN_QA QML favorite-delegate-created appId=" + item.appId)
+                            }
+                            delegate: AppIcon {
+                                required property string modelData
+                                appId: modelData
+                                title: root.appArtwork[modelData][0]
+                                source: root.appArtwork[modelData][1]
+                                renderScale: root.contentScale
+                                qaDiagnostics: qaGraphicsDiagnostics
+                                qaTargetReady: root.qaDrawerReady
+                                width: dock.iconSize
+                                height: dock.iconSize
+                                draggable: drawerSheet.open && drawerSheet.progress > 0.95
+                                onClicked: app => root.requestAppLaunch(app)
+                                onDragStarted: (app, x, y) => drawerSheet.beginAppDrag(app, x, y)
+                                onDragMoved: (app, x, y) => drawerSheet.updateAppDrag(app, x, y)
+                                onDragFinished: (app, x, y) => drawerSheet.finishAppDrag(app, x, y)
+                            }
                         }
                     }
                 }
@@ -1109,7 +1325,10 @@ ApplicationWindow {
 
                 apps: root.unpinnedApps
                 artwork: root.appArtwork
+                qaDiagnostics: qaGraphicsDiagnostics
+                qaTargetReady: root.qaDrawerReady
                 renderScale: root.contentScale
+                reduceMotion: root.reduceMotion
                 draggable: drawerSheet.open && drawerSheet.progress > 0.95
                 appDragActive: drawerSheet.draggedAppId.length > 0
                 appDragY: drawerSheet.dragPointerY - y
@@ -1122,9 +1341,10 @@ ApplicationWindow {
 
             Rectangle {
                 visible: drawerSheet.draggedAppId && drawerSheet.dragOverFavorites
-                x: favoriteRow.x + drawerSheet.dragInsertionIndex * (130 + favoriteRow.spacing) - 5
-                y: favoriteRow.y + 4
-                width: 5; height: 122; radius: 2
+                x: favoriteViewport.x + favoriteRow.x - favoriteViewport.contentX
+                    + drawerSheet.dragInsertionIndex * (dock.iconSize + favoriteRow.spacing) - 5
+                y: favoriteViewport.y + favoriteRow.y + 4
+                width: 5; height: dock.iconSize - 8; radius: 2
                 color: "#00c9f2"
                 z: 48
             }
@@ -1241,7 +1461,7 @@ ApplicationWindow {
                     ? loadingView.handoffProgress : 1
                 focusOnClick: true
                 touchEventsEnabled: true
-                inputEventsEnabled: !loadingView.active && !root.transitionBusy && !root.promptModal
+                inputEventsEnabled: !root.sessionLocked && !loadingView.active && !root.transitionBusy && !root.promptModal
                 Connections {
                     target: clientSurface.surface
                     function onHasContentChanged() {
@@ -1286,6 +1506,7 @@ ApplicationWindow {
             z: 60
             wallpaper: root.applicationVisible ? applicationLayer : wallpaperImage
             backend: root.quickMenuBackend
+            appController: root.appController
             renderScale: root.contentScale
             regularFont: root.font.family
             lightFont: lightFont.name
@@ -1299,7 +1520,8 @@ ApplicationWindow {
             canOpen: (root.applicationVisible || (!drawerSheet.open
                      && drawerSheet.progress < 0.02)) && !loadingView.active
                      && !recentTransition.active && !root.transitionBusy
-                     && !root.promptModal
+                     && !root.promptModal && !root.sessionLocked
+            onLockRequested: root.lockSession()
         }
 
         EdgeNavigationMenu {
@@ -1312,8 +1534,8 @@ ApplicationWindow {
             reduceMotion: root.reduceMotion
             safeTop: statusBar.height
             safeBottom: 0
-            backAvailable: root.applicationVisible || drawerSheet.open
-            canOpen: !root.transitionBusy && !root.appLoading && !root.promptModal
+            backAvailable: !root.sessionLocked && (root.applicationVisible || drawerSheet.open)
+            canOpen: !root.sessionLocked && !root.transitionBusy && !root.appLoading && !root.promptModal
                 && !recentTransition.active && portalFileChooser.phase === "hidden"
                 && quickMenu.progress === 0
             onBackRequested: root.navigateBack()
@@ -1340,6 +1562,20 @@ ApplicationWindow {
         }
 
         PromptDialog {
+            id: powerPrompt
+            objectName: "powerConfirmation"
+            anchors.fill: parent
+            z: 140
+            backend: root.powerController
+            backdrop: root.applicationVisible ? applicationLayer : wallpaperImage
+            reduceMotion: root.reduceMotion
+            canPresent: !root.sessionLocked && !systemPrompt.visible
+                && !(root.promptBackend && root.promptBackend.request.id)
+            safeTop: statusBar.height
+            safeBottom: 0
+        }
+
+        PromptDialog {
             id: systemPrompt
             objectName: "systemPrompt"
             // Keep both the dimmer and prompt within the originating app's bounds.
@@ -1351,10 +1587,10 @@ ApplicationWindow {
             backend: root.promptBackend
             backdrop: root.promptOwnerSurface || (root.applicationVisible ? applicationLayer : wallpaperImage)
             reduceMotion: root.reduceMotion
-            canPresent: !root.displayedPromptRequest.applicationId
+            canPresent: !root.sessionLocked && (!root.displayedPromptRequest.applicationId
                 || (root.applicationVisible && root.promptOwnerSurface === root.foregroundSurface
                     && root.promptOwnerSurface && root.promptOwnerSurface.surface.hasContent
-                    && !root.transitionBusy && !root.appLoading)
+                    && !root.transitionBusy && !root.appLoading))
             safeTop: statusBar.height
             safeBottom: 0
             onVisibleChanged: {
@@ -1402,6 +1638,59 @@ ApplicationWindow {
                 id: noticeTimer
                 interval: 2500
                 onTriggered: appNotice.visible = false
+            }
+        }
+
+        LockScreen {
+            id: lockScreen
+            objectName: "lockScreen"
+            anchors.fill: parent
+            z: 300
+            controller: root.lockController
+            wallpaper: wallpaperImage
+            timeText: root.currentTime
+            dateText: root.currentDate
+            regularFont: regularFont.name
+            lightFont: lightFont.name
+            batteryIcon: "assets/status/battery.svg"
+            cellularConnected: root.quickMenuBackend ? root.quickMenuBackend.cellularAvailable : false
+            cellularStrength: root.quickMenuBackend ? root.quickMenuBackend.cellularStrength : 0
+            wifiConnected: root.quickMenuBackend ? root.quickMenuBackend.wifiConnected : false
+            wifiStrength: root.quickMenuBackend ? root.quickMenuBackend.wifiStrength : 0
+            reduceMotion: root.reduceMotion
+            safeTop: 70
+            safeBottom: 0
+        }
+
+        Rectangle {
+            objectName: "qaGraphicsProbe"
+            visible: qaGraphicsDiagnostics
+            z: 10000
+            x: 12
+            y: 92
+            width: 136
+            height: 72
+            radius: 8
+            border.width: 2
+            border.color: "white"
+
+            Text {
+                anchors.centerIn: parent
+                text: "OCEAN QA " + root.installedApps.length + "/3 "
+                    + (drawerSheet.open ? "OPEN" : "HOME")
+                color: "black"
+                font.pixelSize: 13
+                font.bold: true
+            }
+
+            // Green means the catalog is populated and the requested app view
+            // is open. The host QA controller samples this region in a QMP
+            // framebuffer capture before it offers any interaction.
+            color: root.qaLaunchTargetCount === 3 && root.qaDrawerReady
+                ? "#d000ff70" : "#d0ff5050"
+
+            TapHandler {
+                onTapped: console.info("OCEAN_QA visible-probe-tapped")
             }
         }
     }

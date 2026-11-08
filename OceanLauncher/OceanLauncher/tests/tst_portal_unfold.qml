@@ -17,10 +17,20 @@ Item {
         property string initialDirectory: ""
         property string suggestedFilename: ""
         property bool busy: false
+        property bool imageSources: false
+        property string imageSource: ""
+        property var mimeTypes: []
+        property var galleryItems: []
+        property bool galleryLoading: false
+        property string galleryError: ""
         property int selections: 0
+        property var lastGalleryTokens: []
         signal errorOccurred(string error)
         function acceptsPath(path) { return true }
         function choose(paths) { selections++ }
+        function chooseGallery(tokens) { lastGalleryTokens = tokens; selections++ }
+        function loadGallery() { galleryLoading = false }
+        function galleryImageUrl(token) { return "image://test/" + token }
         function cancel() { requestId = "" }
     }
     ListModel {
@@ -80,6 +90,14 @@ Item {
             request.title = "Select a file"
             request.mutedTitle = ""
             request.primaryTitle = ""
+            request.imageSources = false
+            request.imageSource = ""
+            request.mode = "OpenFile"
+            request.mimeTypes = []
+            request.galleryItems = []
+            request.galleryError = ""
+            request.galleryLoading = false
+            request.lastGalleryTokens = []
         }
 
         function test_gradientTitleContent() {
@@ -213,6 +231,100 @@ Item {
             wait(10)
             compare(chooser.phase, "hidden")
             compare(chooser.unfold, 0)
+        }
+
+        function test_explicitPhotosSourceOpensPhotosPicker() {
+            chooser.reduceMotion = true
+            request.imageSources = true
+            request.imageSource = "gallery"
+            request.galleryItems = [
+                {token: "photo-one", name: "one.png", album: "Selected photos", mime: "image/png"},
+                {token: "photo-two", name: "two.jpg", album: "Selected photos", mime: "image/jpeg"}
+            ]
+            request.requestId = "/request/image-sources"
+            wait(10)
+            compare(chooser.sourcePage, "gallery")
+            verify(findChild(chooser, "portalSourceButton") === null)
+            verify(findChild(chooser, "portalSourceDropdown") === null)
+            verify(findChild(chooser, "portalGalleryPicker").visible)
+            compare(findChild(chooser, "portalPhotoChooserTitle").text, "Choose a photo")
+            verify(findChild(chooser, "portalPhotoChooserDivider").visible)
+            verify(findChild(chooser, "portalPhotoChooserSearchButton").visible)
+            verify(findChild(chooser, "portalCloseButton").visible === false)
+            verify(findChild(chooser, "portalPhotoChooserTabs").visible)
+            compare(chooser.galleryAlbums.length, 1)
+            const albumTab = findChild(chooser, "portalPhotoChooserAlbumsTab")
+            albumTab.clicked()
+            compare(chooser.galleryTab, "albums")
+            verify(findChild(chooser, "portalGalleryAlbumGrid").visible)
+            const albumGrid = findChild(chooser, "portalGalleryAlbumGrid")
+            compare(albumGrid.count, 1)
+            albumGrid.itemAtIndex(0).clicked()
+            compare(chooser.galleryTab, "photos")
+            compare(chooser.galleryAlbumFilter, "Selected photos")
+            chooser.selectGalleryItem("photo-one")
+            compare(request.selections, 1)
+            compare(request.lastGalleryTokens, ["photo-one"])
+
+            request.requestId = ""
+            wait(10)
+            request.imageSources = false
+            request.imageSource = ""
+            request.mode = "OpenFile"
+            request.requestId = "/request/non-image"
+            wait(10)
+            compare(chooser.sourcePage, "files")
+            verify(findChild(chooser, "portalSourceButton") === null)
+            verify(!findChild(chooser, "portalGalleryPicker").visible)
+            request.requestId = ""
+            wait(10)
+        }
+
+        function test_photoChooserSlidesUpAndShowsEmptyState() {
+            chooser.reduceMotion = false
+            request.imageSources = true
+            request.imageSource = "gallery"
+            request.galleryItems = []
+            request.galleryError = ""
+            request.galleryLoading = false
+            request.requestId = "/request/empty-gallery"
+
+            const panel = findChild(chooser, "portalFileChooserPanel")
+            const emptyState = findChild(chooser, "portalGalleryEmptyState")
+            const backButton = findChild(chooser, "portalPhotoChooserBackButton")
+            tryCompare(chooser, "sourcePage", "gallery")
+            compare(chooser.sourcePage, "gallery")
+            compare(panel.x, 0)
+            compare(panel.width, screen.width)
+            compare(panel.radius, 0)
+            compare(panel.color.a, 0)
+            compare(panel.transform[0].yScale, 1)
+            verify(panel.y > panel.restingY)
+            tryCompare(chooser, "phase", "open", 1000)
+            compare(panel.y, panel.restingY)
+            verify(emptyState.visible)
+            compare(emptyState.text, "No photos available")
+            verify(backButton.visible)
+
+            backButton.clicked()
+            compare(request.requestId, "")
+            tryCompare(chooser, "phase", "hidden", 1000)
+        }
+
+        function test_imageMimeRequestDefaultsToFilesWithoutPortalDropdown() {
+            chooser.reduceMotion = true
+            request.imageSources = false
+            request.imageSource = ""
+            request.mimeTypes = ["image/*"]
+            request.mode = "OpenFile"
+            request.requestId = "/request/image-mime-fallback"
+            wait(10)
+            compare(chooser.imageSourceRequest, true)
+            compare(chooser.sourcePage, "files")
+            verify(findChild(chooser, "portalSourceButton") === null)
+            verify(findChild(chooser, "portalSourceDropdown") === null)
+            request.requestId = ""
+            wait(10)
         }
 
         function test_replacementWaitsForCollapse() {

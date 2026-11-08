@@ -2,13 +2,16 @@
 #include <QCommandLineParser>
 #include <QFontDatabase>
 #include <QGuiApplication>
+#include <QFile>
+#include <QFileInfo>
+#include <QHostInfo>
 #include <QIcon>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
 #include <QTimer>
 #include <QDebug>
 #ifdef OPENWAVE_PHOTOS_SYSTEM_FONTS
-#include <OpenWave/FontManager.h>
+#include <OpenWave/Application.h>
 #include <OpenWave/OpenWavePortals.h>
 #include <OpenWave/WallpaperClient.h>
 #include <OpenWave/ApplicationChannel.h>
@@ -24,9 +27,28 @@ int main(int argc, char *argv[])
     app.setOrganizationName("OpenWave"); app.setOrganizationDomain("openwave.org");
     app.setDesktopFileName("com.openwave.photos");
     app.setWindowIcon(QIcon(":/qt/qml/OceanPhotos/assets/icon.svg"));
-#ifdef OPENWAVE_PHOTOS_SYSTEM_FONTS
-    OpenWave::FontManager::initialize();
-#else
+    QFile associationQaCommandLine(QStringLiteral("/proc/cmdline"));
+    if (associationQaCommandLine.open(QIODevice::ReadOnly)
+        && associationQaCommandLine.readAll().trimmed().split(' ').contains("openwave.qa=wifi-associate")) {
+        const auto dns = QHostInfo::fromName(QStringLiteral("example.com"));
+        if (dns.error() == QHostInfo::NoError && !dns.addresses().isEmpty())
+            qInfo() << "WIFI_ASSOC_APP_DNS_PASS real DNS lookup from confined application";
+        else qCritical() << "WIFI_ASSOC_APP_DNS_FAIL" << dns.errorString();
+    }
+    QFile networkQaCommandLine(QStringLiteral("/proc/cmdline"));
+    if (networkQaCommandLine.open(QIODevice::ReadOnly)
+        && networkQaCommandLine.readAll().trimmed().split(' ').contains("openwave.qa=dns")) {
+        QFile resolver(QStringLiteral("/etc/resolv.conf"));
+        QFile writableResolver(QStringLiteral("/etc/resolv.conf"));
+        const bool readable = resolver.open(QIODevice::ReadOnly);
+        const QString resolverError = resolver.errorString();
+        const bool writable = writableResolver.open(QIODevice::WriteOnly);
+        const bool privateProfilesVisible = QFileInfo::exists(QStringLiteral("/var/lib/NetworkManager"));
+        if (readable && !writable && !privateProfilesVisible)
+            qInfo() << "DNS_QA_PASS confined app reads live resolver, cannot write it or access profiles";
+        else qCritical() << "DNS_QA_FAIL readable=" << readable << "writable=" << writable << "privateProfiles=" << privateProfilesVisible << "error=" << resolverError;
+    }
+#ifndef OPENWAVE_PHOTOS_SYSTEM_FONTS
     int regular = -1;
     for (const auto &weight : {"Regular", "Light", "ExtraLight"}) {
         const int id = QFontDatabase::addApplicationFont(QString(":/Gallery/fonts/SourceSansPro-%1.otf").arg(weight));
@@ -49,6 +71,14 @@ int main(int argc, char *argv[])
     const QString dataPath = openwaveApplicationStoragePath(openwaveApplicationId());
     if (dataPath.isEmpty()) { qCritical("Gallery application storage is unavailable."); return 1; }
     GalleryLibrary library(dataPath + QStringLiteral("/Gallery"));
+    QFile qaCommandLine(QStringLiteral("/proc/cmdline"));
+    if (qaCommandLine.open(QIODevice::ReadOnly)
+        && qaCommandLine.readAll().trimmed().split(' ').contains("openwave.qa=portal")) {
+        const int imported = library.importImage(QUrl::fromLocalFile(QStringLiteral("/usr/share/openwave/qa/portal.png")),
+            QStringLiteral("Imported portal test.png"));
+        qInfo() << "PORTAL_QA Photos import=" << imported;
+    }
+
 #else
     GalleryLibrary library;
 #endif
@@ -65,6 +95,9 @@ int main(int argc, char *argv[])
     WallpaperClient wallpaper;
 #endif
     QQmlApplicationEngine engine;
+#ifdef OPENWAVE_PHOTOS_SYSTEM_FONTS
+    OpenWave::Application::initialize(&engine);
+#endif
     QVariantMap properties{{"library", QVariant::fromValue(&library)}, {"showStatusBar", parser.isSet("concept")},
         {"initialView", parser.isSet("image") ? QString("viewer") : parser.value("view")},
         {"selectedIndex", selected}, {"captureMode", parser.isSet("capture")}};
@@ -75,7 +108,8 @@ int main(int argc, char *argv[])
         .value(QStringLiteral("accessibility/reduceMotion"), false).toBool());
     ApplicationChannel lifecycle(OpenWaveApplications::instanceAddress(QCoreApplication::applicationPid()),
         [&app](const QJsonObject &message) {
-            if (message.value("command") != QStringLiteral("quit")) return QStringLiteral("Unsupported Gallery request.");
+            if (message.value("command") != QStringLiteral("quit"))
+                return QStringLiteral("Unsupported Gallery request.");
             QTimer::singleShot(50, &app, &QCoreApplication::quit);
             return QString();
         });

@@ -1,5 +1,7 @@
 import QtQuick
 import QtQuick.Controls
+import OpenWave.Theme 1.0
+import OpenWave.Fonts 1.0
 
 AbstractButton {
     id: root
@@ -46,7 +48,7 @@ AbstractButton {
             anchors.fill: parent
             visible: root.visualFocus
             color: "transparent"
-            border.color: "#00b7f0"
+            border.color: Theme.focusColor
             border.width: 2
         }
     }
@@ -58,7 +60,7 @@ AbstractButton {
             text: root.network.ssid
             textFormat: Text.PlainText
             elide: Text.ElideRight
-            font.family: "Inter"
+            font.family: Fonts.family
             font.weight: Font.DemiBold
             font.pixelSize: root.largeText ? 38 : 32
             color: "white"
@@ -69,7 +71,7 @@ AbstractButton {
             y: 49
             width: parent.width - 150
             text: root.connected ? "Connected" : "Connecting…"
-            font.family: "Inter"
+            font.family: Fonts.family
             font.weight: Font.Light
             font.pixelSize: root.largeText ? 34 : 30
             color: "white"

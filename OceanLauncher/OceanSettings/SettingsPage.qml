@@ -1,6 +1,9 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
+import OpenWave.Theme 1.0
+import OpenWave.Controls 1.0
+import OpenWave.Fonts 1.0
 
 Item {
     id: root
@@ -9,6 +12,7 @@ Item {
     property var connectivityBackend: null
     property var timeBackend: null
     property var promptClient: null
+    property var portalClient: null
     property var permissionClient: null
     property var applicationsBackend: null
     property bool permissionsOpen: false
@@ -69,6 +73,7 @@ Item {
         {title: "Device name", detail: deviceName, tab: 2, key: "name"},
         {title: "Time zone", detail: timeBackend ? timeBackend.timezone : "", tab: 2, key: "timezone"},
         {title: qsTr("About"), detail: qsTr("Operating system, architecture, kernel and processors"), tab: 2, key: "about"},
+        {title: qsTr("Appearance"), detail: qsTr("Choose the system accent color"), tab: 2, key: "appearance"},
         {title: qsTr("Storage"), detail: qsTr("Available space and file permissions"), tab: 2, key: "storage"},
         {title: qsTr("Locale & Languages"), detail: qsTr("Time zone"), tab: 2, key: "locale"},
         {title: qsTr("Power options"), detail: qsTr("Restart or shut down"), tab: 2, key: "power"},
@@ -82,6 +87,7 @@ Item {
         (entry.title + " " + entry.detail).toLowerCase().includes(searchField.text.trim().toLowerCase()))
     signal closed()
     onCurrentTabChanged: {
+        if (currentTab !== 4) wallpaperSourceMenu.close()
         if (currentTab !== 0 && wifiPromptAction.length && promptClient && promptClient.busy) promptClient.cancel()
         if (currentTab !== 2) permissionsOpen = false
         if (currentTab !== 2 && generalPromptAction.length && promptClient && promptClient.busy) promptClient.cancel()
@@ -166,28 +172,13 @@ Item {
         onTriggered: root.connectivityBackend.refresh()
     }
 
-    FontLoader { source: "assets/fonts/Inter-ExtraLight.otf" }
-    FontLoader { source: "assets/fonts/Inter-SemiBold.otf" }
-
-    component ActionButton: Button {
-        id: action
-        font.family: "Inter"
-        font.pixelSize: 26
+    component ActionButton: WRButton {
+        fontPixelSize: 26
+        textColor: "white"
+        surfaceColor: "#263740"
+        pressedSurfaceColor: Theme.pressedColor
         implicitWidth: contentItem.implicitWidth + 32
         implicitHeight: 56
-        contentItem: Text {
-            text: action.text
-            font: action.font
-            color: action.enabled ? "white" : "#8a979f"
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-        }
-        background: Rectangle {
-            color: action.down ? "#087da0" : "#263740"
-            radius: 6
-            border.color: action.enabled ? "#00b7f0" : "#657781"
-            border.width: action.visualFocus ? 2 : 1
-        }
     }
 
     function selectTab(index, animated) {
@@ -298,6 +289,7 @@ Item {
     }
 
     function back() {
+        if (wallpaperSourceMenu.visible) { wallpaperSourceMenu.close(); return true }
         if (currentTab === 5 && appsPage.back()) return true
         if (permissionsOpen) { permissionsOpen = false; return true }
         if (wifiPromptAction.length && promptClient && promptClient.busy) { promptClient.cancel(); return true }
@@ -312,6 +304,21 @@ Item {
         if (searching) { selectTab(currentTab); return true }
         if (currentTab === 2 && generalPage.back()) return true
         return false
+    }
+
+    function chooseWallpaperFile(imageSource) {
+        if (!portalClient || portalClient.busy) return
+        wallpaperSourceMenu.close()
+        const options = {
+            title: "Choose wallpaper",
+            mutedTitle: qsTr("Choose"),
+            primaryTitle: qsTr("wallpaper"),
+            requestIdentifier: "settings-wallpaper"
+        }
+        if (imageSource === "photos") portalClient.openPhoto(options)
+        else portalClient.openFile(Object.assign(options, {
+            mimeTypes: ["image/*"], imageSource: "files"
+        }))
     }
 
     function openBluetoothInfo(device) {
@@ -761,7 +768,7 @@ Item {
         }
     }
     Connections {
-        target: OpenWavePortals
+        target: root.portalClient
         function onCompleted(grants) {
             if (!grants.length) { root.showMessage("No wallpaper was selected."); return }
             const url = grants[0].temporaryCopy()
@@ -831,7 +838,7 @@ Item {
                 if (root.searching) searchField.forceActiveFocus()
             }
             contentItem: Item {
-                SettingsSymbol { anchors.centerIn: parent; color: root.searching ? "#00b7f0" : "white" }
+                SettingsSymbol { anchors.centerIn: parent; color: root.searching ? Theme.accentColor : "white" }
             }
         }
 
@@ -865,10 +872,10 @@ Item {
                         contentItem: Text {
                             id: tabText
                             text: tabButton.modelData
-                            font.family: "Inter"
+                            font.family: Fonts.family
                             font.weight: Font.ExtraLight
                             font.pixelSize: 46
-                            color: root.currentTab === tabButton.index ? "#00b7f0" : "white"
+                            color: root.currentTab === tabButton.index ? Theme.highlightColor : "white"
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
@@ -878,7 +885,7 @@ Item {
                                 anchors.bottom: parent.bottom
                                 width: parent.width
                                 height: 4
-                                color: "#00b7f0"
+                                color: Theme.accentColor
                                 opacity: root.currentTab === tabButton.index ? 1 : 0
                                 Behavior on opacity {
                                     NumberAnimation {
@@ -893,17 +900,17 @@ Item {
             }
         }
 
-        TextField {
+        WRTextField {
             id: searchField
             objectName: "settingsSearchField"
             visible: root.searching
             x: 116; y: 48; width: parent.width - x - 42; height: 70
             placeholderText: "Search settings"
+            accessibleLabel: "Search settings"
+            fontPixelSize: 34
             color: "white"
             placeholderTextColor: "#b7c0c5"
             selectionColor: "#008ec0"
-            font.family: "Inter"
-            font.pixelSize: 34
             background: Item {}
             onAccepted: {
                 if (root.searchResults.length === 1)
@@ -961,7 +968,7 @@ Item {
                         visible: root.searchResults.length === 0
                         text: "No matching settings"
                         color: "#d4dadd"
-                        font.family: "Inter"
+                        font.family: Fonts.family
                         font.pixelSize: 30
                     }
                 }
@@ -972,7 +979,7 @@ Item {
                     Item {
                         width: parent.width
                         height: 100
-                        Switch {
+                        WRSwitch {
                             id: radioHeading
                             objectName: "settingsWifiHeading"
                             padding: 0
@@ -1017,7 +1024,7 @@ Item {
                                     text: root.currentTab === 0 ? "Wi-Fi" : "Visible as " + root.deviceName
                                     textFormat: Text.PlainText
                                     elide: Text.ElideRight
-                                    font.family: "Inter"
+                                    font.family: Fonts.family
                                     font.pixelSize: root.largeText ? 42 : 36
                                     font.weight: Font.DemiBold
                                     color: "white"
@@ -1147,7 +1154,7 @@ Item {
                             x: 20; width: parent.width - 40
                             height: root.largeText ? 76 : 66
                             text: qsTr("Discovered devices")
-                            color: "white"; font.family: "Inter"; font.weight: Font.ExtraLight
+                            color: "white"; font.family: Fonts.family; font.weight: Font.ExtraLight
                             font.pixelSize: root.largeText ? 40 : 34
                         }
                         Repeater {
@@ -1183,7 +1190,7 @@ Item {
                                : root.connectivityBackend ? root.connectivityBackend.wifiStatus
                                : (root.backend ? root.backend.wifiStatus : "Wi-Fi is unavailable."))
                         color: "#d4dadd"
-                        font.family: "Inter"
+                        font.family: Fonts.family
                         font.pixelSize: root.largeText ? 34 : 28
                         wrapMode: Text.Wrap
                     }
@@ -1225,7 +1232,7 @@ Item {
                     objectName: "settingsWallpaperPageContent"
                     visible: !root.searching && root.currentTab === 4
                     width: parent.width
-                    height: 850
+                    height: 950
                     x: root.cropToolOpen ? -root.width : 0
                     Behavior on x {
                         NumberAnimation {
@@ -1237,7 +1244,7 @@ Item {
                         x: 0; y: 0; width: parent.width
                         text: "current wallpaper"
                         color: "white"
-                        font.family: "Inter"
+                        font.family: Fonts.family
                         font.weight: Font.ExtraLight
                         font.pixelSize: 34
                         horizontalAlignment: Text.AlignHCenter
@@ -1288,27 +1295,32 @@ Item {
                         }
                     }
                     AbstractButton {
+                        id: editWallpaperButton
                         objectName: "settingsEditWallpaper"
                         x: (parent.width - width) / 2
-                        y: 686; width: 290; height: 74
+                        y: 686; width: 290; height: 56
                         Accessible.name: "Edit wallpaper"
-                        enabled: !OpenWavePortals.busy
-                        onClicked: OpenWavePortals.openFile({
-                            title: "Choose wallpaper",
-                            mutedTitle: qsTr("Choose"),
-                            primaryTitle: qsTr("wallpaper"),
-                            mimeTypes: ["image/png", "image/jpeg", "image/webp"],
-                            requestIdentifier: "settings-wallpaper"
-                        })
+                        enabled: true
+                        onClicked: wallpaperSourceMenu.openAtButton()
                         background: Item {}
-                        contentItem: Text {
-                            text: "✎  edit wallpaper"
-                            color: "white"
-                            font.family: "Inter"
-                            font.weight: Font.ExtraLight
-                            font.pixelSize: 34
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
+                        contentItem: Row {
+                            spacing: 8
+                            anchors.centerIn: parent
+                            SettingsSymbol {
+                                objectName: "settingsEditWallpaperIcon"
+                                width: 48; height: 48
+                                anchors.verticalCenter: parent.verticalCenter
+                                kind: "edit"
+                                color: "white"
+                            }
+                            Text {
+                                text: "edit wallpaper"
+                                color: "white"
+                                font.family: Fonts.family
+                                font.weight: Font.ExtraLight
+                                font.pixelSize: 34
+                                verticalAlignment: Text.AlignVCenter
+                            }
                         }
                     }
                 }
@@ -1346,7 +1358,7 @@ Item {
                     x: 4
                     y: 25
                     text: "Add Network"
-                    font.family: "Inter"
+                    font.family: Fonts.family
                     font.pixelSize: root.largeText ? 38 : 34
                     color: "white"
                 }
@@ -1437,7 +1449,7 @@ Item {
                     background: Item {}
                     contentItem: Text {
                         text: "‹ " + qsTr("Bluetooth")
-                        color: "white"; font.family: "Inter"; font.pixelSize: 34
+                        color: "white"; font.family: Fonts.family; font.pixelSize: 34
                         verticalAlignment: Text.AlignVCenter
                     }
                 }
@@ -1445,7 +1457,7 @@ Item {
                     objectName: "settingsBluetoothInfoName"
                     width: parent.width; bottomPadding: 22
                     text: root.selectedBluetoothName; textFormat: Text.PlainText
-                    wrapMode: Text.Wrap; color: "white"; font.family: "Inter"
+                    wrapMode: Text.Wrap; color: "white"; font.family: Fonts.family
                     font.weight: Font.DemiBold; font.pixelSize: root.largeText ? 44 : 40
                 }
                 SettingsRow {
@@ -1520,7 +1532,7 @@ Item {
                     contentItem: Text {
                         text: "‹  Saved network"
                         color: "white"
-                        font.family: "Inter"
+                        font.family: Fonts.family
                         font.pixelSize: root.largeText ? 38 : 34
                         verticalAlignment: Text.AlignVCenter
                     }
@@ -1535,7 +1547,7 @@ Item {
                     textFormat: Text.PlainText
                     wrapMode: Text.Wrap
                     color: "white"
-                    font.family: "Inter"
+                    font.family: Fonts.family
                     font.weight: Font.DemiBold
                     font.pixelSize: root.largeText ? 44 : 40
                     bottomPadding: 22
@@ -1544,7 +1556,7 @@ Item {
                     visible: !!(root.connectivityBackend && root.connectivityBackend.savedWifiInfoLoading)
                     text: "Loading saved network details…"
                     color: "#d4dadd"
-                    font.family: "Inter"
+                    font.family: Fonts.family
                     font.pixelSize: 27
                     bottomPadding: 18
                 }
@@ -1577,8 +1589,8 @@ Item {
                     objectName: "settingsWifiInfoPasswordAction"
                     visible: !!root.wifiInfo.password
                     text: root.wifiPasswordVisible ? "Tap password to hide" : "Tap password to show"
-                    color: "#00b7f0"
-                    font.family: "Inter"
+                    color: Theme.accentColor
+                    font.family: Fonts.family
                     font.pixelSize: 24
                     topPadding: 8
                     bottomPadding: 10
@@ -1665,6 +1677,132 @@ Item {
             z: 10
             MouseArea { anchors.fill: parent }
         }
+        }
+
+        MouseArea {
+            parent: Overlay.overlay
+            anchors.fill: parent
+            z: 999
+            visible: wallpaperSourceMenu.visible
+            onClicked: wallpaperSourceMenu.close()
+        }
+
+        Item {
+            id: wallpaperSourceMenu
+            objectName: "settingsWallpaperSourceMenu"
+            parent: Overlay.overlay
+            z: 1000
+            visible: false
+            focus: visible
+            property real revealProgress: 0
+            property real sourceX: 0
+            property real sourceY: 0
+            width: Math.max(1, Math.min(444 * root.renderScale,
+                                         paneViewport.width * root.renderScale - 24 * root.renderScale))
+            height: 190 * root.renderScale
+            function openAtButton() {
+                if (editWallpaperButton.width <= 0)
+                    return
+                const overlay = Overlay.overlay
+                const paneTopLeft = paneViewport.mapToItem(overlay, 0, 0)
+                const paneBottomRight = paneViewport.mapToItem(overlay, paneViewport.width,
+                                                               paneViewport.height)
+                const buttonBottomRight = editWallpaperButton.mapToItem(overlay,
+                    editWallpaperButton.width, editWallpaperButton.height)
+                const margin = 12 * root.renderScale
+                const minimumX = paneTopLeft.x + margin
+                const maximumX = paneBottomRight.x - width - margin
+                const minimumY = paneTopLeft.y + margin
+                const maximumY = paneBottomRight.y - height - margin
+                const anchor = editWallpaperButton.mapToItem(overlay,
+                    editWallpaperButton.pressX, editWallpaperButton.pressY)
+                const anchorX = anchor.x
+                const anchorY = anchor.y
+                x = Math.max(minimumX, Math.min(anchorX - width / 2, maximumX))
+                y = Math.max(minimumY, Math.min(buttonBottomRight.y + 4 * root.renderScale, maximumY))
+                sourceX = anchorX - x
+                sourceY = anchorY - y
+                revealProgress = 0
+                visible = true
+                menuRevealAnimation.restart()
+            }
+            function close() {
+                menuRevealAnimation.stop()
+                revealProgress = 0
+                visible = false
+            }
+            Keys.onEscapePressed: close()
+            NumberAnimation {
+                id: menuRevealAnimation
+                target: wallpaperSourceMenu
+                property: "revealProgress"
+                from: 0
+                to: 1
+                duration: root.backend && root.backend.reduceMotion ? 0 : 180
+                easing.type: Easing.OutCubic
+            }
+            transform: Scale {
+                origin.x: wallpaperSourceMenu.sourceX
+                origin.y: wallpaperSourceMenu.sourceY
+                xScale: wallpaperSourceMenu.revealProgress
+                yScale: wallpaperSourceMenu.revealProgress
+            }
+            Rectangle {
+                anchors.fill: parent
+                radius: 28
+                color: "#b38a8d8f"
+                border.color: "#52ffffff"
+                border.width: 1
+                Column {
+                    anchors.fill: parent
+                    AbstractButton {
+                        objectName: "settingsWallpaperChoosePhotos"
+                        width: wallpaperSourceMenu.width
+                        height: (wallpaperSourceMenu.height - 1) / 2
+                        Accessible.name: qsTr("Choose from Photos")
+                        onClicked: root.chooseWallpaperFile("photos")
+                        background: Rectangle {
+                            color: parent.down ? "#26ffffff" : "transparent"
+                            radius: 24
+                        }
+                        contentItem: Text {
+                            text: qsTr("Choose from Photos")
+                            color: "white"
+                            font.family: Fonts.family
+                            font.weight: Font.ExtraLight
+                            font.pixelSize: root.largeText ? 40 : 34
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                    Rectangle {
+                        x: 24
+                        width: wallpaperSourceMenu.width - 48
+                        height: 1
+                        color: "#7fffffff"
+                    }
+                    AbstractButton {
+                        objectName: "settingsWallpaperChooseFiles"
+                        width: wallpaperSourceMenu.width
+                        height: (wallpaperSourceMenu.height - 1) / 2
+                        Accessible.name: qsTr("Choose from Files")
+                        onClicked: root.chooseWallpaperFile("files")
+                        background: Rectangle {
+                            color: parent.down ? "#26ffffff" : "transparent"
+                            radius: 24
+                        }
+                        contentItem: Text {
+                            text: qsTr("Choose from Files")
+                            color: "white"
+                            font.family: Fonts.family
+                            font.weight: Font.ExtraLight
+                            font.pixelSize: root.largeText ? 40 : 34
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                }
+            }
         }
 
         Popup {
@@ -1834,7 +1972,7 @@ Item {
                         background: Item {}
                         contentItem: Text {
                             text: "cancel"; color: "white"
-                            font.family: "Inter"; font.pixelSize: 34
+                            font.family: Fonts.family; font.pixelSize: 34
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
@@ -1872,7 +2010,7 @@ Item {
                         background: Item {}
                         contentItem: Text {
                             text: wallpaperCropDialog.saving ? "saving…" : "crop"
-                            color: "white"; font.family: "Inter"; font.pixelSize: 34
+                            color: "white"; font.family: Fonts.family; font.pixelSize: 34
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
@@ -1884,14 +2022,14 @@ Item {
                         onClicked: wallpaperCropDialog.setZoom(zoomSlider.value - 0.1)
                         background: Item {}
                         contentItem: Text {
-                            text: "-"; color: "white"; font.family: "Inter"; font.pixelSize: 34
+                            text: "-"; color: "white"; font.family: Fonts.family; font.pixelSize: 34
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
                     }
                     Text {
                         x: 338; y: cropViewport.y + cropViewport.height + 83
-                        text: "zoom"; color: "white"; font.family: "Inter"; font.pixelSize: 34
+                        text: "zoom"; color: "white"; font.family: Fonts.family; font.pixelSize: 34
                     }
                     AbstractButton {
                         x: 532; y: cropViewport.y + cropViewport.height + 80
@@ -1900,7 +2038,7 @@ Item {
                         onClicked: wallpaperCropDialog.setZoom(zoomSlider.value + 0.1)
                         background: Item {}
                         contentItem: Text {
-                            text: "+"; color: "white"; font.family: "Inter"; font.pixelSize: 34
+                            text: "+"; color: "white"; font.family: Fonts.family; font.pixelSize: 34
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
@@ -1931,7 +2069,7 @@ Item {
                 anchors.centerIn: parent
                 wrapMode: Text.Wrap
                 horizontalAlignment: Text.AlignHCenter
-                font.family: "Inter"
+                font.family: Fonts.family
                 font.pixelSize: 26
                 color: "white"
             }

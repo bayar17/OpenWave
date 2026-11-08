@@ -1,5 +1,6 @@
 #pragma once
 #include <QAbstractListModel>
+#include <QList>
 #include <QPointer>
 #include <QThread>
 #include <QThreadPool>
@@ -8,6 +9,7 @@
 
 class BrowserPreferences;
 class DownloadStore;
+struct BrowserFileChooserJob;
 class OceanDownloadManager : public QAbstractListModel {
     Q_OBJECT
     Q_PROPERTY(QString error READ error NOTIFY stateChanged)
@@ -62,6 +64,7 @@ private:
     QHash<QObject *, Context *> m_views;
     QHash<void *, Session *> m_sessions;
     QPointer<QObject> m_activeView;
+    QList<BrowserFileChooserJob *> m_fileChooserJobs;
     QThread m_storeThread;
     DownloadStore *m_store;
     QThreadPool m_io;

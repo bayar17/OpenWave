@@ -1,0 +1,6 @@
+add_executable(powerd main.c)
+target_compile_options(powerd PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(powerd PRIVATE OpenWave::Identity OpenWave::Xml)
+set_target_properties(powerd PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "/usr/lib64;/usr/lib")
+install(TARGETS powerd RUNTIME DESTINATION /System/Services)
+install(FILES org.openwave.Power.conf DESTINATION share/dbus-1/system.d)

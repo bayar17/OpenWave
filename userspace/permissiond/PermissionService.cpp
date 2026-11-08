@@ -60,6 +60,36 @@ bool PermissionService::start(GError **error)
     if (!m_bus) return false;
     m_promptBus = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, error);
     if (!m_promptBus) return false;
+    // OpenRC publishes the protected proof in start_post, after spawning us.
+    // A fast child must not ask appd to authenticate it before that publication.
+    const gint64 deadline = g_get_monotonic_time() + 5000000;
+    while (!openwave_supervised_process(geteuid(), getpid(), "/run/openwave/permissiond.pid")) {
+        if (g_get_monotonic_time() >= deadline) {
+            g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT,
+                "OpenRC did not publish permissiond's supervised process identity");
+            return false;
+        }
+        g_usleep(10000);
+    }
+    if (!bindApplicationRegistry(error)) return false;
+    auto *node = openwave_xml_load_dbus_interface(interface, error);
+    if (!node) return false;
+    static const GDBusInterfaceVTable vtable = {dispatch, nullptr, nullptr, {nullptr}};
+    m_registration = g_dbus_connection_register_object(m_bus, path, node->interfaces[0], &vtable, this, nullptr, error);
+    g_dbus_node_info_unref(node);
+    if (!m_registration) return false;
+    auto *reply = g_dbus_connection_call_sync(m_bus, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+        "RequestName", g_variant_new("(su)", busName, 4u), G_VARIANT_TYPE("(u)"), G_DBUS_CALL_FLAGS_NONE, 1000, nullptr, error);
+    if (!reply) return false;
+    guint result; g_variant_get(reply, "(u)", &result); g_variant_unref(reply);
+    if (result != 1) { g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_EXISTS, "Another permissiond owns the service"); return false; }
+    m_subscription = g_dbus_connection_signal_subscribe(m_bus, "org.freedesktop.DBus", "org.freedesktop.DBus",
+        "NameOwnerChanged", "/org/freedesktop/DBus", nullptr, G_DBUS_SIGNAL_FLAGS_NONE, nameChanged, this, nullptr);
+    m_timer = g_timeout_add(200, tick, this);
+    return true;
+}
+bool PermissionService::bindApplicationRegistry(GError **error)
+{
     char *appOwner = openwave_service_owner(m_bus, "org.openwave.Applications", "/run/openwave/appd.pid", error);
     if (!appOwner) return false;
     m_appOwner = QString::fromUtf8(appOwner); g_free(appOwner);
@@ -91,20 +121,7 @@ bool PermissionService::start(GError **error)
             if (!m_store.set(policy, &failure)) { g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, utf8(failure).constData()); return false; }
         }
     }
-    auto *node = openwave_xml_load_dbus_interface(interface, error);
-    if (!node) return false;
-    static const GDBusInterfaceVTable vtable = {dispatch, nullptr, nullptr, {nullptr}};
-    m_registration = g_dbus_connection_register_object(m_bus, path, node->interfaces[0], &vtable, this, nullptr, error);
-    g_dbus_node_info_unref(node);
-    if (!m_registration) return false;
-    auto *reply = g_dbus_connection_call_sync(m_bus, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
-        "RequestName", g_variant_new("(su)", busName, 4u), G_VARIANT_TYPE("(u)"), G_DBUS_CALL_FLAGS_NONE, 1000, nullptr, error);
-    if (!reply) return false;
-    guint result; g_variant_get(reply, "(u)", &result); g_variant_unref(reply);
-    if (result != 1) { g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_EXISTS, "Another permissiond owns the service"); return false; }
-    m_subscription = g_dbus_connection_signal_subscribe(m_bus, "org.freedesktop.DBus", "org.freedesktop.DBus",
-        "NameOwnerChanged", "/org/freedesktop/DBus", nullptr, G_DBUS_SIGNAL_FLAGS_NONE, nameChanged, this, nullptr);
-    m_timer = g_timeout_add(200, tick, this);
+    qInfo() << "permissiond: authenticated registry" << m_appOwner;
     return true;
 }
 bool PermissionService::identity(const char *sender, PermissionIdentity *id)
@@ -142,6 +159,7 @@ void PermissionService::dispatch(GDBusConnection *, const char *sender, const ch
 
 void PermissionService::method(const char *sender, const char *method, GVariant *args, GDBusMethodInvocation *call)
 {
+    if (m_appOwner.isEmpty()) { fail(call, "The authenticated application registry is unavailable"); return; }
     if (!strcmp(method, "QueryFor")) {
         const char *subject, *permission, *correlation; g_variant_get(args, "(&s&s&s)", &subject, &permission, &correlation);
         PermissionIdentity id;
@@ -158,7 +176,7 @@ void PermissionService::method(const char *sender, const char *method, GVariant 
         if (!identity(subject, &id)) { fail(call, "Application identity is unavailable"); return; }
         request(QString::fromUtf8(subject), id, QString::fromUtf8(permission), true, call); return;
     }
-    if (!strcmp(method, "ValidateLease") || !strcmp(method, "ReleaseLease")) {
+    if (!strcmp(method, "CheckLease") || !strcmp(method, "ValidateLease") || !strcmp(method, "ReleaseLease")) {
         if (!broker(sender)) { fail(call, "Only the file broker may use leases"); return; }
         const char *token, *subject; g_variant_get(args, "(&s&s)", &token, &subject);
         auto lease = m_leases.value(QString::fromUtf8(token));
@@ -172,8 +190,11 @@ void PermissionService::method(const char *sender, const char *method, GVariant 
             okay = policy.state == "granted" || (policy.duration == "once" && policy.state == "not-determined"
                 && policy.expires > QDateTime::currentMSecsSinceEpoch());
         }
-        if (okay || !strcmp(method, "ReleaseLease")) m_leases.remove(QString::fromUtf8(token));
-        if (!strcmp(method, "ValidateLease")) g_dbus_method_invocation_return_value(call, g_variant_new("(b)", okay));
+        // Gallery listing and previews share one request's live grant. Only
+        // final delivery consumes it; cancelling explicitly releases it.
+        if ((okay && !strcmp(method, "ValidateLease")) || !strcmp(method, "ReleaseLease"))
+            m_leases.remove(QString::fromUtf8(token));
+        if (strcmp(method, "ReleaseLease")) g_dbus_method_invocation_return_value(call, g_variant_new("(b)", okay));
         else g_dbus_method_invocation_return_value(call, nullptr);
         return;
     }
@@ -436,8 +457,12 @@ void PermissionService::nameChanged(GDBusConnection *, const char *, const char 
         service->m_leases.clear();
         auto pending = service->m_pending;
         for (const auto &p : pending) service->complete(p, "service_lost", "");
-        // PID 1 restarts us against the new identity registry; never reuse its old session.
-        _exit(1);
+        // Invalidate the old session immediately. OpenRC owns this service;
+        // authenticate the replacement registry rather than relying on PID 1.
+        service->m_watchers.clear();
+        service->m_appOwner.clear();
+        service->m_lifecycle.reset();
+        qWarning() << "permissiond: application registry lost; leases invalidated";
     }
     if (*old && !*next && name[0] == ':') {
         service->m_watchers.remove(QString::fromUtf8(name));
@@ -458,6 +483,15 @@ void PermissionService::nameChanged(GDBusConnection *, const char *, const char 
 gboolean PermissionService::tick(void *data)
 {
     auto *service = static_cast<PermissionService *>(data); const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (service->m_appOwner.isEmpty()) {
+        GError *error = nullptr;
+        if (!service->bindApplicationRegistry(&error)) {
+            service->m_appOwner.clear();
+            service->m_lifecycle.reset();
+        }
+        g_clear_error(&error);
+        return G_SOURCE_CONTINUE;
+    }
     auto pending = service->m_pending;
     for (const auto &p : pending) {
         if (!p->finished && p->deadline <= now) service->complete(p, "timeout", "");

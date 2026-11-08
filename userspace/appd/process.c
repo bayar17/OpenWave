@@ -107,10 +107,68 @@ static void remove_preview(GPid pid)
     g_free(prefix); g_dir_close(dir);
 }
 
+/* Children receive only private, immediately unlinked application-data files.
+ * appd retains descriptors to report a bounded diagnostic tail after exit; apps
+ * never receive write access to the supervisor's evidence files. */
+static gboolean prepare_output(Instance *instance, GError **error)
+{
+    char *cache = g_build_filename(instance->data, "Cache", NULL);
+    int directory = open(cache, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    g_free(cache);
+    struct stat st;
+    if (directory < 0 || fstat(directory, &st) || st.st_uid != instance->uid) {
+        if (directory >= 0) close(directory);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED, "Application output directory is not protected storage");
+        return FALSE;
+    }
+    gboolean okay = TRUE;
+    for (guint i = 0; i < 2 && okay; ++i) {
+        char *uuid = g_uuid_string_random();
+        char *name = g_strdup_printf(".launch-%s", uuid); g_free(uuid);
+        int fd = openat(directory, name, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+        if (fd < 0) okay = FALSE;
+        else {
+            instance->output_fds[i] = fd;
+            okay = !fchown(fd, instance->uid, instance->uid) && !fchmod(fd, 0600);
+            if (unlinkat(directory, name, 0)) okay = FALSE;
+        }
+        g_free(name);
+    }
+    int saved = errno;
+    close(directory);
+    if (!okay) g_set_error(error, G_IO_ERROR, g_io_error_from_errno(saved),
+        "Cannot prepare private application output: %s", g_strerror(saved));
+    return okay;
+}
+
+static void collect_output(Instance *instance)
+{
+    for (guint i = 0; i < 2; ++i) {
+        int fd = instance->output_fds[i];
+        if (fd < 0) continue;
+        struct stat st;
+        if (!fstat(fd, &st) && st.st_size > 0) {
+            char text[8193];
+            off_t offset = st.st_size > 8192 ? st.st_size - 8192 : 0;
+            ssize_t count = pread(fd, text, sizeof(text) - 1, offset);
+            if (count > 0) {
+                text[count] = 0;
+                char *escaped = g_strescape(text, NULL);
+                g_printerr("appd: child appId=%s pid=%d %s=\"%s\"\n", instance->app->id,
+                    instance->pid, i ? "stderr" : "stdout", escaped);
+                g_free(escaped);
+            }
+        }
+        close(fd); instance->output_fds[i] = -1;
+    }
+}
+
 static void exited(GPid pid, gint status, gpointer data)
 {
     Instance *instance = data; Manager *m = instance->manager; App *app = instance->app;
     gboolean expected = instance->stopping || (WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    g_message("appd: exited appId=%s pid=%d wait-status=%d stopping=%s", app->id,
+        pid, status, instance->stopping ? "true" : "false");
     if (instance->deadline) g_source_remove(instance->deadline);
     /* The group belongs exclusively to this launch, including WPE helpers. */
     kill(-pid, SIGKILL);
@@ -122,6 +180,7 @@ static void exited(GPid pid, gint status, gpointer data)
     g_spawn_close_pid(pid);
     appd_services_event(m, "ApplicationTerminated", app, instance);
     g_ptr_array_remove_fast(m->instances, instance);
+    collect_output(instance);
     appd_release_isolation(instance); g_free(instance->cgroup); g_free(instance);
     if (expected) appd_emit(m, "ApplicationStopped", g_variant_new("(si)", app->id, status));
     else appd_emit(m, "ApplicationCrashed", g_variant_new("(si)", app->id, status));
@@ -304,11 +363,11 @@ static void child_failure(const char *message)
 static void child_setup(gpointer data)
 {
     Setup *setup = data; Instance *instance = setup->instance;
-    if (setsid() < 0) _exit(126);
+    if (setsid() < 0) child_failure("appd: cannot create application process group\n");
     sigset_t mask; sigemptyset(&mask); sigprocmask(SIG_SETMASK, &mask, NULL);
     if (setup->cgroup_procs) {
         int fd = open(setup->cgroup_procs, O_WRONLY | O_CLOEXEC | O_NOFOLLOW);
-        if (fd < 0 || write(fd, "0", 1) != 1) _exit(126);
+        if (fd < 0 || write(fd, "0", 1) != 1) child_failure("appd: cannot join application cgroup\n");
         close(fd);
     }
     umask(0077);
@@ -316,8 +375,8 @@ static void child_setup(gpointer data)
     if (appd_enter_namespace(instance)) child_failure("appd: cannot enter prepared namespaces\n");
     gid_t render = instance->render_gid;
     if (geteuid() == 0 && (setgroups(render ? 1 : 0, render ? &render : NULL) || setgid(instance->uid) || setuid(instance->uid))) child_failure("appd: cannot drop application credentials\n");
-    if (geteuid() != instance->uid || getegid() != instance->uid) _exit(126);
-    if (prctl(PR_SET_PDEATHSIG, SIGKILL) < 0 || getppid() != setup->parent) _exit(126);
+    if (geteuid() != instance->uid || getegid() != instance->uid) child_failure("appd: application credential verification failed\n");
+    if (prctl(PR_SET_PDEATHSIG, SIGKILL) < 0 || getppid() != setup->parent) child_failure("appd: application supervisor changed during launch\n");
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0 || appd_enforce_isolation(instance)) child_failure("appd: cannot enforce application Landlock policy\n");
     if (!appd_trusted_app(instance->app) && appd_install_seccomp()) child_failure("appd: cannot install application syscall filter\n");
 }
@@ -329,11 +388,13 @@ static char **environment(Manager *m, App *app, Instance *instance)
     for (guint i = 0; names[i]; ++i)
         if (g_getenv(names[i])) env = g_environ_setenv(env, names[i], g_getenv(names[i]), TRUE);
     const char *pairs[][2] = {{"PATH", "/usr/bin:/bin"}, {"QT_QPA_PLATFORM", "wayland"},
-        {"QT_WAYLAND_DISABLE_WINDOWDECORATION", "1"}, {"WAYLAND_DISPLAY", "/run/ocean/wayland-0"},
+        {"QT_WAYLAND_DISABLE_WINDOWDECORATION", "1"},
         {"QSG_RHI_BACKEND", "opengl"}, {"DBUS_SYSTEM_BUS_ADDRESS", "unix:path=/run/dbus/system_bus_socket"},
         {"OPENWAVE_APP_ID", app->id}, {"HOME", m->home}, {"USER", m->user}, {"LOGNAME", m->user},
         {"XDG_RUNTIME_DIR", instance->runtime}, {"OPENWAVE_SESSION_USER", m->user}};
     for (guint i = 0; i < G_N_ELEMENTS(pairs); ++i) env = g_environ_setenv(env, pairs[i][0], pairs[i][1], TRUE);
+    char *wayland = g_build_filename(m->runtime, "wayland-0", NULL);
+    env = g_environ_setenv(env, "WAYLAND_DISPLAY", wayland, TRUE); g_free(wayland);
     char *session = appd_trusted_app(app) ? g_strdup_printf("unix:path=%s/bus", m->runtime)
         : g_strdup("unix:path=/run/openwave/session-bus");
     env = g_environ_setenv(env, "DBUS_SESSION_BUS_ADDRESS", session, TRUE); g_free(session);
@@ -378,6 +439,7 @@ gboolean appd_launch(Manager *m, App *app, char **arguments, GError **error)
     if (existing && app->single) { appd_activate(m, existing, arguments); return TRUE; }
     if (!appd_validate_bundle(app, error)) return FALSE;
     Instance *instance = g_new0(Instance, 1); instance->manager = m; instance->app = app;
+    instance->output_fds[0] = instance->output_fds[1] = -1;
     if (!appd_prepare_isolation(m, instance, error)) {
         appd_release_isolation(instance); g_free(instance); return FALSE;
     }
@@ -420,13 +482,14 @@ gboolean appd_launch(Manager *m, App *app, char **arguments, GError **error)
     Setup setup = {m, instance, getpid(), procs};
     appd_state(m, app, "Starting", "");
     const int targets[] = {3, 4, 5, 6};
-    gboolean okay = g_spawn_async_with_pipes_and_fds("/", (const char *const *)argv->pdata,
-        (const char *const *)env, G_SPAWN_DO_NOT_REAP_CHILD, child_setup, &setup, -1, -1, -1,
+    gboolean okay = prepare_output(instance, error) && g_spawn_async_with_pipes_and_fds("/", (const char *const *)argv->pdata,
+        (const char *const *)env, G_SPAWN_DO_NOT_REAP_CHILD, child_setup, &setup, -1, instance->output_fds[0], instance->output_fds[1],
         instance->namespace_fds, targets, instance->namespace_sandboxed ? 4 : 0,
         &instance->pid, NULL, NULL, NULL, error);
     appd_close_namespace(instance);
     g_free(procs); g_strfreev(env); g_ptr_array_unref(argv);
     if (!okay) {
+        collect_output(instance);
         kill_cgroup(instance->cgroup); appd_release_isolation(instance); g_free(instance->cgroup); g_free(instance);
         appd_state(m, app, "Stopped", error && *error ? (*error)->message : "Launch failed"); return FALSE;
     }

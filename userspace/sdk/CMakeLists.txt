@@ -35,9 +35,10 @@ install(TARGETS openwave-xml EXPORT OpenWaveSDKTargets LIBRARY DESTINATION "${ap
 install(FILES "${clients}/xml/OpenWaveXml.h" DESTINATION include/OpenWave)
 add_library(openwave-identity SHARED "${clients}/security/OpenWaveIdentity.c")
 add_library(OpenWave::Identity ALIAS openwave-identity)
+find_library(OPENWAVE_IDENTITY_SELINUX_LIBRARY NAMES selinux REQUIRED)
 set_target_properties(openwave-identity PROPERTIES EXPORT_NAME Identity VERSION ${PROJECT_VERSION} SOVERSION 0 AUTOMOC OFF
     BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "$ORIGIN;$ORIGIN/../lib;$ORIGIN/../lib64")
-target_link_libraries(openwave-identity PUBLIC openwave-xml)
+target_link_libraries(openwave-identity PUBLIC openwave-xml PRIVATE "${OPENWAVE_IDENTITY_SELINUX_LIBRARY}")
 target_include_directories(openwave-identity PUBLIC "$<BUILD_INTERFACE:${clients}/security>")
 install(TARGETS openwave-identity EXPORT OpenWaveSDKTargets LIBRARY DESTINATION "${api_libdir}")
 install(FILES "${clients}/security/OpenWaveIdentity.h" DESTINATION include/OpenWave)
@@ -56,7 +57,7 @@ function(openwave_client component name)
         "$<INSTALL_INTERFACE:${api_includedir}>" "$<INSTALL_INTERFACE:${api_includedir}/OpenWave>")
     target_link_libraries(${name} PUBLIC Qt6::Core)
     install(TARGETS ${name} EXPORT OpenWaveSDKTargets
-        LIBRARY DESTINATION "${api_libdir}")
+        LIBRARY DESTINATION "${api_libdir}" COMPONENT "${component}")
 endfunction()
 function(openwave_bus name)
     target_include_directories(${name} PRIVATE
@@ -114,12 +115,17 @@ if(OPENWAVE_BUILD_WEB)
     set(web_qmldir "sysroot/${OPENWAVE_TARGET_TRIPLE}/usr/qml/OpenWave/Web")
     set_target_properties(openwave-webplugin PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE
         INSTALL_RPATH "$ORIGIN/../../../lib64;$ORIGIN/../../../lib")
-    install(TARGETS openwave-webplugin LIBRARY DESTINATION "${web_qmldir}")
+    # Permit repairing the Web component without replacing unrelated SDK APIs.
+    install(TARGETS openwave-web EXPORT OpenWaveSDKWebTargets
+        LIBRARY DESTINATION "${api_libdir}" COMPONENT Web)
+    install(EXPORT OpenWaveSDKWebTargets NAMESPACE OpenWave::
+        DESTINATION "${api_cmakedir}" COMPONENT Web)
+    install(TARGETS openwave-webplugin LIBRARY DESTINATION "${web_qmldir}" COMPONENT Web)
     install(FILES "${CMAKE_CURRENT_BINARY_DIR}/qml/OpenWave/Web/qmldir"
         "${CMAKE_CURRENT_BINARY_DIR}/qml/OpenWave/Web/openwave-web.qmltypes"
         "${clients}/web/WebView.qml"
-        DESTINATION "${web_qmldir}")
-    install(FILES "${clients}/web/WebRuntime.h" "${clients}/web/WebInput.h" "${clients}/web/WebsiteIconFetcher.h" DESTINATION include/OpenWave)
+        DESTINATION "${web_qmldir}" COMPONENT Web)
+    install(FILES "${clients}/web/WebRuntime.h" "${clients}/web/WebInput.h" "${clients}/web/WebsiteIconFetcher.h" DESTINATION include/OpenWave COMPONENT Web)
 endif()
 openwave_client(Prompts openwave-prompts
     "${clients}/prompt-client/OpenWavePromptClient.cpp"

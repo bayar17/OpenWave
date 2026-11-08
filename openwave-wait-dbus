@@ -1,0 +1,47 @@
+#!/bin/sh
+# Wait for explicitly named D-Bus services to acquire their bus names.
+# Used by OpenRC readiness checks, not as a privileged authorization bypass.
+set -eu
+
+case "${1:-}" in
+    system) bus_option=--system; bus_name=system ;;
+    session) bus_option=--session; bus_name=session ;;
+    *) printf 'usage: %s {system|session} BUS_NAME [BUS_NAME ...]\n' "$0" >&2; exit 2 ;;
+esac
+shift
+if [ "$#" -eq 0 ]; then
+    printf 'error: at least one D-Bus name is required\n' >&2
+    exit 2
+fi
+
+for name do
+    case "$name" in
+        ''|*[!A-Za-z0-9_.-]*)
+            printf 'error: invalid D-Bus name: %s\n' "$name" >&2
+            exit 2
+            ;;
+    esac
+done
+
+attempt=1
+while [ "$attempt" -le 10 ]; do
+    missing=
+    for name do
+        # GetNameOwner fails if no process currently owns this name.
+        # A successful connection to the bus alone is not sufficient.
+        if ! /usr/bin/gdbus call "$bus_option" --timeout 1 \
+            --dest org.freedesktop.DBus \
+            --object-path /org/freedesktop/DBus \
+            --method org.freedesktop.DBus.GetNameOwner \
+            "$name" >/dev/null 2>&1; then
+            missing="$missing $name"
+        fi
+    done
+    [ -z "$missing" ] && exit 0
+    [ "$attempt" -eq 10 ] && break
+    attempt=$((attempt + 1))
+    /bin/sleep 0.2
+done
+
+printf 'timed out waiting for %s bus names:%s\n' "$bus_name" "$missing" >&2
+exit 1

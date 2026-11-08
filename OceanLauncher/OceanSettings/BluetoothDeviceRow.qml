@@ -1,4 +1,5 @@
 import QtQuick
+import OpenWave.Fonts 1.0
 
 Item {
     id: root
@@ -31,14 +32,14 @@ Item {
         Text {
             objectName: "bluetoothDeviceTitle"
             width: parent.width; text: root.deviceLabel; textFormat: Text.PlainText
-            font.family: "Inter"; font.pixelSize: root.largeText ? 42 : 36
+            font.family: Fonts.family; font.pixelSize: root.largeText ? 42 : 36
             font.weight: Font.DemiBold; color: "white"; elide: Text.ElideRight
         }
         Text {
             objectName: "bluetoothConnectedStatus"
             visible: root.statusText.length > 0
             width: parent.width; text: root.statusText
-            font.family: "Inter"; font.pixelSize: root.largeText ? 34 : 30
+            font.family: Fonts.family; font.pixelSize: root.largeText ? 34 : 30
             font.weight: Font.DemiBold; color: "white"
         }
     }

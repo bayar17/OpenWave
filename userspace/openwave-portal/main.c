@@ -5,12 +5,15 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pwd.h>
+#include <grp.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/fsuid.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <linux/openat2.h>
+#include <dirent.h>
 
 #define BUS "org.openwave.portal"
 #define PATH "/org/openwave/portal/FileChooser"
@@ -24,9 +27,12 @@ typedef struct {
     char *application, *request_identifier, *error;
     char **mime_types;
     GPtrArray *paths;
-    guint uid, pid, status;
+    guint uid, user_uid, pid, status;
     char *permission_owner, *lease;
     gboolean authorizing;
+    gboolean image_sources, gallery_loaded;
+    char *image_source;
+    GHashTable *gallery;
 } Request;
 typedef struct {
     GDBusConnection *bus;
@@ -47,12 +53,16 @@ static void request_free(Request *request)
     g_free(request->suggested); g_free(request->parent);
     g_free(request->application); g_free(request->request_identifier);
     g_free(request->error); g_strfreev(request->mime_types);
+    g_free(request->image_source);
+    if (request->gallery) g_hash_table_unref(request->gallery);
     g_ptr_array_free(request->paths, TRUE);
     g_free(request);
 }
 
 static void fail(GDBusMethodInvocation *call, const char *kind, const char *message)
 {
+    g_warning("portal: method=%s rejected error=%s message=%s",
+        g_dbus_method_invocation_get_method_name(call), kind, message);
     char *name = g_strconcat(ERROR_PREFIX, kind, NULL);
     g_dbus_method_invocation_return_dbus_error(call, name, message);
     g_free(name);
@@ -116,16 +126,14 @@ static char *canonical_user_root(Service *service, guint uid)
     char *users = g_build_filename(data, "Users", NULL);
     char *requested = g_build_filename(users, user->pw_name, NULL);
     struct stat info;
-    gboolean safe = (lstat(data, &info) != 0 || !S_ISLNK(info.st_mode))
-        && (lstat(users, &info) != 0 || !S_ISLNK(info.st_mode))
-        && (lstat(requested, &info) != 0 || !S_ISLNK(info.st_mode));
-    if (safe && g_mkdir_with_parents(requested, 0700) != 0) safe = FALSE;
-    if (safe && !service->test_mode) {
-        safe = chown(data, 0, 0) == 0 && chmod(data, 0755) == 0
-            && chown(users, 0, 0) == 0 && chmod(users, 0755) == 0
-            && chown(requested, uid, user->pw_gid) == 0
-            && chmod(requested, 0711) == 0;
-    }
+    /* OpenRC/appd provision the profile. The broker only verifies it; it
+     * must not chown or chmod the user's home on every file request. */
+    gboolean safe = !lstat(data, &info) && S_ISDIR(info.st_mode)
+        && (service->test_mode || (!info.st_uid && !(info.st_mode & 0022)))
+        && !lstat(users, &info) && S_ISDIR(info.st_mode)
+        && (service->test_mode || (!info.st_uid && !(info.st_mode & 0022)))
+        && !lstat(requested, &info) && S_ISDIR(info.st_mode)
+        && (service->test_mode || (info.st_uid == uid && !(info.st_mode & 0022)));
     char *result = safe ? realpath(requested, NULL) : NULL;
     g_free(data); g_free(users); g_free(requested);
     return result;
@@ -162,6 +170,28 @@ static void discard_request(Service *service, Request *request)
     request_free(request);
 }
 
+typedef struct { uid_t uid; gid_t gid; } FilesystemCredentials;
+
+static void restore_filesystem_credentials(FilesystemCredentials previous)
+{
+    setfsuid(previous.uid); setfsgid(previous.gid);
+    if ((uid_t)setfsuid((uid_t)-1) != previous.uid || (gid_t)setfsgid((gid_t)-1) != previous.gid)
+        g_error("portal: could not restore filesystem credentials");
+}
+
+static gboolean use_user_filesystem(guint uid, int root_fd, FilesystemCredentials *previous)
+{
+    struct stat info;
+    struct passwd *user = getpwuid(uid);
+    if (!user || fstat(root_fd, &info) || info.st_uid != uid) { errno = EACCES; return FALSE; }
+    previous->gid = setfsgid(user->pw_gid);
+    previous->uid = setfsuid(uid);
+    if ((uid_t)setfsuid((uid_t)-1) != uid || (gid_t)setfsgid((gid_t)-1) != user->pw_gid) {
+        restore_filesystem_credentials(*previous); errno = EACCES; return FALSE;
+    }
+    return TRUE;
+}
+
 static int open_beneath(Request *request, const char *path, int flags, mode_t mode)
 {
     if (!within(request->root, path)) { errno = EACCES; return -1; }
@@ -174,8 +204,19 @@ static int open_beneath(Request *request, const char *path, int flags, mode_t mo
         .mode = mode,
         .resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS,
     };
+    /* A granted download belongs to the session user, not the broker or the
+     * application's private UID. Use that user's DAC permissions during the
+     * exclusive creation as well; a portal grant cannot bypass directory DAC.
+     * Linux filesystem credentials are local to this synchronous thread. */
+    FilesystemCredentials previous;
+    if ((flags & O_CREAT) && !use_user_filesystem(request->user_uid, root_fd, &previous)) {
+        close(root_fd); return -1;
+    }
     int fd = syscall(SYS_openat2, root_fd, relative, &how, sizeof(how));
+    int saved_errno = errno;
+    if (flags & O_CREAT) restore_filesystem_credentials(previous);
     close(root_fd);
+    errno = saved_errno;
     return fd;
 }
 
@@ -205,8 +246,11 @@ static gboolean allowed_type(Request *request, const char *path)
     char *guessed = content_type ? g_content_type_get_mime_type(content_type) : NULL;
     const char *mime = known ? known : guessed;
     gboolean accepted = FALSE;
-    for (char **allowed = request->mime_types; *allowed; ++allowed)
-        if (g_str_equal(*allowed, mime)) { accepted = TRUE; break; }
+    for (char **allowed = request->mime_types; mime && *allowed; ++allowed) {
+        const char *star = strchr(*allowed, '*');
+        if (g_str_equal(*allowed, mime) || (star && !star[1]
+            && !strncmp(*allowed, mime, star - *allowed))) { accepted = TRUE; break; }
+    }
     g_free(content_type); g_free(guessed);
     return accepted;
 }
@@ -241,14 +285,162 @@ static char *validated_path(Request *request, const char *path, gboolean save)
     return canonical;
 }
 
+typedef struct {
+    char *path, *name, *album, *mime;
+    dev_t device;
+    ino_t inode;
+} GalleryEntry;
+
+static void gallery_entry_free(gpointer value)
+{
+    GalleryEntry *entry = value;
+    g_free(entry->path); g_free(entry->name); g_free(entry->album); g_free(entry->mime); g_free(entry);
+}
+
+static gboolean lease_valid(Service *service, Request *request)
+{
+    if (service->test_mode) return TRUE;
+    char *owner = openwave_service_owner(service->bus, "org.openwave.Permissions", "/run/openwave/permissiond.pid", NULL);
+    GVariant *reply = owner && request->lease && !g_strcmp0(owner, request->permission_owner)
+        ? g_dbus_connection_call_sync(service->bus, owner, "/org/openwave/Permissions", "org.openwave.Permissions1", "CheckLease",
+            g_variant_new("(ss)", request->lease, request->sender), G_VARIANT_TYPE("(b)"), 0, 1500, NULL, NULL) : NULL;
+    gboolean valid = FALSE;
+    if (reply) { g_variant_get(reply, "(b)", &valid); g_variant_unref(reply); }
+    g_free(owner); return valid;
+}
+
+static const char *gallery_mime(int fd)
+{
+    unsigned char h[16]; ssize_t size = pread(fd, h, sizeof(h), 0);
+    if (size >= 8 && !memcmp(h, "\x89PNG\r\n\x1a\n", 8)) return "image/png";
+    if (size >= 3 && h[0] == 0xff && h[1] == 0xd8 && h[2] == 0xff) return "image/jpeg";
+    if (size >= 12 && !memcmp(h, "RIFF", 4) && !memcmp(h + 8, "WEBP", 4)) return "image/webp";
+    if (size >= 6 && (!memcmp(h, "GIF87a", 6) || !memcmp(h, "GIF89a", 6))) return "image/gif";
+    if (size >= 2 && !memcmp(h, "BM", 2)) return "image/bmp";
+    return NULL;
+}
+
+/* Enumerate only the session user's Pictures and imported Photos library.
+ * Each directory is pinned beneath the verified root without following links.
+ * A request's opaque tokens never contain or accept caller-supplied paths. */
+static void scan_gallery(Request *request, const char *path, const char *album, guint depth, guint *visited)
+{
+    if (depth > 6 || *visited >= 4096 || g_hash_table_size(request->gallery) >= 1000) return;
+    int fd = open_beneath(request, path, O_RDONLY | O_DIRECTORY, 0);
+    if (fd < 0) return;
+    DIR *dir = fdopendir(fd);
+    if (!dir) { close(fd); return; }
+    struct dirent *item;
+    while (*visited < 4096 && g_hash_table_size(request->gallery) < 1000 && (item = readdir(dir))) {
+        if (!safe_component(item->d_name) || !g_utf8_validate(item->d_name, -1, NULL)) continue;
+        ++*visited;
+        struct stat st;
+        if (fstatat(dirfd(dir), item->d_name, &st, AT_SYMLINK_NOFOLLOW)) continue;
+        char *child = g_build_filename(path, item->d_name, NULL);
+        if (S_ISDIR(st.st_mode)) scan_gallery(request, child, album, depth + 1, visited);
+        else if (S_ISREG(st.st_mode) && st.st_size > 0 && st.st_size <= 64 * 1024 * 1024) {
+            int image = open_beneath(request, child, O_RDONLY, 0);
+            struct stat opened;
+            const char *mime = image >= 0 ? gallery_mime(image) : NULL;
+            if (mime && !fstat(image, &opened) && opened.st_dev == st.st_dev && opened.st_ino == st.st_ino
+                && allowed_type(request, child)) {
+                GalleryEntry *entry = g_new0(GalleryEntry, 1);
+                entry->path = g_strdup(child); entry->name = g_strdup(item->d_name);
+                entry->album = g_strdup(album); entry->mime = g_strdup(mime);
+                entry->device = st.st_dev; entry->inode = st.st_ino;
+                g_hash_table_insert(request->gallery, g_uuid_string_random(), entry);
+            }
+            if (image >= 0) close(image);
+        }
+        g_free(child);
+    }
+    closedir(dir);
+}
+
+static void load_gallery(Request *request)
+{
+    if (request->gallery_loaded) return;
+    request->gallery_loaded = TRUE;
+    request->gallery = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, gallery_entry_free);
+    guint visited = 0;
+    char *pictures = g_build_filename(request->root, "Pictures", NULL);
+    scan_gallery(request, pictures, "Pictures", 0, &visited); g_free(pictures);
+    char *imports = g_build_filename(request->root, ".DataLocation/Applications/com.openwave.photos/Data/Gallery/Images", NULL);
+    scan_gallery(request, imports, "Selected photos", 0, &visited); g_free(imports);
+}
+
+static int open_gallery_entry(Request *request, GalleryEntry *entry)
+{
+    if (!entry) { errno = EACCES; return -1; }
+    int fd = open_beneath(request, entry->path, O_RDONLY, 0);
+    struct stat st;
+    if (fd >= 0 && (!fstat(fd, &st) && S_ISREG(st.st_mode)
+        && st.st_dev == entry->device && st.st_ino == entry->inode
+        && st.st_size > 0 && st.st_size <= 64 * 1024 * 1024 && gallery_mime(fd))) return fd;
+    if (fd >= 0) close(fd);
+    return -1;
+}
+
+static void gallery_method(Service *service, Request *request, const char *sender,
+    const char *method, GVariant *parameters, GDBusMethodInvocation *call)
+{
+    if (!is_backend(service, sender)) { fail(call, "Unauthorized", "Only the registered backend may access gallery previews."); return; }
+    if (!request->image_sources || request->status != PENDING || !lease_valid(service, request)) {
+        fail(call, "PermissionDenied", "A pending image request with a live file grant is required."); return;
+    }
+    load_gallery(request);
+    if (!strcmp(method, "ListGallery")) {
+        GVariantBuilder items; g_variant_builder_init(&items, G_VARIANT_TYPE("a(ssss)"));
+        GHashTableIter iter; gpointer token, value;
+        g_hash_table_iter_init(&iter, request->gallery);
+        while (g_hash_table_iter_next(&iter, &token, &value)) {
+            GalleryEntry *entry = value;
+            g_variant_builder_add(&items, "(ssss)", (char *)token, entry->name, entry->album, entry->mime);
+        }
+        g_dbus_method_invocation_return_value(call, g_variant_new("(@a(ssss))", g_variant_builder_end(&items))); return;
+    }
+    if (!strcmp(method, "OpenGalleryItem")) {
+        const char *id, *token; g_variant_get(parameters, "(&o&s)", &id, &token);
+        int fd = open_gallery_entry(request, g_hash_table_lookup(request->gallery, token));
+        GUnixFDList *fds = g_unix_fd_list_new();
+        int handle = fd < 0 ? -1 : g_unix_fd_list_append(fds, fd, NULL);
+        if (fd >= 0) close(fd);
+        if (handle < 0) fail(call, "InvalidSelection", "The gallery item is unavailable or changed.");
+        else g_dbus_method_invocation_return_value_with_unix_fd_list(call, g_variant_new("(h)", handle), fds);
+        g_object_unref(fds); return;
+    }
+    const char *id; guint status; char **tokens;
+    g_variant_get(parameters, "(&ou^as)", &id, &status, &tokens);
+    guint count = g_strv_length(tokens);
+    if ((status != SELECTED && status != CANCELLED) || (status == SELECTED && !count)
+        || count > (!strcmp(request->mode, "OpenFiles") ? 32u : 1u)) {
+        fail(call, "InvalidRequest", "Invalid gallery selection count or status."); g_strfreev(tokens); return;
+    }
+    g_ptr_array_set_size(request->paths, 0);
+    for (guint i = 0; status == SELECTED && i < count; ++i) {
+        GalleryEntry *entry = g_hash_table_lookup(request->gallery, tokens[i]);
+        int fd = open_gallery_entry(request, entry);
+        if (fd < 0) {
+            g_ptr_array_set_size(request->paths, 0); g_strfreev(tokens);
+            fail(call, "InvalidSelection", "The gallery item is unavailable or changed."); return;
+        }
+        close(fd); g_ptr_array_add(request->paths, g_strdup(entry->path));
+    }
+    g_strfreev(tokens); end_request(service, request, status, NULL);
+    g_dbus_method_invocation_return_value(call, NULL);
+}
+
 static gboolean valid_mimes(char **mimes)
 {
     if (!mimes) return TRUE;
     if (g_strv_length(mimes) > 32) return FALSE;
     for (char **item = mimes; *item; ++item) {
         if (strlen(*item) > 128 || !strchr(*item, '/')) return FALSE;
+        const char *slash = strchr(*item, '/');
+        if (slash == *item || !slash[1] || strchr(slash + 1, '/')) return FALSE;
         for (const char *p = *item; *p; ++p)
-            if (!(g_ascii_isalnum(*p) || strchr("/-.+", *p))) return FALSE;
+            if (!(g_ascii_isalnum(*p) || strchr("/-.+", *p)
+                || (*p == '*' && p == slash + 1 && !p[1]))) return FALSE;
     }
     return TRUE;
 }
@@ -264,11 +456,12 @@ static gboolean valid_options(GVariant *options)
         if (g_str_equal(key, "title") || g_str_equal(key, "muted_title")
             || g_str_equal(key, "primary_title") || g_str_equal(key, "initial_directory")
             || g_str_equal(key, "suggested_filename") || g_str_equal(key, "parent_window")
-            || g_str_equal(key, "request_identifier") || g_str_equal(key, "directory_token"))
+            || g_str_equal(key, "request_identifier") || g_str_equal(key, "directory_token")
+            || g_str_equal(key, "image_source"))
             valid = g_variant_is_of_type(value, G_VARIANT_TYPE_STRING);
         else if (g_str_equal(key, "mime_types"))
             valid = g_variant_is_of_type(value, G_VARIANT_TYPE("as"));
-        else if (g_str_equal(key, "multiple"))
+        else if (g_str_equal(key, "multiple") || g_str_equal(key, "image_sources"))
             valid = g_variant_is_of_type(value, G_VARIANT_TYPE_BOOLEAN);
         g_variant_unref(value);
         if (!valid) return FALSE;
@@ -343,15 +536,22 @@ static char *remember_directory(Service *service, Request *request)
     if (!okay) g_clear_pointer(&token, g_free);
     return token;
 }
-static char *download_directory(Service *service, const char *token, const char *app, const char *root)
+static char *download_directory(Service *service, const char *token, const char *app, const char *root, guint uid)
 {
     if (!token || !*token) {
-        char *path = g_build_filename(root, "Downloads", NULL);
-        if (g_mkdir_with_parents(path, 0700)) { g_free(path); return NULL; }
-        Request request = {.root = (char *)root};
-        int fd = open_beneath(&request, path, O_RDONLY | O_DIRECTORY, 0);
-        if (fd < 0) g_clear_pointer(&path, g_free); else close(fd);
-        return path;
+        int root_fd = open(root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (root_fd < 0) return NULL;
+        FilesystemCredentials previous;
+        if (!use_user_filesystem(uid, root_fd, &previous)) { close(root_fd); return NULL; }
+        gboolean okay = !mkdirat(root_fd, "Downloads", 0700) || errno == EEXIST;
+        struct open_how how = {.flags = O_RDONLY | O_DIRECTORY | O_CLOEXEC,
+            .resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS};
+        int fd = okay ? syscall(SYS_openat2, root_fd, "Downloads", &how, sizeof(how)) : -1;
+        struct stat info;
+        okay = fd >= 0 && !fstat(fd, &info) && info.st_uid == uid;
+        if (fd >= 0) close(fd);
+        restore_filesystem_credentials(previous); close(root_fd);
+        return okay ? g_build_filename(root, "Downloads", NULL) : NULL;
     }
     GKeyFile *file = directory_store(); if (!file) return NULL;
     char *owner = g_key_file_get_string(file, token, "Application", NULL);
@@ -384,13 +584,17 @@ static void authorized(GObject *source, GAsyncResult *result, gpointer data)
         const char *lease; g_variant_get(reply, "(&s)", &lease);
         if (request && request->status == PENDING) {
             request->lease = g_strdup(lease); request->permission_owner = g_strdup(auth->owner);
+            g_message("portal: authorized request=%s appId=%s mode=%s", request->id, request->application, request->mode);
             if (!strcmp(request->mode, "CreateFile")) {
                 char *path = g_build_filename(request->initial, request->suggested, NULL);
                 g_ptr_array_add(request->paths, path); end_request(service, request, SELECTED, NULL);
             }
         } else release_lease(service, auth->owner, lease, auth->sender);
         g_variant_unref(reply);
-    } else if (request && request->status == PENDING) end_request(service, request, FAILED, "File access was not authorized.");
+    } else if (request && request->status == PENDING) {
+        g_warning("portal: authorization failed request=%s reason=%s", request->id, error ? error->message : "No reply");
+        end_request(service, request, FAILED, "File access was not authorized.");
+    }
     g_clear_error(&error); g_free(auth->id); g_free(auth->owner); g_free(auth->sender); g_free(auth);
 }
 static void authorize(Service *service, Request *request)
@@ -442,7 +646,8 @@ static void open_request(Service *service, const char *sender, const char *mode,
     }
     const char *title = NULL, *muted_title = NULL, *primary_title = NULL;
     const char *initial = NULL, *suggested = NULL, *parent = NULL;
-    const char *identifier = NULL;
+    const char *identifier = NULL, *image_source = NULL;
+    gboolean image_sources = FALSE;
     g_variant_lookup(options, "title", "&s", &title);
     g_variant_lookup(options, "muted_title", "&s", &muted_title);
     g_variant_lookup(options, "primary_title", "&s", &primary_title);
@@ -450,6 +655,8 @@ static void open_request(Service *service, const char *sender, const char *mode,
     g_variant_lookup(options, "suggested_filename", "&s", &suggested);
     g_variant_lookup(options, "parent_window", "&s", &parent);
     g_variant_lookup(options, "request_identifier", "&s", &identifier);
+    g_variant_lookup(options, "image_source", "&s", &image_source);
+    g_variant_lookup(options, "image_sources", "b", &image_sources);
     char **mimes = NULL;
     g_variant_lookup(options, "mime_types", "^as", &mimes);
     gboolean multiple = FALSE;
@@ -459,12 +666,15 @@ static void open_request(Service *service, const char *sender, const char *mode,
         && (!primary_title || strlen(primary_title) <= 128)
         && (!parent || strlen(parent) <= 128)
         && (!identifier || strlen(identifier) <= 128)
+        && (!image_source || !strcmp(image_source, "files") || !strcmp(image_source, "gallery"))
         && (!suggested || safe_component(suggested)) && valid_mimes(mimes)
         && (!multiple || g_str_equal(mode, "OpenFile") || g_str_equal(mode, "OpenFiles"));
     const char *directory_token = NULL;
     g_variant_lookup(options, "directory_token", "&s", &directory_token);
-    char *initial_path = !strcmp(mode, "CreateFile")
-        ? download_directory(service, directory_token, verified_app, root)
+    g_autofree char *downloads = g_build_filename(root, "Downloads", NULL);
+    gboolean default_save = !strcmp(mode, "SaveFile") && initial && !strcmp(initial, downloads);
+    char *initial_path = (!strcmp(mode, "CreateFile") || default_save)
+        ? download_directory(service, default_save ? NULL : directory_token, verified_app, root, user_uid)
         : initial && *initial ? realpath(initial, NULL) : g_strdup(root);
     if (!strcmp(mode, "CreateFile") && (!suggested || !*suggested || (directory_token && strlen(directory_token) > 128))) valid = FALSE;
     if (!initial_path || !within(root, initial_path)
@@ -500,8 +710,12 @@ static void open_request(Service *service, const char *sender, const char *mode,
     request->application = service->test_mode ? g_path_get_basename(executable)
                                               : g_strdup(verified_app);
     request->mime_types = mimes;
+    for (char **mime = mimes; mime && *mime; ++mime)
+        if (g_str_has_prefix(*mime, "image/")) image_sources = TRUE;
+    request->image_sources = image_sources && (!strcmp(mode, "OpenFile") || !strcmp(mode, "OpenFiles"));
+    request->image_source = g_strdup(image_source ? image_source : "files");
     request->paths = g_ptr_array_new_with_free_func(g_free);
-    request->uid = uid; request->pid = pid;
+    request->uid = uid; request->user_uid = user_uid; request->pid = pid;
     char *uuid = g_uuid_string_random();
     for (char *p = uuid; *p; ++p) if (*p == '-') *p = '_';
     request->id = g_strdup_printf("/org/openwave/portal/request/r%s", uuid);
@@ -581,11 +795,13 @@ static void method_call(GDBusConnection *bus, const char *sender, const char *ob
     if (g_str_equal(method, "RegisterBackend")) {
         guint uid = 0, pid = 0;
         char *executable = NULL;
+        struct passwd *ocean = service->test_mode ? NULL : getpwnam("ocean");
+        guint backend_uid = service->test_mode ? getuid() : (ocean ? ocean->pw_uid : G_MAXUINT);
         gboolean okay = credentials(service, sender, &uid, &pid)
-            && uid == (service->test_mode ? getuid() : 0)
+            && (service->test_mode || ocean) && uid == backend_uid
             && (executable = executable_for_pid(pid))
             && g_str_equal(executable, service->backend_executable)
-            && (service->test_mode || openwave_supervised_process(uid, pid, "/run/openwave/ocean.pid"));
+            && (service->test_mode || openwave_supervised_process_uid(uid, pid, "/run/openwave/ocean.pid", backend_uid));
         g_free(executable);
         if (!okay) { fail(call, "Unauthorized", "Only Ocean may provide the file chooser."); return; }
         if (service->backend_sender && !g_str_equal(sender, service->backend_sender)) {
@@ -593,6 +809,7 @@ static void method_call(GDBusConnection *bus, const char *sender, const char *ob
         }
         g_free(service->backend_sender);
         service->backend_sender = g_strdup(sender);
+        g_message("portal: backend authenticated uid=%u pid=%u", uid, pid);
         g_dbus_method_invocation_return_value(call, NULL); return;
     }
     if (g_str_equal(method, "NextRequest")) {
@@ -616,6 +833,8 @@ static void method_call(GDBusConnection *bus, const char *sender, const char *ob
             g_variant_builder_add(&options, "{sv}", "parent_window", g_variant_new_string(next->parent));
             g_variant_builder_add(&options, "{sv}", "request_identifier", g_variant_new_string(next->request_identifier));
             g_variant_builder_add(&options, "{sv}", "application_id", g_variant_new_string(next->application));
+            g_variant_builder_add(&options, "{sv}", "image_sources", g_variant_new_boolean(next->image_sources));
+            g_variant_builder_add(&options, "{sv}", "image_source", g_variant_new_string(next->image_source));
             const char *empty_mimes[] = { NULL };
             g_variant_builder_add(&options, "{sv}", "mime_types",
                 g_variant_new_strv(next->mime_types
@@ -630,6 +849,9 @@ static void method_call(GDBusConnection *bus, const char *sender, const char *ob
     g_variant_get_child(parameters, 0, "&o", &id);
     Request *request = find_request(service, id);
     if (!request) { fail(call, "UnknownRequest", "No such file chooser request."); return; }
+    if (!strcmp(method, "ListGallery") || !strcmp(method, "OpenGalleryItem") || !strcmp(method, "CompleteGalleryRequest")) {
+        gallery_method(service, request, sender, method, parameters, call); return;
+    }
     if (g_str_equal(method, "CompleteRequest")) {
         if (!service->test_mode && !request->lease) { fail(call, "PermissionDenied", "This request has no permission grant."); return; }
         if (!is_backend(service, sender)) {
@@ -721,6 +943,12 @@ static const GDBusInterfaceVTable vtable = { .method_call = method_call };
 
 int main(int argc, char **argv)
 {
+    /* Do not carry the root service's supplementary groups into a user's
+     * file creation. This runs before GLib starts any worker threads. */
+    if (geteuid() == 0 && setgroups(0, NULL)) {
+        g_printerr("openwave-portal: could not drop supplementary groups\n");
+        return 1;
+    }
 #ifndef PORTAL_TESTING
     if (argc != 1) return 2;
 #endif

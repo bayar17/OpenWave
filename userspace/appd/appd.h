@@ -43,6 +43,7 @@ struct Instance {
     gboolean storage_changed;
     gboolean namespace_sandboxed;
     int namespace_fds[4];
+    int output_fds[2];
 };
 
 struct Manager {

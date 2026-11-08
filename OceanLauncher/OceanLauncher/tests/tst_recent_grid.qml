@@ -151,7 +151,7 @@ Item {
         }
         function test_hold_dismissal_and_failed_termination_recovery() {
             const target = card(0)
-            mousePress(target, 100, 100); wait(3100)
+            mousePress(target, 100, 100); wait(target.holdDuration + 100)
             verify(target.armed)
             mouseMove(target, -150, 100, 20)
             tryCompare(termination, "count", 1)
@@ -160,6 +160,17 @@ Item {
             compare(target.terminating, false)
             mouseRelease(target, -150, 100)
             compare(activation.count, 0)
+        }
+        function test_reduced_motion_hold_does_not_pulse() {
+            const target = card(0)
+            const visual = findChild(target, "recentCardVisual")
+            target.reduceMotion = true
+            mousePress(target, 100, 100)
+            wait(target.holdDuration + 100)
+            verify(target.armed)
+            compare(visual.scale, 1)
+            mouseRelease(target, 100, 100)
+            tryCompare(target, "armed", false)
         }
     }
 }

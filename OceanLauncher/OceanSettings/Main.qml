@@ -1,7 +1,9 @@
 import QtQuick
 import QtQuick.Controls
+import OpenWave.Application 1.0
+import OpenWave.Fonts 1.0
 
-ApplicationWindow {
+WRApplicationWindow {
     id: root
     width: 768
     height: 1366
@@ -13,6 +15,7 @@ ApplicationWindow {
     property var connectivityBackend: null
     property var timeBackend: null
     property var promptClient: null
+    property var portalClient: null
     property var permissionClient: null
     property var applicationsBackend: null
     readonly property real contentScale: Math.min(width / 768, height / 1366)
@@ -26,9 +29,7 @@ ApplicationWindow {
         function onHomeRequested() { root.showMinimized() }
     }
 
-    FontLoader { id: regularFont; source: "assets/fonts/Inter-Regular.otf" }
-    FontLoader { source: "assets/fonts/Inter-Light.otf" }
-    font.family: regularFont.name
+    font.family: Fonts.family
 
     function goBack() {
         if (!page.back()) exitRequested(false)
@@ -63,6 +64,7 @@ ApplicationWindow {
             connectivityBackend: root.connectivityBackend
             timeBackend: root.timeBackend
             promptClient: root.promptClient
+            portalClient: root.portalClient
             permissionClient: root.permissionClient
             applicationsBackend: root.applicationsBackend
             wallpaper: wallpaperImage

@@ -1,5 +1,7 @@
 import QtQuick
+import OpenWave.Controls 1.0
 import OpenWave.Fonts 1.0
+import OpenWave.Theme 1.0
 import QtQuick.Controls
 import QtQuick.Effects
 
@@ -297,7 +299,7 @@ FocusScope {
                     wrapMode: Text.Wrap
                 }
             }
-            TextField {
+            WRTextField {
                 id: input
                 objectName: "systemPromptInput"
                 visible: root.inputPrompt
@@ -305,13 +307,15 @@ FocusScope {
                 enabled: root.interactive
                 maximumLength: root.shownRequest.maxLength || 256
                 placeholderText: root.shownRequest.placeholder || ""
+                accessibleLabel: root.shownRequest.title || qsTr("Text input")
                 echoMode: root.secretInput && !root.passwordVisible ? TextInput.Password : TextInput.Normal
                 inputMethodHints: root.secretInput
                     ? Qt.ImhSensitiveData | Qt.ImhNoPredictiveText | Qt.ImhHiddenText | Qt.ImhNoAutoUppercase
                     : Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
                 color: "white"; placeholderTextColor: "#99ffffff"
                 leftPadding: 0; rightPadding: 0
-                font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: Math.max(1, Math.round(26 * root.uiScale))
+                fontFamily: Fonts.family; fontWeight: Font.ExtraLight
+                fontPixelSize: Math.max(1, Math.round(26 * root.uiScale))
                 validator: RegularExpressionValidator {
                     regularExpression: new RegExp(root.shownRequest.validationPattern || "[\\s\\S]*")
                 }
@@ -323,7 +327,7 @@ FocusScope {
             Column {
                 visible: root.selectionPrompt
                 width: parent.width; spacing: 16 * root.uiScale
-                TextField {
+                WRTextField {
                     id: selectionSearch
                     objectName: "systemPromptSelectionSearch"
                     width: parent.width; height: 66 * root.uiScale
@@ -331,11 +335,12 @@ FocusScope {
                     text: root.selectionSearchText
                     onTextEdited: root.selectionSearchText = text
                     placeholderText: root.shownRequest.placeholder || qsTr("Search")
+                    accessibleLabel: qsTr("Search choices")
                     maximumLength: 128
                     color: "white"; placeholderTextColor: "#99ffffff"
                     leftPadding: 0; rightPadding: 0
-                    font.family: Fonts.family; font.weight: Font.ExtraLight
-                    font.pixelSize: Math.max(1, Math.round(26 * root.uiScale))
+                    fontFamily: Fonts.family; fontWeight: Font.ExtraLight
+                    fontPixelSize: Math.max(1, Math.round(26 * root.uiScale))
                     background: Item {}
                     Rectangle { anchors.bottom: parent.bottom; width: parent.width
                         height: 2 * root.uiScale; color: "#aaffffff"; antialiasing: true }
@@ -352,25 +357,16 @@ FocusScope {
                     currentIndex: root.filteredChoices.indexOf(root.selectedChoice)
                     onCurrentIndexChanged: if (root.selectionPrompt && currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
                     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-                    delegate: AbstractButton {
+                    delegate: WRRadioButton {
                         required property string modelData
                         width: selectionList.width; height: 64 * root.uiScale
                         enabled: root.interactive
                         text: root.shownRequest.choices[modelData]
+                        checked: root.selectedChoice === modelData
+                        textColor: checked ? Theme.highlightColor : "white"
+                        fontPixelSize: Math.max(1, Math.round(26 * root.uiScale))
                         Accessible.name: text
                         onClicked: root.selectedChoice = modelData
-                        contentItem: Text {
-                            text: parent.text; textFormat: Text.PlainText
-                            color: root.selectedChoice === parent.modelData ? "#00b7f0" : "white"
-                            font.family: Fonts.family; font.weight: Font.ExtraLight
-                            font.pixelSize: Math.max(1, Math.round(26 * root.uiScale))
-                            verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
-                        }
-                        background: Rectangle {
-                            color: parent.down ? "#18ffffff" : "transparent"
-                            Rectangle { anchors.bottom: parent.bottom; width: parent.width
-                                height: 2 * root.uiScale; color: "#55ffffff"; antialiasing: true }
-                        }
                     }
                     Text {
                         anchors.centerIn: parent; visible: selectionList.count === 0
@@ -419,7 +415,7 @@ FocusScope {
                                 font.family: Fonts.family; font.weight: Font.ExtraLight
                                 font.pixelSize: Math.max(1, Math.round(22 * root.uiScale))
                             }
-                            TextField {
+                            WRTextField {
                                 id: fieldInput
                                 objectName: fieldRow.dropdown ? "" : "systemPromptField_" + fieldRow.modelData
                                 anchors.left: parent.left; anchors.right: parent.right
@@ -430,13 +426,14 @@ FocusScope {
                                 onTextEdited: root.setField(fieldRow.modelData, text)
                                 maximumLength: fieldRow.field.maxLength || 256
                                 placeholderText: fieldRow.field.placeholder || fieldRow.field.label || ""
+                                accessibleLabel: fieldRow.field.label || fieldRow.field.placeholder || fieldRow.modelData
                                 echoMode: fieldRow.field.secret ? TextInput.Password : TextInput.Normal
                                 inputMethodHints: fieldRow.field.secret ? Qt.ImhSensitiveData | Qt.ImhNoPredictiveText | Qt.ImhHiddenText
                                     : Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
                                 color: "white"; placeholderTextColor: "#99ffffff"
                                 leftPadding: 0; rightPadding: 0
-                                font.family: Fonts.family; font.weight: Font.ExtraLight
-                                font.pixelSize: Math.max(1, Math.round(26 * root.uiScale))
+                                fontFamily: Fonts.family; fontWeight: Font.ExtraLight
+                                fontPixelSize: Math.max(1, Math.round(26 * root.uiScale))
                                 background: Item {}
                                 onAccepted: root.respond("accepted")
                             }
@@ -465,7 +462,7 @@ FocusScope {
             Item {
                 id: footer
                 width: parent.width; height: (root.compactInput ? 54 : 78) * root.uiScale
-                Button {
+                WRButton {
                     id: revealPasswordAction
                     objectName: "systemPromptShowPassword"
                     anchors.left: parent.left; anchors.bottom: parent.bottom
@@ -476,49 +473,43 @@ FocusScope {
                     width: Math.min(implicitWidth, Math.max(0, parent.width - actions.width - 12 * root.uiScale))
                     height: Math.max(44 * root.uiScale, implicitHeight)
                     text: root.passwordVisible ? qsTr("Hide password") : qsTr("Show password")
-                    font.family: Fonts.family; font.weight: Font.ExtraLight
-                    font.pixelSize: Math.max(1, Math.round(22 * root.uiScale))
-                    Accessible.name: text
-                    contentItem: Text {
-                        text: revealPasswordAction.text; textFormat: Text.PlainText; color: "white"
-                        font: revealPasswordAction.font; verticalAlignment: Text.AlignVCenter
-                        elide: Text.ElideRight
-                    }
-                    background: Rectangle { radius: 8 * root.uiScale; color: revealPasswordAction.down || revealPasswordAction.visualFocus ? "#18ffffff" : "transparent" }
+                    textColor: WaterRouge.textColor
+                    surfaceColor: WaterRouge.surfaceColor
+                    pressedSurfaceColor: WaterRouge.pressedColor
+                    fontWeight: Font.ExtraLight
+                    fontPixelSize: Math.max(1, Math.round(22 * root.uiScale))
                     onClicked: root.passwordVisible = !root.passwordVisible
                 }
                 Row {
                     id: actions
                     anchors.right: parent.right; anchors.bottom: parent.bottom
                     spacing: 30 * root.uiScale
-                    Button {
+                    WRButton {
                         id: cancelAction
                         objectName: "systemPromptCancel"
                         visible: !root.messagePrompt
                         width: Math.min(implicitWidth, (content.width - actions.spacing - (root.canRevealPassword ? 164 * root.uiScale : 0)) / 2)
                         enabled: root.interactive
                         text: root.shownRequest.cancelLabel || qsTr("Cancel")
-                        font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: Math.max(1, Math.round(34 * root.uiScale))
-                        contentItem: Text {
-                            text: cancelAction.text; textFormat: Text.PlainText; color: "white"
-                            font: cancelAction.font; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
-                        }
-                        background: Rectangle { radius: 8 * root.uiScale; color: cancelAction.down || cancelAction.visualFocus ? "#18ffffff" : "transparent" }
+                        textColor: WaterRouge.textColor
+                        surfaceColor: WaterRouge.surfaceColor
+                        pressedSurfaceColor: WaterRouge.pressedColor
+                        fontWeight: Font.ExtraLight
+                        fontPixelSize: Math.max(1, Math.round(34 * root.uiScale))
                         onClicked: root.respond("cancelled")
                     }
-                    Button {
+                    WRButton {
                         id: acceptAction
                         objectName: "systemPromptAccept"
                         enabled: root.interactive && root.inputValid
                         width: Math.min(implicitWidth, root.messagePrompt ? content.width : (content.width - actions.spacing - (root.canRevealPassword ? 164 * root.uiScale : 0)) / 2)
                         text: root.shownRequest.acceptLabel || (root.messagePrompt ? qsTr("OK") : qsTr("Yes"))
                         opacity: root.inputValid ? 1 : 0.5
-                        font.family: Fonts.family; font.weight: Font.ExtraLight; font.pixelSize: Math.max(1, Math.round(34 * root.uiScale))
-                        contentItem: Text {
-                            text: acceptAction.text; textFormat: Text.PlainText; color: "white"
-                            font: acceptAction.font; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
-                        }
-                        background: Rectangle { radius: 8 * root.uiScale; color: acceptAction.down || acceptAction.visualFocus ? "#18ffffff" : "transparent" }
+                        textColor: WaterRouge.textColor
+                        surfaceColor: WaterRouge.surfaceColor
+                        pressedSurfaceColor: WaterRouge.pressedColor
+                        fontWeight: Font.ExtraLight
+                        fontPixelSize: Math.max(1, Math.round(34 * root.uiScale))
                         onClicked: root.respond("accepted")
                     }
                 }

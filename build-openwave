@@ -6,9 +6,13 @@ usage() {
     cat <<'HELP'
 Usage: ./build-openwave COMMAND [OPTIONS]
 
-  all [--image PATH]             Patch/build LLVM, dependencies, kernel and userspace
+  all                            Patch/build LLVM, dependencies, kernel and userspace
   llvm                          Patch/build/install the native Clang/LLVM compiler
-  userspace [--image PATH]       Build system apps/services and assemble rootfs
+  sysroot                       Bootstrap Linux/glibc headers, compiler-rt builtins, then full glibc
+  cross-files                   Regenerate SDK-local Meson/CMake machine files
+  graphics                      Build Mesa EGL/GLES2 into target sysroot
+  userspace                      Build system apps/services into staging only
+  openrc [--clean]              Cross-build and stage OpenRC only (no rootfs/image)
   sdk                           Build and install the public API client libraries
   kernel                        Build the kernel with application isolation enabled
   llvm-patch                    Initialize LLVM sources and apply the OpenWave patch
@@ -17,9 +21,12 @@ Usage: ./build-openwave COMMAND [OPTIONS]
   audio                         Download/build ALSA, PipeWire, WirePlumber and audio kernel
   bluetooth-audio               Build Bluetooth audio dependencies
   mdns                          Download/build Avahi and its dependencies
+  waydroid-host-deps            Stage pinned Waydroid, iproute2, and networking tools
+  waydroid-bindings             Build target Python GI bindings against the SDK
   selinux                       Build SELinux libraries and OpenWave policy
   bubblewrap                    Download/build Bubblewrap and libcap into rootfs
   tzdata                        Install time zone data into runtime staging
+  rootfs                        Assemble runtime files into rootfs (no image)
   image ROOTFS NEW_IMAGE        Create a new ext4 image; never overwrite one
   test-permissions NEW_TEST_IMAGE
                                 Build and test permission enforcement in QEMU
@@ -83,12 +90,13 @@ build_llvm() (
 )
 
 build_all() (
-    if (($#)) && [[ -e "$2" ]]; then
-        echo "Refusing to overwrite existing image: $2" >&2
-        exit 1
+    if (($#)); then
+        echo "Usage: ./build-openwave all" >&2
+        exit 2
     fi
-    source "$ROOT/env.sh" --build
     build_llvm
+    build_sysroot
+    source "$ROOT/env.sh" --build
     build_browser_engine deps
     OPENWAVE_BUILD_ALL=1 build_audio
     build_bluetooth_audio
@@ -97,6 +105,19 @@ build_all() (
     build_bubblewrap
     build_browser_engine engine
     build_userspace "$@"
+)
+
+build_sysroot() (
+    "$ROOT/scripts/bootstrap-sysroot.sh"
+)
+
+build_graphics() (
+    "$ROOT/scripts/build-mesa.sh"
+)
+
+build_cross_files() (
+    source "$ROOT/env.sh" --bootstrap
+    python3 "$ROOT/cross/generate-meson.py" --target "$OPENWAVE_TARGET_TRIPLE"
 )
 
 build_kernel() (
@@ -112,6 +133,17 @@ build_kernel() (
     [[ -f "$build/.config" ]] || { echo "Configure $build/.config first" >&2; exit 1; }
     "$ROOT/linux/scripts/config" --file "$build/.config" -e SECURITY -e SECURITY_LANDLOCK \
         -e SECURITY_SELINUX -e SECURITY_SELINUX_DEVELOP -e EXT4_FS_SECURITY -e AUDIT \
+        -e NET -e UNIX -e UNIX_DIAG -e SYSVIPC -e IPC_NS -e POSIX_MQUEUE \
+        -e RTC_CLASS -e RTC_DRV_CMOS \
+        -e CRYPTO -e CRYPTO_USER_API_HASH -e CRYPTO_USER_API_SKCIPHER -e CRYPTO_USER_API_AEAD \
+        -e CRYPTO_AES -e CRYPTO_CBC -e CRYPTO_ECB -e CRYPTO_CMAC -e CRYPTO_HMAC \
+        -e CRYPTO_SHA1 -e CRYPTO_SHA256 -e CRYPTO_SHA512 -e CRYPTO_MD4 -e CRYPTO_MD5 -e CRYPTO_DES \
+        -e KEYS -e KEY_DH_OPERATIONS \
+        -e WIRELESS -e CFG80211 -e MAC80211 -e RFKILL \
+        -e NETDEVICES -e WLAN -e WLAN_VENDOR_RALINK -e RT2X00 -e RT2800USB \
+        -e RT2800USB_RT33XX -e RT2800USB_RT35XX -e RT2800USB_RT53XX \
+        -e USB -e USB_XHCI_HCD -e PACKET -e CRYPTO_CCM -e CRYPTO_GCM -e CRYPTO_CTR \
+        -e INPUT -e INPUT_EVDEV -e VIRTIO -e VIRTIO_INPUT -e VIRTIO_NET \
         --set-str EXTRA_FIRMWARE_DIR "$OPENWAVE_SYSROOT/lib/firmware"
     local lsm
     lsm="$("$ROOT/linux/scripts/config" --file "$build/.config" --state LSM)"
@@ -122,6 +154,14 @@ build_kernel() (
         *) "$ROOT/linux/scripts/config" --file "$build/.config" --set-str LSM "${lsm:+$lsm,}selinux" ;;
     esac
     PATH="$OPENWAVE_SDK/bin:$PATH" make -C "$ROOT/linux" O="$build" ARCH="$arch" LLVM=1 olddefconfig
+    # Fail here if Kconfig dependencies silently discarded a boot/sandbox
+    # prerequisite; never publish a kernel which cannot create local IPC.
+    for required in UNIX SYSVIPC IPC_NS USER_NS PID_NS NET_NS CGROUPS SECCOMP_FILTER SECURITY_SELINUX SECURITY_LANDLOCK CFG80211 MAC80211 RFKILL RT2800USB INPUT_EVDEV VIRTIO_INPUT VIRTIO_NET; do
+        grep -qx "CONFIG_${required}=y" "$build/.config" || {
+            echo "Missing required kernel feature: CONFIG_${required}=y" >&2
+            exit 1
+        }
+    done
     PATH="$OPENWAVE_SDK/bin:$PATH" make -C "$ROOT/linux" O="$build" ARCH="$arch" LLVM=1 -j "${OPENWAVE_BUILD_JOBS:-4}" "$image"
 )
 
@@ -130,6 +170,11 @@ build_audio() (
 source "$ROOT/env.sh" --build
 prepare_llvm
 TARGET="$OPENWAVE_SYSROOT"
+# GStreamer GL requires target Mesa EGL/GLES2 development files.
+# Graphics is a separate stage and is never satisfied by host libraries.
+if [[ "${1:-all}" != engine ]]; then
+    "$ROOT/scripts/build-mesa.sh"
+fi
 JOBS="${OPENWAVE_BUILD_JOBS:-4}"
 mkdir -p "$ROOT/out" "$ROOT/third_party"
 
@@ -220,9 +265,7 @@ meson_setup "$OPENWAVE_DEPENDENCY_BUILD/wireplumber" "$ROOT/third_party/wireplum
 ninja -C "$OPENWAVE_DEPENDENCY_BUILD/wireplumber" -j "$JOBS"
 DESTDIR="$TARGET" ninja -C "$OPENWAVE_DEPENDENCY_BUILD/wireplumber" install
 
-if [[ "${OPENWAVE_BUILD_ALL:-0}" != 1 ]]; then
-    "$ROOT/build-openwave" userspace
-fi
+# User applications are built by the explicit userspace target.
 
 "$ROOT/linux/scripts/config" --file "$ROOT/out/linux/.config" -e SND_VIRTIO -e SECURITY -e SECURITY_LANDLOCK --set-str EXTRA_FIRMWARE_DIR "$TARGET/lib/firmware"
 PATH="$OPENWAVE_SDK/bin:$PATH" make -C "$ROOT/linux" \
@@ -232,7 +275,6 @@ PATH="$OPENWAVE_SDK/bin:$PATH" make -C "$ROOT/linux" \
 
 echo "Audio stack installed into $TARGET; pack OpenWave.img separately."
 
-python3 "$ROOT/scripts/assemble-openwave-rootfs.py"
 )
 
 build_bluetooth_audio() (
@@ -333,7 +375,6 @@ install -m644 "$ROOT/userspace/config/10-openwave-wireplumber.conf" \
     "$SYSROOT/etc/wireplumber/wireplumber.conf.d/10-openwave-wireplumber.conf"
 echo "Installed target BlueZ library, SBC, PipeWire BlueZ SPA and WirePlumber configuration."
 
-python3 "$ROOT/scripts/assemble-openwave-rootfs.py"
 )
 
 build_browser_engine() (
@@ -469,10 +510,6 @@ PY
         -Dpython=disabled -Dgst-examples=disabled -Dtls=disabled -Dqt5=disabled -Dqt6=disabled \
         -Dlibav=enabled -Dlibnice=enabled -Dwebrtc=enabled -Dorc=enabled \
         -Dtools=enabled -Dtests=disabled -Dexamples=disabled -Dintrospection=disabled \
-        -DFFmpeg:programs=disabled \
-        -DFFmpeg:filters=disabled -DFFmpeg:devices=disabled \
-        -DFFmpeg:libdav1d=enabled \
-        -Dopus:extra-programs=disabled -Dopus:tests=disabled -Dopus:docs=disabled \
         -Dgst-plugins-base:gl_api=gles2 -Dgst-plugins-base:gl_platform=egl \
         -Dgst-plugins-base:gl_winsys=egl,surfaceless,gbm \
         -Dgst-plugins-good:soup-version=3 -Dgst-plugins-good:soup-lookup-dep=true \
@@ -497,7 +534,6 @@ if [[ "${1:-all}" != deps && "${1:-all}" != media ]]; then
     DESTDIR="$TARGET" cmake --install "$OPENWAVE_DEPENDENCY_BUILD/wpe-webkit-openwave-release"
 fi
 
-python3 "$ROOT/scripts/assemble-openwave-rootfs.py"
 )
 
 build_mdns() (
@@ -603,7 +639,6 @@ rm -f "$TARGET/etc/avahi/services/ssh.service" \
 install -m644 "$ROOT/userspace/config/avahi-daemon.conf" \
     "$TARGET/etc/avahi/avahi-daemon.conf"
 
-python3 "$ROOT/scripts/assemble-openwave-rootfs.py"
 )
 
 build_selinux() (
@@ -676,7 +711,6 @@ cp -a "$build/install/usr/." "$OPENWAVE_SYSROOT/usr/"
 python3 "$ROOT/scripts/build-openwave-selinux.py" --sdk "$OPENWAVE_SDK" \
     --target "$OPENWAVE_TARGET_TRIPLE" --stage "$OPENWAVE_RUNTIME_STAGE" \
     --output "$OPENWAVE_DEPENDENCY_BUILD/selinux-policy"
-python3 "$ROOT/scripts/assemble-openwave-rootfs.py"
 )
 
 build_bubblewrap() (
@@ -701,6 +735,12 @@ for package in libcap-2.78 bubblewrap-0.11.1; do
     printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -
     if [[ ! -d "$ROOT/third_party/$package" ]]; then tar -xf "$archive" -C "$ROOT/third_party"; fi
 done
+# Apply the pinned-source fix idempotently; the initial root must honor the
+# same SELinux file label as tmpfs mounts requested inside that root.
+local root_label_patch="$ROOT/cross/bubblewrap/root-label.patch"
+if ! patch -d "$ROOT/third_party/bubblewrap-0.11.1" -p1 --dry-run -R <"$root_label_patch" >/dev/null 2>&1; then
+    patch -d "$ROOT/third_party/bubblewrap-0.11.1" -p1 --forward <"$root_label_patch"
+fi
 if [[ ! -d "$build/libcap-2.78" ]]; then cp -a "$ROOT/third_party/libcap-2.78" "$build/"; fi
 printf -v cc '%q --target=%q --sysroot=%q' "$OPENWAVE_SDK/bin/clang" "$OPENWAVE_TARGET_TRIPLE" "$OPENWAVE_SYSROOT"
 cflags='-O2 -fPIC -fstack-protector-strong'
@@ -725,7 +765,6 @@ for package in libcap-2.78 bubblewrap-0.11.1; do
     install -Dm644 "$ROOT/third_party/$package/License" "$OPENWAVE_SYSROOT/usr/share/licenses/$package/LICENSE" 2>/dev/null \
         || install -Dm644 "$ROOT/third_party/$package/COPYING" "$OPENWAVE_SYSROOT/usr/share/licenses/$package/LICENSE"
 done
-python3 "$ROOT/scripts/assemble-openwave-rootfs.py"
 )
 
 build_sdk() (
@@ -777,44 +816,123 @@ ln -sfn "../usr/share/zoneinfo/$TIMEZONE" "$ETC/localtime"
 echo "Installed IANA tzdata $(<"$TZDATA/version") with timezone $TIMEZONE"
 )
 
+build_waydroid_bindings() (
+    bash "$ROOT/scripts/build-waydroid-bindings.sh"
+)
+
+build_waydroid_host_deps() (
+    source "$ROOT/env.sh" --build
+    bash "$ROOT/scripts/build-waydroid-bindings.sh"
+    local build="$OPENWAVE_DEPENDENCY_BUILD/waydroid-host"
+    local version=7.3.0
+    local archive="$build/iproute2-$version.tar.xz"
+    local checksum=5c1789d290bba048a6135ed1ab81b0402dd0fb528d1f1421765c42b1fc3d6289
+    local source="$build/iproute2-$version"
+    local iptables_version=1.8.13
+    local iptables_archive="$build/iptables-$iptables_version.tar.xz"
+    local iptables_checksum=1afcd33da9e8f913ace6a2126788162e207e26f5d5e29c6573c0e581ffc58b99
+    local iptables_source="$build/iptables-$iptables_version"
+    local waydroid_source="$ROOT/third_party/waydroid"
+    local package="$build/waydroid-package"
+    local cc
+    mkdir -p "$build"
+
+    if [[ ! -f "$archive" ]]; then
+        curl -fL --retry 3 \
+            "https://www.kernel.org/pub/linux/utils/net/iproute2/iproute2-$version.tar.xz" \
+            -o "$archive.partial"
+        printf '%s  %s\n' "$checksum" "$archive.partial" | sha256sum -c -
+        mv "$archive.partial" "$archive"
+    fi
+    printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -
+    if [[ ! -d "$source" ]]; then
+        mkdir -p "$source"
+        tar -xf "$archive" --strip-components=1 -C "$source"
+    fi
+    printf -v cc '%q --target=%q --sysroot=%q' \
+        "$OPENWAVE_SDK/bin/clang" "$OPENWAVE_TARGET_TRIPLE" "$OPENWAVE_SYSROOT"
+    rm -f "$source/config.mk"
+    (cd "$source" && \
+        CC="$cc" AR="$OPENWAVE_SDK/bin/llvm-ar" \
+        RANLIB="$OPENWAVE_SDK/bin/llvm-ranlib" \
+        PKG_CONFIG=/usr/bin/pkg-config \
+        PKG_CONFIG_SYSROOT_DIR="$OPENWAVE_SYSROOT" \
+        PKG_CONFIG_LIBDIR="$OPENWAVE_SYSROOT/usr/lib64/pkgconfig:$OPENWAVE_SYSROOT/usr/lib/pkgconfig:$OPENWAVE_SYSROOT/usr/share/pkgconfig" \
+        ./configure)
+    make -C "$source/lib" CC="$cc" AR="$OPENWAVE_SDK/bin/llvm-ar" \
+        RANLIB="$OPENWAVE_SDK/bin/llvm-ranlib" \
+        ADDLIB="mpls_ntop.o mpls_pton.o" \
+        CFLAGS="--target=$OPENWAVE_TARGET_TRIPLE --sysroot=$OPENWAVE_SYSROOT -O2 -fPIC -I../include -I../include/uapi -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -DHAVE_SETNS -DHAVE_HANDLE_AT -DRESOLVE_HOSTNAMES -DLIBDIR=\\\"/usr/lib/iproute2\\\" -DCONF_USR_DIR=\\\"/usr/share/iproute2\\\" -DCONF_ETC_DIR=\\\"/etc/iproute2\\\" -DNETNS_RUN_DIR=\\\"/var/run/netns\\\" -DNETNS_ETC_DIR=\\\"/etc/netns\\\" -DARPDDIR=\\\"/var/lib/arpd\\\" -DCONF_COLOR=COLOR_OPT_NEVER" \
+        -j"${OPENWAVE_BUILD_JOBS:-4}"
+    make -C "$source/ip" CC="$cc" AR="$OPENWAVE_SDK/bin/llvm-ar" \
+        RANLIB="$OPENWAVE_SDK/bin/llvm-ranlib" \
+        LIBNETLINK="../lib/libutil.a ../lib/libnetlink.a" \
+        LDLIBS="../lib/libutil.a ../lib/libnetlink.a -L$OPENWAVE_SYSROOT/usr/lib64 -lmnl -lselinux -lcap -ldl" \
+        CFLAGS="--target=$OPENWAVE_TARGET_TRIPLE --sysroot=$OPENWAVE_SYSROOT -O2 -fPIC -I../include -I../include/uapi -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -DHAVE_SETNS -DHAVE_HANDLE_AT -DRESOLVE_HOSTNAMES -DLIBDIR=\\\"/usr/lib/iproute2\\\" -DCONF_USR_DIR=\\\"/usr/share/iproute2\\\" -DCONF_ETC_DIR=\\\"/etc/iproute2\\\" -DNETNS_RUN_DIR=\\\"/var/run/netns\\\" -DNETNS_ETC_DIR=\\\"/etc/netns\\\" -DARPDDIR=\\\"/var/lib/arpd\\\" -DCONF_COLOR=COLOR_OPT_NEVER" \
+        -j"${OPENWAVE_BUILD_JOBS:-4}" ip
+    install -Dm755 "$source/ip/ip" "$OPENWAVE_RUNTIME_STAGE/sbin/ip"
+    install -d "$OPENWAVE_RUNTIME_STAGE/usr/share/iproute2"
+    find "$source/etc/iproute2" -maxdepth 1 -type f -exec \
+        install -m644 -t "$OPENWAVE_RUNTIME_STAGE/usr/share/iproute2" {} +
+    if [[ ! -f "$iptables_archive" ]]; then
+        curl -fL --retry 3 \
+            "https://www.netfilter.org/pub/iptables/iptables-$iptables_version.tar.xz" \
+            -o "$iptables_archive.partial"
+        printf '%s  %s\n' "$iptables_checksum" "$iptables_archive.partial" | sha256sum -c -
+        mv "$iptables_archive.partial" "$iptables_archive"
+    fi
+    printf '%s  %s\n' "$iptables_checksum" "$iptables_archive" | sha256sum -c -
+    if [[ ! -d "$iptables_source" ]]; then
+        mkdir -p "$iptables_source"
+        tar -xf "$iptables_archive" --strip-components=1 -C "$iptables_source"
+    fi
+    if [[ ! -x "$iptables_source/configure" ]]; then
+        (cd "$iptables_source" && ./autogen.sh)
+    fi
+    if [[ ! -f "$iptables_source/Makefile" ]]; then
+        (cd "$iptables_source" && \
+            CC="$cc" CFLAGS="--target=$OPENWAVE_TARGET_TRIPLE --sysroot=$OPENWAVE_SYSROOT -O2 -fPIC" \
+            LDFLAGS="--target=$OPENWAVE_TARGET_TRIPLE --sysroot=$OPENWAVE_SYSROOT -L$OPENWAVE_SYSROOT/usr/lib64" \
+            ./configure --host=x86_64-unknown-linux-gnu --prefix=/usr \
+                --sbindir=/usr/sbin --libdir=/usr/lib64 \
+                --disable-nftables --disable-devel --disable-bpf-compiler)
+    fi
+    make -C "$iptables_source" CC="$cc" \
+        CFLAGS="--target=$OPENWAVE_TARGET_TRIPLE --sysroot=$OPENWAVE_SYSROOT -O2 -fPIC" \
+        LDFLAGS="--target=$OPENWAVE_TARGET_TRIPLE --sysroot=$OPENWAVE_SYSROOT -L$OPENWAVE_SYSROOT/usr/lib64" \
+        -j"${OPENWAVE_BUILD_JOBS:-4}"
+    make -C "$iptables_source" DESTDIR="$OPENWAVE_RUNTIME_STAGE" install
+
+    local commit=5b7e2e71be3f6bfaaaab3b461251dacaf1ce4991
+    if [[ "$(git -C "$waydroid_source" rev-parse HEAD)" != "$commit" ]] \
+        || [[ -n "$(git -C "$waydroid_source" status --porcelain)" ]]; then
+        echo "Refusing to package Waydroid: source is not clean at $commit" >&2
+        exit 1
+    fi
+    rm -rf "$package"
+    mkdir -p "$package"
+    git -C "$waydroid_source" archive "$commit" | tar -x -C "$package"
+    make -C "$package" install DESTDIR="$OPENWAVE_RUNTIME_STAGE" \
+        USE_SYSTEMD=0 USE_DBUS_ACTIVATION=0 USE_NFTABLES=0
+    python3 "$ROOT/userspace/waydroid/prepare_apparmor_free.py" \
+        --package "$OPENWAVE_RUNTIME_STAGE"
+    python3 "$ROOT/userspace/waydroid/verify_upstream_package.py" \
+        --source "$waydroid_source" --package "$OPENWAVE_RUNTIME_STAGE" \
+        --no-dbus-activation \
+        > "$build/upstream-integrity.json"
+)
+
 build_userspace() (
 
 source "$ROOT/env.sh" --build
 BUILD="$ROOT/out/userspace-$OPENWAVE_TARGET_TRIPLE"
 MPG123_BUILD="$OPENWAVE_DEPENDENCY_BUILD/mpg123"
-IMAGE=""
-
-usage() {
-    cat <<'HELP'
-Build and install OpenWave init, Ocean Launcher, Ocean Settings, and Ocean Files into rootfs through a runtime staging directory.
-
-Usage: ./build-openwave userspace [--image PATH]
-
---image PATH  Also create a new 2 GiB ext4 boot image from rootfs.
-              Refuses to overwrite an existing image.
-
-Requires the existing OpenWave toolchain, target Qt, host Qt tools,
-CMake, Ninja, and the bundled mpg123 source. Image creation also needs
-fakeroot, mke2fs, debugfs, and e2fsck.
-HELP
-}
-
-while (($#)); do
-    case "$1" in
-        --image)
-            if (($# < 2)); then usage >&2; exit 2; fi
-            IMAGE="$2"
-            shift 2
-            ;;
-        -h|--help) usage; exit 0 ;;
-        *) usage >&2; exit 2 ;;
-    esac
-done
-
-if [[ -n "$IMAGE" && -e "$IMAGE" ]]; then
-    echo "Refusing to overwrite existing image: $IMAGE" >&2
-    exit 1
+if (($#)); then
+    echo "Usage: ./build-openwave userspace" >&2
+    exit 2
 fi
+
+build_waydroid_host_deps
 
 prepare_llvm
 
@@ -851,33 +969,66 @@ if [[ -f "$ROOT/Marisa Stole Her Precious Thing.mp3" ]]; then
 fi
 
 "$ROOT/build-openwave" tzdata
-python3 "$ROOT/scripts/assemble-openwave-rootfs.py"
 
-if [[ -n "$IMAGE" ]]; then
-    "$ROOT/build-openwave" image "$OPENWAVE_ROOTFS" "$IMAGE"
-fi
+)
+
+build_rootfs() (
+    if (($#)); then
+        echo "Usage: ./build-openwave rootfs" >&2
+        exit 2
+    fi
+    source "$ROOT/env.sh" --build
+    python3 "$ROOT/scripts/assemble-openwave-rootfs.py"
 )
 
 build_image() (
 # fakeroot is only a metadata tool here, never the deployable staging directory.
-RUNTIME="$(realpath -- "${1:?Usage: ./build-openwave image ROOTFS NEW_IMAGE}")"
+RUNTIME_INPUT="${1:?Usage: ./build-openwave image ROOTFS NEW_IMAGE}"
+while [[ "$RUNTIME_INPUT" != / && "$RUNTIME_INPUT" == */ ]]; do
+    RUNTIME_INPUT="${RUNTIME_INPUT%/}"
+done
+if [[ -L "$RUNTIME_INPUT" ]]; then
+    echo "Refusing symlinked runtime root: $RUNTIME_INPUT" >&2
+    exit 1
+fi
+RUNTIME="$(realpath -- "$RUNTIME_INPUT")"
 IMAGE="${2:?Specify a new image path}"
 [[ -f "$RUNTIME/init" && -f "$RUNTIME/System/Applications/com.openwave.shell/bin/ocean-launcher" ]]
-if [[ -e "$IMAGE" ]]; then
+if [[ -e "$IMAGE" || -L "$IMAGE" ]]; then
     echo "Refusing to overwrite existing image: $IMAGE" >&2
     exit 1
 fi
+python3 "$ROOT/scripts/prepare-openwave-boot.py" --rootfs "$RUNTIME" \
+    --sdk "${OPENWAVE_SDK:-$ROOT/toolchain}" \
+    --target "${OPENWAVE_TARGET_TRIPLE:-x86_64-unknown-openwave}"
+OPENWAVE_OPENRC_ROOT="$RUNTIME" python3 "$ROOT/userspace/openrc/validate_openrc.py"
 mkdir -p -- "$(dirname -- "$IMAGE")"
 TEMP_IMAGE="$(mktemp "${IMAGE}.tmp.XXXXXX")"
-trap 'rm -f -- "$TEMP_IMAGE"' EXIT
+LABELED_IMAGE="${TEMP_IMAGE}.labeled"
+trap 'rm -f -- "$TEMP_IMAGE" "$LABELED_IMAGE"' EXIT
 truncate -s "${OPENWAVE_IMAGE_SIZE:-2G}" "$TEMP_IMAGE"
-fakeroot -- bash -Eeuo pipefail -c '
-    find "$1" -print0 | xargs -0 -r chown -h 0:0
+OPENWAVE_IMAGE_BUILDER_UID="$(id -u)" OPENWAVE_IMAGE_BUILDER_GID="$(id -g)" fakeroot -- bash -Eeuo pipefail -c '
+    python3 "$3" "$1"
+    if [[ -x "$1/usr/libexec/dbus-daemon-launch-helper" ]]; then
+        messagebus_gid="$(awk -F: '\''$1 == "messagebus" { print $3; exit }'\'' "$1/etc/group")"
+        [[ "$messagebus_gid" =~ ^[0-9]+$ ]]
+        chown 0:"$messagebus_gid" "$1/usr/libexec/dbus-daemon-launch-helper"
+        chmod 4750 "$1/usr/libexec/dbus-daemon-launch-helper"
+    fi
     mke2fs -q -t ext4 -L OpenWave -d "$1" "$2"
-' _ "$RUNTIME" "$TEMP_IMAGE"
+' _ "$RUNTIME" "$TEMP_IMAGE" "$ROOT/scripts/image-owners.py"
 debugfs -w -R 'sif <2> mode 040755' "$TEMP_IMAGE" >/dev/null
 e2fsck -fn "$TEMP_IMAGE"
-ln -- "$TEMP_IMAGE" "$IMAGE"
+python3 "$ROOT/scripts/build-openwave-selinux.py" --verify-only \
+    --sdk "${OPENWAVE_SDK:-$ROOT/toolchain}" \
+    --target "${OPENWAVE_TARGET_TRIPLE:-x86_64-unknown-openwave}" --stage "$RUNTIME"
+python3 "$ROOT/scripts/openwave-label-ext4.py" --rootfs "$RUNTIME" \
+    --image "$TEMP_IMAGE" --output "$LABELED_IMAGE"
+python3 "$ROOT/scripts/build-openwave-selinux.py" --verify-only \
+    --sdk "${OPENWAVE_SDK:-$ROOT/toolchain}" \
+    --target "${OPENWAVE_TARGET_TRIPLE:-x86_64-unknown-openwave}" --stage "$RUNTIME"
+ln -- "$LABELED_IMAGE" "$IMAGE"
+mv -- "${LABELED_IMAGE}.label.log" "${IMAGE}.label.log"
 echo "Created runtime image: $IMAGE"
 )
 
@@ -906,6 +1057,7 @@ for project in appd/tests application-client/tests; do
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN"
     cmake --build "$build" --parallel "${OPENWAVE_BUILD_JOBS:-4}"
 done
+./build-openwave rootfs
 ./build-openwave image "$OPENWAVE_ROOTFS" "$QA_IMAGE"
 python3 "$ROOT/userspace/appd/tests/prepare.py" "$OPENWAVE_ROOTFS" "$QA_OUTPUT"
 QA_COMMANDS="$(mktemp "$QA_OUTPUT/install.XXXXXX")"
@@ -948,6 +1100,7 @@ mkdir -p "$QA_OUTPUT"
 openwave_cmake_configure -S OceanLauncher/OceanBrowser/tests -B "$QA_OUTPUT/tests" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN"
 cmake --build "$QA_OUTPUT/tests" --target browser-input-tests browser-input-init --parallel "${OPENWAVE_BUILD_JOBS:-4}"
+./build-openwave rootfs
 ./build-openwave image "$OPENWAVE_ROOTFS" "$QA_IMAGE"
 cat > "$QA_OUTPUT/input-test.json" <<'EOF'
 {"schemaVersion":1,"id":"org.openwave.qa.browser-input","name":"Browser input tests","version":"1","executable":"bin/browser-input-tests","runtime":"openwave-qt","sandbox":{"enabled":true,"profile":"standard"},"permissions":[]}
@@ -983,16 +1136,31 @@ if [[ "$COMMAND" == help || "$COMMAND" == --help || "$COMMAND" == -h || "${1:-}"
     usage
     exit 0
 fi
+# Standalone OpenRC cross-build; never builds or assembles an image/rootfs.
+if [[ "$COMMAND" == openrc ]]; then
+    if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != --clean ]]; }; then
+        usage >&2
+        exit 2
+    fi
+    exec bash "$ROOT/userspace/openrc/build-openrc.sh" "$@"
+fi
+
 case "$COMMAND" in
-    audio|bluetooth-audio|mdns|selinux|bubblewrap|sdk|tzdata|llvm-patch|llvm|kernel)
+    audio|bluetooth-audio|mdns|selinux|bubblewrap|sdk|tzdata|llvm-patch|llvm|kernel|sysroot|cross-files|graphics)
         if (($# != 0)); then usage >&2; exit 2; fi
         ;;
     browser-engine)
         if (($# > 1)); then usage >&2; exit 2; fi
         case "${1:-all}" in all|deps|media|engine) ;; *) usage >&2; exit 2 ;; esac
         ;;
+    waydroid-host-deps|waydroid-bindings)
+        if (($# != 0)); then usage >&2; exit 2; fi
+        ;;
     userspace|all)
-        if (($# != 0)) && [[ $# != 2 || "$1" != --image || -z "$2" ]]; then usage >&2; exit 2; fi
+        if (($# != 0)); then usage >&2; exit 2; fi
+        ;;
+    rootfs)
+        if (($# != 0)); then usage >&2; exit 2; fi
         ;;
     image)
         if (($# != 2)); then usage >&2; exit 2; fi

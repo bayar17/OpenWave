@@ -1,0 +1,26 @@
+#!/bin/sh
+case " $(cat /proc/cmdline) " in *' openwave.qa=wifi '*) ;; *) exit 0 ;; esac
+exec >/dev/console 2>&1
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+# This unregistered process shares Settings' UID. The daemon must reject it,
+# even though the transport policy now permits that UID to reach controls.
+reply=$(/bin/busybox chpst -u ocean /usr/bin/gdbus call --system --timeout 5 \
+    --dest org.openwave.Connectivity --object-path /org/openwave/Connectivity \
+    --method org.openwave.Connectivity1.ConnectWifi ow-qa-absent-5c72839d21b64c8e '' 2>&1)
+case "$reply" in
+    *org.openwave.Connectivity.Unauthorized*) printf 'WIFI_SETTINGS_QA unregistered session process rejected\n' ;;
+    *) printf 'WIFI_SETTINGS_QA_FAIL unexpected unregistered caller result: %s\n' "$reply"; exit 1 ;;
+esac
+if ! /System/Services/openwave-launch com.openwave.settings; then
+    printf 'WIFI_SETTINGS_QA_FAIL launch rejected\n'; exit 1
+fi
+sleep 35
+/usr/bin/gdbus call --system --timeout 3 --dest org.openwave.Applications \
+    --object-path /org/openwave/Applications --method org.openwave.Applications1.Terminate com.openwave.settings
+sleep 2
+printf '\nWIFI_SETTINGS_LOG\n'
+tail -80 /run/openwave/appd.stderr.log
+if ! grep -q 'WIFI_SETTINGS_QA_PASS' /run/openwave/appd.stderr.log \
+    || grep -q 'WIFI_SETTINGS_QA_FAIL' /run/openwave/appd.stderr.log; then
+    printf 'WIFI_SETTINGS_QA_FAIL managed Settings control path\n'
+fi

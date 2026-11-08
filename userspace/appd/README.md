@@ -1,6 +1,6 @@
 # appd — application management
 
-PID 1 supervises `/System/Services/appd`. C/GLib manages identity, lifecycle,
+OpenRC manages `/System/Services/appd` through the `appd` service. C/GLib manages identity, lifecycle,
 processes and IPC; a small C++/Qt Core reader validates JSON bundle manifests.
 Ocean owns the compositor, dock, drawer, recent cards, and visual handoff.
 
@@ -31,11 +31,14 @@ canonical contract lives in `userspace/dbus/interfaces/org.openwave.Applications
 | CommitLaunch | ticket | execute after loading transition; PID |
 | CancelLaunch | ticket | discard handoff |
 
-Dictionaries contain `appId`, `name`, `icon` (file URL), `executable`, `pid`,
+Dictionaries contain the boolean `launchable`, `appId`, `name`, `icon` (file URL), `executable`, `pid`,
 `state`, `error`, `singleInstance`, `bundlePath`, `isolationProfile`, and
 `namespaceSandboxed` (true for a running regular app after namespace setup). States are `Stopped`, `Starting`, `Running`,
 `Stopping`, `Crashed`. Running means execution started; Ocean separately waits
-for the first rendered frame.
+for the first rendered frame. Eligibility is explicit and false while an app
+is being removed. Unsupported components and the OpenRC-managed compositor are
+excluded from the launch registry; a compositor with an omitted role field is
+also rejected. Ocean treats absent or incorrectly typed eligibility as false.
 
 Signals are `ApplicationStarted`, `ApplicationStopped`, `ApplicationCrashed`,
 `ApplicationStateChanged`, `ActivationRequested`, `LaunchRequested`,
@@ -63,12 +66,17 @@ falls back to SIGTERM. Browser-to-Files delivery uses the existing Files handler
 ## Execution, termination and restart
 
 Each launch creates a session/process group. Its environment explicitly selects
-Qt Wayland, `/run/ocean`, the existing buses and application data convention
+Qt Wayland, the configured session runtime (`/run/user/1000` by default), the existing buses and application data convention
 `/Data/Users/<user>/.DataLocation/Applications/<appId>`. Only locale settings are
 inherited; EGLFS, TZ, LD_PRELOAD and arbitrary variables are excluded. Inherited
 descriptors are closed and umask is 0077. Trusted components retain the session
 UID/GID; regular apps receive a private UID/GID and only the render group.
 `PR_SET_NO_NEW_PRIVS` is enabled.
+
+Child stdout and stderr use private, immediately unlinked files in the app's
+Cache directory. On exit appd reports at most the last 8192 bytes of each stream,
+escaped and tagged with app ID and PID. Apps cannot write the supervisor's log
+files through inherited descriptors.
 
 Regular applications use their persistent application directory as `HOME` and
 its `Data`, `Config`, and `Cache` children as the XDG data, configuration, and
@@ -109,7 +117,7 @@ Normal exit and crashes clean remaining groups, sockets and PID-named previews.
 appd is a child subreaper. A GLib-integrated signalfd reaper monitors leaders and
 adopted helpers together, avoiding competing waitpid owners.
 
-PID 1 mounts cgroup v2. Each launch enters
+OpenRC mounts cgroup v2. Each launch enters
 `/sys/fs/cgroup/openwave-apps/app-<uuid>` before exec. `cgroup.kill` also removes
 helpers that change process groups. On restart appd cleans leftover cgroups.
 Without cgroup v2, only trusted components may launch; regular apps fail closed. `/run/openwave/appd` records PID,
@@ -187,3 +195,14 @@ Regular apps also receive a seccomp syscall filter and a cgroup task limit
 (default 512, including threads). See
 [Application Services](../application-services/README.md) for the security and
 compatibility details.
+
+## OpenRC integration validation
+
+OpenRC invalidates supervisor proofs before start and after stop, then records
+the actual executable PID, UID and start ticks in `start_post`. appd and its
+clients validate protected root-owned, SELinux-labeled proofs rather than
+relying on a legacy initializer. Ocean readiness requires compositor creation,
+a rendered frame, an owned Wayland socket and an accepted appd handshake.
+
+See [the integration report](../../docs/APPD-OCEAN-OPENRC-INTEGRATION.md) for
+root causes, metadata and identity invariants, tests and per-image boot evidence.

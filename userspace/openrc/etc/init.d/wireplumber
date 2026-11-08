@@ -1,0 +1,13 @@
+#!/sbin/openrc-run
+description="Ocean user PipeWire session manager"
+command="/usr/bin/wireplumber"
+command_args="-p main-systemwide"
+command_user="ocean:ocean"
+command_background="yes"
+pidfile="/run/user/1000/wireplumber.pid"
+export XDG_RUNTIME_DIR="/run/user/1000"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/bus"
+
+depend() {
+	need pipewire
+}

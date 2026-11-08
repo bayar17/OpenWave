@@ -1,0 +1,45 @@
+#!/sbin/openrc-run
+description="Optional upstream Waydroid container manager"
+command="/System/Services/waydroidd"
+command_background="yes"
+pidfile="/run/openwave/waydroid-manager.pid"
+output_log="/run/openwave/waydroid.stdout.log"
+error_log="/run/openwave/waydroid.stderr.log"
+retry="SIGTERM/30/SIGKILL/5"
+export DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
+
+depend() {
+	need dbus waydroid-runtime
+}
+
+start_pre() {
+	# Upstream status can exit zero when initialization has never run.
+	[ -f /var/lib/waydroid/waydroid.cfg ] && [ -d /var/lib/waydroid/rootfs ] || {
+		eerror "Waydroid is not initialized; container startup was not attempted"
+		return 1
+	}
+}
+
+start_post() {
+	/System/Services/openwave-wait-dbus system id.waydro.Container || return 1
+	manager_pid=$(cat "$pidfile") || return 1
+	case "$manager_pid" in ''|0|*[!0-9]*) return 1 ;; esac
+	owner=$(/usr/bin/gdbus call --system --timeout 2 \
+		--dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+		--method org.freedesktop.DBus.GetConnectionUnixProcessID \
+		id.waydro.Container) || return 1
+	[ "$owner" = "(uint32 $manager_pid,)" ] || {
+		eerror "Waydroid bus owner does not match the supervised manager"
+		return 1
+	}
+	kill -0 "$manager_pid" || {
+		eerror "Waydroid manager exited during startup"
+		return 1
+	}
+}
+
+stop_pre() {
+	if [ -x /usr/bin/waydroid ]; then
+		/bin/busybox timeout 60 /usr/bin/waydroid container stop || ewarn "Upstream Waydroid container stop failed or timed out"
+	fi
+}

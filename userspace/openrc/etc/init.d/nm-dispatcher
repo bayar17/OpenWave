@@ -1,0 +1,9 @@
+#!/sbin/openrc-run
+description="NetworkManager dispatcher"
+command="/usr/libexec/nm-dispatcher"
+command_args_foreground="--persist"
+supervisor=supervise-daemon
+
+depend() {
+	need dbus
+}

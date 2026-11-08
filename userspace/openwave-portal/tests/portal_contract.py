@@ -41,7 +41,7 @@ def call(connection, method, parameters=None, reply_type=None):
 def options(**values):
     encoded = {}
     for key, value in values.items():
-        encoded[key] = GLib.Variant("as" if isinstance(value, list) else "s", value)
+        encoded[key] = GLib.Variant("as" if isinstance(value, list) else "b" if isinstance(value, bool) else "s", value)
     return GLib.Variant("(a{sv})", (encoded,))
 
 
@@ -146,6 +146,48 @@ def main():
             call(requester, "CancelRequest", GLib.Variant("(o)", (rejected,)), "()")
             call(requester, "TakeResult", GLib.Variant("(o)", (rejected,)), "(uasah)")
 
+            # Settings requests image/*; malformed wildcards must still fail.
+            for invalid in ("image/p*", "image/**", "*/png", "image/"):
+                expect_error(lambda: call(requester, "OpenFile", options(mime_types=[invalid]), "(o)"), "InvalidRequest")
+            expect_error(lambda: call(requester, "OpenFile", options(image_source="../outside"), "(o)"), "InvalidRequest")
+            pictures = storage / "Pictures"
+            pictures.mkdir()
+            gallery_image = pictures / "photo.png"
+            gallery_image.write_bytes(image.read_bytes())
+            (pictures / "outside.png").symlink_to(other)
+            (pictures / "outside-directory").symlink_to(other.parent)
+            gallery = call(requester, "OpenFile", options(mime_types=["image/*"], image_sources=True, image_source="gallery"), "(o)")[0]
+            next_gallery = call(backend, "NextRequest", reply_type="(osa{sv})")
+            assert next_gallery[0] == gallery and next_gallery[2]["image_source"] == "gallery"
+            expect_error(lambda: call(requester, "ListGallery", GLib.Variant("(o)", (gallery,)), "(a(ssss))"), "Unauthorized")
+            entries = call(backend, "ListGallery", GLib.Variant("(o)", (gallery,)), "(a(ssss))")[0]
+            assert len(entries) == 1 and entries[0][1:] == ("photo.png", "Pictures", "image/png"), entries
+            token = entries[0][0]
+            expect_error(lambda: call(backend, "OpenGalleryItem", GLib.Variant("(os)", (gallery, "forged-token")), "(h)"), "InvalidSelection")
+            preview, fds = backend.call_with_unix_fd_list_sync(BUS, PATH, IFACE, "OpenGalleryItem", GLib.Variant("(os)", (gallery, token)), GLib.VariantType.new("(h)"), Gio.DBusCallFlags.NONE, 5000, None, None)
+            descriptor = fds.get(preview[0]); assert os.read(descriptor, 8) == b"\x89PNG\r\n\x1a\n"; os.close(descriptor)
+            cross = call(requester, "OpenFile", options(mime_types=["image/*"]), "(o)")[0]
+            expect_error(lambda: call(backend, "OpenGalleryItem", GLib.Variant("(os)", (cross, token)), "(h)"), "InvalidSelection")
+            call(requester, "CancelRequest", GLib.Variant("(o)", (cross,)), "()")
+            call(requester, "TakeResult", GLib.Variant("(o)", (cross,)), "(uasah)")
+            call(backend, "CompleteGalleryRequest", GLib.Variant("(ouas)", (gallery, 1, [token])), "()")
+            selected, fds = requester.call_with_unix_fd_list_sync(BUS, PATH, IFACE, "TakeResult", GLib.Variant("(o)", (gallery,)), GLib.VariantType.new("(uasah)"), Gio.DBusCallFlags.NONE, 5000, None, None)
+            assert selected[0] == 1 and selected[1] == ["photo.png"]
+            descriptor = fds.get(selected[2][0])
+            try:
+                os.write(descriptor, b"forbidden")
+                raise AssertionError("Gallery grant was writable")
+            except OSError:
+                pass
+            os.close(descriptor)
+            changed = call(requester, "OpenFile", options(mime_types=["image/*"]), "(o)")[0]
+            old_token = call(backend, "ListGallery", GLib.Variant("(o)", (changed,)), "(a(ssss))")[0][0][0]
+            replacement = pictures / "replacement.png"; replacement.write_bytes(image.read_bytes()); os.replace(replacement, gallery_image)
+            expect_error(lambda: call(backend, "OpenGalleryItem", GLib.Variant("(os)", (changed, old_token)), "(h)"), "InvalidSelection")
+            expect_error(lambda: call(backend, "CompleteGalleryRequest", GLib.Variant("(ouas)", (changed, 1, [old_token])), "()"), "InvalidSelection")
+            call(requester, "CancelRequest", GLib.Variant("(o)", (changed,)), "()")
+            call(requester, "TakeResult", GLib.Variant("(o)", (changed,)), "(uasah)")
+
             saved = call(requester, "SaveFile", options(suggested_filename="new.txt"), "(o)")[0]
             destination = storage / "new.txt"
             call(backend, "CompleteRequest",
@@ -159,6 +201,31 @@ def main():
             os.write(descriptor, b"saved through grant")
             os.close(descriptor)
             assert destination.read_bytes() == b"saved through grant"
+            assert destination.stat().st_uid == os.getuid()
+            assert destination.stat().st_mode & 0o777 == 0o600
+
+            downloads = storage / "Downloads"
+            assert not downloads.exists()
+            saved = call(requester, "SaveFile", options(initial_directory=str(downloads), suggested_filename="download.bin"), "(o)")[0]
+            assert downloads.stat().st_uid == os.getuid()
+            assert downloads.stat().st_mode & 0o777 == 0o700
+            call(backend, "CompleteRequest", GLib.Variant("(ouas)", (saved, 1, [str(downloads / "download.bin")])), "()")
+            result, fds = requester.call_with_unix_fd_list_sync(BUS, PATH, IFACE, "TakeResult",
+                GLib.Variant("(o)", (saved,)), GLib.VariantType.new("(uasah)"), Gio.DBusCallFlags.NONE, 5000, None, None)
+            descriptor = fds.get(result[2][0]); os.write(descriptor, b"download"); os.close(descriptor)
+            assert (downloads / "download.bin").read_bytes() == b"download"
+            # An existing entry is never overwritten; a symlink cannot redirect
+            # the default Downloads directory outside the verified user root.
+            saved = call(requester, "SaveFile", options(initial_directory=str(downloads), suggested_filename="download.bin"), "(o)")[0]
+            expect_error(lambda: call(backend, "CompleteRequest", GLib.Variant("(ouas)", (saved, 1, [str(downloads / "download.bin")])), "()"), "InvalidSelection")
+            call(requester, "CancelRequest", GLib.Variant("(o)", (saved,)), "()")
+            call(requester, "TakeResult", GLib.Variant("(o)", (saved,)), "(uasah)")
+            downloads.rename(storage / "kept-downloads")
+            downloads.symlink_to(Path(directory), target_is_directory=True)
+            expect_error(lambda: call(requester, "SaveFile", options(initial_directory=str(downloads), suggested_filename="escape.bin"), "(o)"), "InvalidRequest")
+            assert not (Path(directory) / "escape.bin").exists()
+            downloads.unlink()
+            (storage / "kept-downloads").rename(downloads)
 
             second = storage / "second.png"
             second.write_bytes(image.read_bytes())
@@ -208,7 +275,7 @@ def main():
             else:
                 raise AssertionError("Backend disappearance did not fail the request")
             requester.close_sync(None)
-            print("portal contract: open, multiple, save, directory, cancellation, authorization and failure passed")
+            print("portal contract: open, multiple, save, directory, cancellation, authorization, image wildcards, gallery tokens, previews, readonly grants, replacement rejection and failure passed")
         finally:
             process.terminate()
             process.wait(timeout=5)

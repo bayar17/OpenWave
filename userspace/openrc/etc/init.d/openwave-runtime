@@ -1,0 +1,43 @@
+#!/sbin/openrc-run
+
+description="Provision and verify OpenWave service runtime directories"
+
+depend() {
+	need localmount
+	after devfs sysfs
+}
+
+start() {
+	checkpath -d -o root:root -m 0755 /run/openwave || return 1
+	checkpath -d -o root:root -m 0755 /run/NetworkManager || return 1
+	checkpath -d -o root:root -m 0700 /var/lib/NetworkManager || return 1
+	checkpath -d -o root:root -m 0700 /var/lib/iwd || return 1
+	checkpath -d -o root:root -m 0700 /run/openwave/appd || return 1
+	checkpath -d -o root:root -m 0755 /run/user || return 1
+	checkpath -d -o ocean:ocean -m 0700 /run/user/1000 || return 1
+	# Keep Ocean's logs in its private session runtime. The dedicated evidence
+	# type permits the root OpenRC supervisor to open the redirected files and
+	# lets Ocean append only through its inherited descriptors.
+	[ ! -L /run/user/1000/openwave-logs ] || {
+		eerror "Refusing symlinked Ocean log directory"
+		return 1
+	}
+	checkpath -d -o ocean:ocean -m 0700 /run/user/1000/openwave-logs || return 1
+	checkpath -d -o root:root -m 0755 /var/lib/openwave-accounts || return 1
+	checkpath -d -o root:root -m 0700 /var/lib/openwave || return 1
+	checkpath -d -o root:root -m 0700 /var/lib/openwave/state || return 1
+	checkpath -d -o root:root -m 0700 /var/lib/openwave/app-identities || return 1
+	checkpath -d -o root:root -m 0700 /var/lib/openwave/permissions || return 1
+	checkpath -d -o ocean:ocean -m 0750 /var/lib/ocean || return 1
+	checkpath -d -o ocean:ocean -m 0750 /var/lib/ocean/.config || return 1
+	checkpath -d -o ocean:ocean -m 0750 /var/lib/ocean/.local || return 1
+	checkpath -d -o ocean:ocean -m 0750 /var/lib/ocean/.local/state || return 1
+	checkpath -d -o root:messagebus -m 0755 /run/dbus || return 1
+	checkpath -d -o root:root -m 0755 /run/udev || return 1
+	checkpath -d -o root:root -m 0755 /run/openrc || return 1
+	/System/Services/openwave-runtime-check || return 1
+}
+
+# Consumers can retain their paths throughout teardown; stopping this
+# provisioner changes only OpenRC's service state, never the directories.
+stop() { return 0; }

@@ -1,6 +1,8 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
+import OpenWave.Controls 1.0
+import OpenWave.Theme 1.0
 import QtQuick.Effects
 
 Item {
@@ -35,7 +37,7 @@ Item {
             text: row.title; textFormat: Text.PlainText; wrapMode: Text.WordWrap
             font.family: root.fontFamily; font.pixelSize: 36; color: "white"
         }
-        BrowserSwitch {
+        WRSwitch {
             id: toggle
             objectName: row.controlName
             anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
@@ -57,7 +59,7 @@ Item {
             autoPaddingEnabled: false
         }
         Rectangle { anchors.fill: parent; color: "#cc89969b" }
-        Button {
+        WRButton {
             x: 12; y: 60; width: 56; height: 58
             Accessible.name: qsTr("Close browser settings")
             contentItem: BrowserGlyph { kind: "back"; strokeColor: "white" }
@@ -69,16 +71,18 @@ Item {
             x: 88; y: 40; width: parent.width - 140; height: 94
             Repeater {
                 model: [qsTr("General"), qsTr("Search"), qsTr("Privacy")]
-                delegate: Button {
+                delegate: WRButton {
                     id: tab
                     required property int index
                     required property string modelData
                     width: tabs.width / 3; height: tabs.height
+                    surfaceColor: "transparent"
+                    pressedSurfaceColor: "#18ffffff"
                     checkable: true; checked: root.currentTab === index
                     Accessible.name: modelData
                     contentItem: Text {
                         text: tab.modelData; font.family: root.fontFamily; font.pixelSize: 40
-                        color: tab.checked ? "#008dff" : "white"
+                        color: tab.checked ? Theme.accentColor : "white"
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                         elide: Text.ElideRight
                     }
@@ -87,7 +91,7 @@ Item {
                             anchors.bottom: parent.bottom; anchors.bottomMargin: 18
                             anchors.horizontalCenter: parent.horizontalCenter
                             width: parent.width - 40; height: 3
-                            color: "#008dff"; visible: tab.checked
+                            color: Theme.accentColor; visible: tab.checked
                         }
                     }
                     onClicked: root.currentTab = index
@@ -114,7 +118,7 @@ Item {
                         title: qsTr("Ask on Download"); value: BrowserPreferences.askOnDownload
                         onToggled: function(checked) { BrowserPreferences.askOnDownload = checked }
                     }
-                    Button {
+                    WRButton {
                         id: folderButton
                         width: parent.width; height: 72
                         enabled: !BrowserPreferences.choosingFolder
@@ -140,6 +144,8 @@ Item {
                                 width: 28; height: 28; kind: "forward"
                             }
                         }
+                        surfaceColor: "transparent"
+                        pressedSurfaceColor: "#18ffffff"
                         background: Rectangle { color: folderButton.down ? "#18ffffff" : "transparent" }
                         onClicked: BrowserPreferences.chooseDownloadFolder()
                     }
@@ -172,23 +178,16 @@ Item {
                     SectionHeading { title: qsTr("Search engine") }
                     Repeater {
                         model: [{key: "google", label: "Google"}, {key: "duckduckgo", label: "DuckDuckGo"}, {key: "bing", label: "Bing"}]
-                        delegate: RadioDelegate {
+                        delegate: WRRadioButton {
                             id: engine
                             required property var modelData
                             width: sections.width; height: 80
                             checked: BrowserPreferences.searchEngine === modelData.key
                             Accessible.name: modelData.label
-                            contentItem: Text {
-                                text: engine.modelData.label; color: "white"
-                                font.family: root.fontFamily; font.pixelSize: 36
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                            indicator: Rectangle {
-                                anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-                                width: 34; height: 34; radius: 17; color: "transparent"
-                                border.color: "white"; border.width: 2
-                                Rectangle { anchors.centerIn: parent; width: 22; height: 22; radius: 11; color: "#008dff"; visible: engine.checked }
-                            }
+                            text: modelData.label
+                            textColor: "white"
+                            fontPixelSize: 36
+                            indicatorSize: 34
                             background: Rectangle { color: engine.down ? "#18ffffff" : "transparent" }
                             onClicked: BrowserPreferences.searchEngine = modelData.key
                         }

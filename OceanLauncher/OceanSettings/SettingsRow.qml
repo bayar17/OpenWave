@@ -1,5 +1,7 @@
 import QtQuick
 import QtQuick.Controls
+import OpenWave.Theme 1.0
+import OpenWave.Fonts 1.0
 
 AbstractButton {
     id: root
@@ -56,7 +58,7 @@ AbstractButton {
                 width: parent.width
                 wrapMode: Text.Wrap
                 color: "white"
-                font.family: "Inter"
+                font.family: Fonts.family
                 font.pixelSize: root.largeText ? 38 : 32
             }
             Text {
@@ -66,7 +68,7 @@ AbstractButton {
                 width: parent.width
                 wrapMode: Text.Wrap
                 color: "#d4dadd"
-                font.family: "Inter"
+                font.family: Fonts.family
                 font.pixelSize: root.largeText ? 30 : 25
             }
         }
@@ -78,7 +80,7 @@ AbstractButton {
             anchors.right: parent.right
             anchors.rightMargin: 10
             anchors.verticalCenter: parent.verticalCenter
-            color: root.checked ? "#00b7f0" : "#647078"
+            color: root.checked ? Theme.accentColor : "#647078"
             Rectangle {
                 x: root.checked ? 38 : 4
                 y: 4
@@ -92,7 +94,7 @@ AbstractButton {
             anchors.fill: parent
             visible: root.visualFocus
             color: "transparent"
-            border.color: "#00b7f0"
+            border.color: Theme.focusColor
             border.width: 2
         }
     }

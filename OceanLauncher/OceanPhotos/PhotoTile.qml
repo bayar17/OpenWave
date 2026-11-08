@@ -1,4 +1,5 @@
 import QtQuick
+import OpenWave.Theme 1.0
 import QtQuick.Controls
 import QtQuick.Effects
 
@@ -28,7 +29,7 @@ AbstractButton {
         }
         Rectangle {
             anchors.fill: parent; color: "transparent"; radius: 10
-            border.width: tile.selected ? 3 : 0; border.color: "#00b7f0"
+            border.width: tile.selected ? 3 : 0; border.color: Theme.selectionColor
         }
         Text {
             anchors.centerIn: parent; width: parent.width - 20
@@ -38,7 +39,7 @@ AbstractButton {
         }
         Rectangle {
             x: 12; y: 12; width: 32; height: 32; radius: 16
-            visible: tile.selecting; color: tile.selected ? "#00b7f0" : "#50454e53"
+            visible: tile.selecting; color: tile.selected ? Theme.selectionColor : "#50454e53"
             border.color: "white"; border.width: 1.5
             Text { anchors.centerIn: parent; text: tile.selected ? "✓" : ""; color: "white"; font.pixelSize: 24 }
         }

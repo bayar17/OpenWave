@@ -1,0 +1,9 @@
+# runlevel service: OpenWave does not configure these conventional PC services.
+boot binfmt
+boot keymaps
+boot save-keymaps
+boot save-termencoding
+boot swap
+boot sysctl
+boot termencoding
+default netmount

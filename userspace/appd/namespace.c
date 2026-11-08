@@ -1,15 +1,18 @@
 #define _GNU_SOURCE
 #include "appd.h"
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
 #include <sched.h>
+#include <selinux/selinux.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -19,6 +22,28 @@ static void mount_path(GPtrArray *args, const char *option, const char *source, 
     char *parent = g_path_get_dirname(target);
     argument(args, "--dir"); argument(args, parent); g_free(parent);
     argument(args, option); argument(args, source); argument(args, target);
+}
+static void bind_render_nodes(GPtrArray *args)
+{
+    int descriptor = open("/dev/dri", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (descriptor < 0) return;
+    DIR *entries = fdopendir(descriptor);
+    if (!entries) { close(descriptor); return; }
+    struct dirent *entry;
+    while ((entry = readdir(entries))) {
+        if (!g_str_has_prefix(entry->d_name, "renderD") || !entry->d_name[7]) continue;
+        const char *number = entry->d_name + 7;
+        while (g_ascii_isdigit(*number)) ++number;
+        if (*number) continue;
+        struct stat node;
+        if (fstatat(dirfd(entries), entry->d_name, &node, AT_SYMLINK_NOFOLLOW)
+            || !S_ISCHR(node.st_mode) || major(node.st_rdev) != 226
+            || minor(node.st_rdev) < 128) continue;
+        char *path = g_build_filename("/dev/dri", entry->d_name, NULL);
+        mount_path(args, "--dev-bind-try", path, path);
+        g_free(path);
+    }
+    closedir(entries);
 }
 static void namespace_child(gpointer parent)
 {
@@ -38,7 +63,7 @@ static gboolean read_until(int fd, char *text, size_t capacity, gboolean single,
         ssize_t count = read(fd, text + used, capacity - used - 1);
         if (count < 0 && (errno == EINTR || errno == EAGAIN)) continue;
         if (count < 0) return FALSE;
-        if (!count) { text[used] = 0; return used > 0; }
+        if (!count) { text[used] = 0; if (!used) errno = EPIPE; return used > 0; }
         used += count; text[used] = 0;
         if (single || strchr(text, '}')) return TRUE;
     }
@@ -59,23 +84,33 @@ gboolean appd_prepare_namespace(Instance *instance, GError **error)
     gboolean okay = FALSE;
     const char *stage = "launch";
     GPtrArray *args = g_ptr_array_new_with_free_func(g_free);
-    argument(args, "/usr/bin/bwrap"); argument(args, "--unshare-ipc"); argument(args, "--unshare-uts");
+    argument(args, "/usr/bin/bwrap");
+    if (is_selinux_enabled() > 0) {
+        argument(args, "--file-label"); argument(args, "system_u:object_r:openwave_sandbox_t:s0");
+    }
+    argument(args, "--unshare-ipc"); argument(args, "--unshare-uts");
     argument(args, "--hostname"); argument(args, "openwave-app");
     argument(args, "--cap-drop"); argument(args, "ALL"); argument(args, "--die-with-parent");
     argument(args, "--info-fd"); argument(args, "3");
     const char *runtime[] = {"/usr", "/lib", "/lib64", "/etc", "/proc", "/sys", NULL};
     for (guint i = 0; runtime[i]; ++i) mount_path(args, "--ro-bind-try", runtime[i], runtime[i]);
+    /* /etc/passwd resolves here; expose no private daemon identity state. */
+    mount_path(args, "--ro-bind", "/var/lib/openwave-accounts", "/var/lib/openwave-accounts");
     mount_path(args, "--ro-bind", instance->app->bundle, instance->app->bundle);
     mount_path(args, "--ro-bind", keeper, keeper);
     mount_path(args, "--ro-bind", "/run/openwave", "/run/openwave");
     argument(args, "--tmpfs"); argument(args, "/run/openwave/apps");
     argument(args, "--tmpfs"); argument(args, "/run/openwave/appd");
     mount_path(args, "--ro-bind", "/run/dbus", "/run/dbus");
+    /* Bind the directory, not one inode: NM replaces resolv.conf atomically.
+     * SELinux exposes only the DNS file; persistent profiles are not imported. */
+    mount_path(args, "--ro-bind-try", "/run/NetworkManager", "/run/NetworkManager");
     mount_path(args, "--bind", instance->data, instance->data);
     mount_path(args, "--bind", instance->runtime, instance->runtime);
     argument(args, "--dir"); argument(args, "/dev");
-    const char *devices[] = {"/dev/null", "/dev/zero", "/dev/random", "/dev/urandom", "/dev/dri", NULL};
+    const char *devices[] = {"/dev/null", "/dev/zero", "/dev/random", "/dev/urandom", NULL};
     for (guint i = 0; devices[i]; ++i) mount_path(args, "--dev-bind-try", devices[i], devices[i]);
+    bind_render_nodes(args);
     char *shm = g_build_filename(instance->runtime, "shm", NULL);
     mount_path(args, "--bind", shm, "/dev/shm"); g_free(shm);
     char *tmp = g_build_filename(instance->runtime, "tmp", NULL);

@@ -3,7 +3,7 @@ project(OceanBrowser VERSION 0.1 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 find_package(Qt6 6.10 REQUIRED COMPONENTS Quick QuickControls2 Svg Sql Network ShaderTools)
-find_package(OpenWaveSDK REQUIRED COMPONENTS Fonts Applications Wallpaper FileChooser ApplicationData Web Prompts)
+find_package(OpenWaveSDK REQUIRED COMPONENTS Fonts Theme Controls Application Applications Wallpaper FileChooser ApplicationData Web Prompts)
 qt_standard_project_setup(REQUIRES 6.10)
 
 qt_add_executable(appOceanBrowser main.cpp BrowserInput.cpp BrowserInput.h BrowserData.cpp BrowserData.h BrowserPreferences.cpp BrowserPreferences.h OceanHistoryManager.cpp OceanHistoryManager.h
@@ -14,7 +14,7 @@ qt_add_qml_module(appOceanBrowser
     URI OceanBrowser
     VERSION 1.0
     IMPORT_PATH "${OpenWaveSDK_QML_IMPORT_PATH}"
-    QML_FILES Main.qml BrowserSettingsPage.qml BrowserSwitch.qml BrowserGlyph.qml BrowserErrorPage.qml HistoryPage.qml DownloadsPage.qml AddressLoadingBorder.qml SearchCompatibility.js
+    QML_FILES Main.qml BrowserSettingsPage.qml BrowserGlyph.qml BrowserErrorPage.qml HistoryPage.qml DownloadsPage.qml AddressLoadingBorder.qml SearchCompatibility.js
     RESOURCES
         assets/Icon.svg assets/globe.svg
 )
@@ -30,7 +30,7 @@ set_target_properties(appOceanBrowser PROPERTIES
     INSTALL_RPATH "$ORIGIN/../lib;$ORIGIN/../lib64"
 )
 target_link_libraries(appOceanBrowser PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Svg Qt6::Sql Qt6::Network)
-target_link_libraries(appOceanBrowser PRIVATE OpenWave::Fonts OpenWave::Applications OpenWave::Wallpaper OpenWave::FileChooser OpenWave::ApplicationData OpenWave::Web OpenWave::Prompts)
+target_link_libraries(appOceanBrowser PRIVATE OpenWave::Fonts OpenWave::Theme OpenWave::Controls OpenWave::Application OpenWave::Applications OpenWave::Wallpaper OpenWave::FileChooser OpenWave::ApplicationData OpenWave::Web OpenWave::Prompts)
 if(CMAKE_CROSSCOMPILING)
     target_include_directories(appOceanBrowser PRIVATE
         "${CMAKE_SYSROOT}/usr/include/glib-2.0"

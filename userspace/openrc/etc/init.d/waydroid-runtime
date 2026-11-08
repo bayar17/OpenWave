@@ -1,0 +1,19 @@
+#!/sbin/openrc-run
+description="Provision optional upstream Waydroid runtime directories"
+
+depend() {
+	need openwave-runtime localmount
+}
+
+start() {
+	checkpath -d -o root:root -m 0700 /run/openwave/waydroid || return 1
+	checkpath -d -o root:root -m 0755 /var/lib/waydroid || return 1
+	checkpath -d -o waydroid:waydroid -m 0700 /var/lib/waydroid-user || return 1
+	checkpath -d -o waydroid:waydroid -m 0700 /run/waydroid || return 1
+	/System/Services/openwave-runtime-check --waydroid || return 1
+	# Binder devices disappear at reboot; recreate them without rerunning init
+	# or giving the long-lived manager mount/control-device authority.
+	/usr/bin/python3.14 -I /usr/libexec/openwave-waydroid-binder.py || return 1
+}
+
+stop() { return 0; }

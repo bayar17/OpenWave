@@ -120,6 +120,23 @@ Item {
                 PathMove { x: 4; y: 24 }
                 PathLine { x: 44; y: 24 }
             }
+            ShapePath {
+                strokeColor: root.kind === "edit" ? root.color : "transparent"
+                strokeWidth: 3
+                fillColor: "transparent"
+                capStyle: ShapePath.RoundCap
+                joinStyle: ShapePath.RoundJoin
+                startX: 34; startY: 5
+                PathLine { x: 43; y: 14 }
+                PathLine { x: 19; y: 38 }
+                PathLine { x: 8; y: 41 }
+                PathLine { x: 11; y: 30 }
+                PathLine { x: 34; y: 5 }
+                PathMove { x: 28; y: 11 }
+                PathLine { x: 37; y: 20 }
+                PathMove { x: 11; y: 30 }
+                PathLine { x: 19; y: 38 }
+            }
         }
     }
 }

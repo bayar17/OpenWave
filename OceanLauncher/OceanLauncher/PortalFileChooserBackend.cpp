@@ -5,8 +5,15 @@
 #include <QMetaObject>
 #include <QMimeDatabase>
 #include <QDebug>
+#include <QImageReader>
+#include <QByteArray>
+#include <QBuffer>
+#include <algorithm>
 #undef signals
 #include <gio/gio.h>
+#include <gio/gunixfdlist.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace {
 constexpr auto busName = "org.openwave.portal";
@@ -81,6 +88,18 @@ PortalFileChooserBackend::Pending PortalFileChooserBackend::next(bool *registere
                     pending.mimeTypes.append(QString::fromUtf8(*mime));
                 g_strfreev(mimes);
             }
+            g_variant_lookup(options, "image_sources", "b", &pending.imageSources);
+            const char *imageSource = nullptr;
+            if (g_variant_lookup(options, "image_source", "&s", &imageSource))
+                pending.imageSource = QString::fromUtf8(imageSource);
+            if (!pending.imageSources
+                && (pending.mode == QLatin1String("OpenFile")
+                    || pending.mode == QLatin1String("OpenFiles"))) {
+                pending.imageSources = std::any_of(pending.mimeTypes.cbegin(),
+                    pending.mimeTypes.cend(), [](const QString &mime) {
+                        return mime.startsWith(QLatin1String("image/"));
+                    });
+            }
         }
         g_variant_unref(options);
         g_variant_unref(reply);
@@ -126,6 +145,12 @@ void PortalFileChooserBackend::poll()
             m_suggestedFilename = pending.suggestedFilename;
             m_applicationId = pending.applicationId;
             m_mimeTypes = pending.mimeTypes;
+            m_imageSources = pending.imageSources;
+            m_imageSource = pending.imageSource;
+            m_galleryItems.clear();
+            m_galleryError.clear();
+            m_galleryLoading = false;
+            m_galleryLoaded = false;
             emit changed();
         }, Qt::QueuedConnection);
     });
@@ -150,12 +175,67 @@ bool PortalFileChooserBackend::acceptsPath(const QString &path) const
     else
         mime = QMimeDatabase().mimeTypeForFile(info,
             QMimeDatabase::MatchContent).name();
-    return m_mimeTypes.contains(mime);
+    return m_mimeTypes.contains(mime) || (m_mimeTypes.contains(QStringLiteral("image/*"))
+        && mime.startsWith(QStringLiteral("image/")));
 }
 
 void PortalFileChooserBackend::choose(const QStringList &paths)
 {
     complete(1, paths);
+}
+
+void PortalFileChooserBackend::chooseGallery(const QStringList &tokens)
+{
+    completeGallery(1, tokens);
+}
+
+void PortalFileChooserBackend::loadGallery()
+{
+    if (m_galleryLoading || m_galleryLoaded || !m_imageSources || m_requestId.isEmpty()) return;
+    m_galleryLoading = true;
+    m_galleryError.clear();
+    emit changed();
+    const QString id = m_requestId;
+    void *connection = m_bus;
+    m_pool.start([this, id, connection] {
+        QString error;
+        QVariantList items;
+        auto *bus = static_cast<GDBusConnection *>(connection);
+        if (!bus) error = QStringLiteral("Portal unavailable.");
+        GVariant *reply = bus ? call(bus, "ListGallery",
+            g_variant_new("(o)", id.toUtf8().constData()), &error) : nullptr;
+        if (reply) {
+            GVariant *entries = nullptr;
+            g_variant_get(reply, "(@a(ssss))", &entries);
+            GVariantIter iter;
+            g_variant_iter_init(&iter, entries);
+            const char *token = nullptr, *name = nullptr, *album = nullptr, *mime = nullptr;
+            while (g_variant_iter_next(&iter, "(&s&s&s&s)", &token, &name, &album, &mime)) {
+                items.append(QVariantMap{{"token", QString::fromUtf8(token)},
+                    {"name", QString::fromUtf8(name)}, {"album", QString::fromUtf8(album)},
+                    {"mime", QString::fromUtf8(mime)}});
+            }
+            g_variant_unref(entries);
+            g_variant_unref(reply);
+        }
+        QMetaObject::invokeMethod(this, [this, id, items, error] {
+            if (m_requestId != id) return;
+            m_galleryLoading = false;
+            m_galleryLoaded = error.isEmpty();
+            m_galleryItems = items;
+            m_galleryError = error;
+            emit changed();
+        }, Qt::QueuedConnection);
+    });
+}
+
+QString PortalFileChooserBackend::galleryImageUrl(const QString &token) const
+{
+    if (m_requestId.isEmpty() || token.isEmpty()) return {};
+    const QByteArray encoded = m_requestId.toUtf8().toBase64(
+        QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+    return QStringLiteral("image://openwavegallery/%1/%2")
+        .arg(QString::fromLatin1(encoded), token);
 }
 
 void PortalFileChooserBackend::cancel()
@@ -196,4 +276,115 @@ void PortalFileChooserBackend::complete(uint status, const QStringList &paths)
             emit changed();
         }, Qt::QueuedConnection);
     });
+}
+
+void PortalFileChooserBackend::completeGallery(uint status, const QStringList &tokens)
+{
+    if (m_busy || m_requestId.isEmpty()) return;
+    m_busy = true;
+    emit changed();
+    const QString id = m_requestId;
+    void *connection = m_bus;
+    m_pool.start([this, id, status, tokens, connection] {
+        QString error;
+        auto *bus = static_cast<GDBusConnection *>(connection);
+        if (bus) {
+            GVariantBuilder selection;
+            g_variant_builder_init(&selection, G_VARIANT_TYPE("as"));
+            for (const QString &token : tokens)
+                g_variant_builder_add(&selection, "s", token.toUtf8().constData());
+            GVariant *reply = call(bus, "CompleteGalleryRequest",
+                g_variant_new("(ou@as)", id.toUtf8().constData(), status,
+                    g_variant_builder_end(&selection)), &error);
+            if (reply) g_variant_unref(reply);
+        } else {
+            error = QStringLiteral("Portal unavailable.");
+        }
+        QMetaObject::invokeMethod(this, [this, id, error] {
+            m_busy = false;
+            if (!error.isEmpty()) emit errorOccurred(error);
+            else if (m_requestId == id) {
+                m_requestId.clear();
+                m_galleryItems.clear();
+                m_galleryLoaded = false;
+                m_imageSources = false;
+                m_imageSource.clear();
+                emit changed();
+                poll();
+            }
+            emit changed();
+        }, Qt::QueuedConnection);
+    });
+}
+
+QImage PortalFileChooserBackend::galleryImage(const QString &requestId,
+    const QString &token, const QSize &requestedSize) const
+{
+    auto *bus = g_bus_get_sync(G_BUS_TYPE_SYSTEM, nullptr, nullptr);
+    if (!bus) return {};
+    GError *error = nullptr;
+    GUnixFDList *outFds = nullptr;
+    GVariant *reply = g_dbus_connection_call_with_unix_fd_list_sync(bus,
+        busName, objectPath, interfaceName, "OpenGalleryItem",
+        g_variant_new("(os)", requestId.toUtf8().constData(), token.toUtf8().constData()),
+        G_VARIANT_TYPE("(h)"), G_DBUS_CALL_FLAGS_NONE, 5000, nullptr,
+        &outFds, nullptr, &error);
+    g_object_unref(bus);
+    if (!reply || !outFds) {
+        if (error) g_error_free(error);
+        if (reply) g_variant_unref(reply);
+        if (outFds) g_object_unref(outFds);
+        return {};
+    }
+    gint handle = -1;
+    g_variant_get(reply, "(h)", &handle);
+    int fd = g_unix_fd_list_get(outFds, handle, &error);
+    g_variant_unref(reply);
+    g_object_unref(outFds);
+    if (fd < 0) {
+        if (error) g_error_free(error);
+        return {};
+    }
+    struct stat info{};
+    if (fstat(fd, &info) || !S_ISREG(info.st_mode) || info.st_size <= 0
+        || info.st_size > 64 * 1024 * 1024) {
+        close(fd);
+        return {};
+    }
+    QByteArray data;
+    data.reserve(static_cast<qsizetype>(info.st_size));
+    char buffer[65536];
+    ssize_t count = 0;
+    while ((count = read(fd, buffer, sizeof(buffer))) > 0) {
+        if (data.size() + count > 64 * 1024 * 1024) { data.clear(); break; }
+        data.append(buffer, static_cast<qsizetype>(count));
+    }
+    close(fd);
+    if (count < 0 || data.isEmpty()) return {};
+    QBuffer input(&data);
+    if (!input.open(QIODevice::ReadOnly)) return {};
+    QImageReader reader(&input);
+    reader.setAutoTransform(true);
+    const QSize original = reader.size();
+    if (requestedSize.isValid() && original.isValid()
+        && (original.width() > requestedSize.width() || original.height() > requestedSize.height()))
+        reader.setScaledSize(original.scaled(requestedSize, Qt::KeepAspectRatio));
+    return reader.read();
+}
+
+PortalGalleryImageProvider::PortalGalleryImageProvider(
+    const PortalFileChooserBackend *backend)
+    : QQuickImageProvider(QQuickImageProvider::Image), m_backend(backend)
+{}
+
+QImage PortalGalleryImageProvider::requestImage(const QString &id, QSize *size,
+                                                 const QSize &requestedSize)
+{
+    const QStringList parts = id.split(QLatin1Char('/'));
+    if (parts.size() != 2 || !m_backend) return {};
+    const QString request = QString::fromUtf8(QByteArray::fromBase64(
+        parts.at(0).toLatin1(), QByteArray::Base64UrlEncoding));
+    QImage image = m_backend->galleryImage(request, parts.at(1), requestedSize);
+    if (size) *size = image.size();
+    return image;
 }

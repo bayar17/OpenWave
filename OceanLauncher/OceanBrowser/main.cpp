@@ -1,5 +1,5 @@
 #include <QGuiApplication>
-#include <OpenWave/FontManager.h>
+#include <OpenWave/Application.h>
 #include <OpenWave/WebRuntime.h>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -15,6 +15,7 @@
 #include "OceanHistoryManager.h"
 #include "OceanCookieManager.h"
 #include "OceanDownloadManager.h"
+#include "../../userspace/openrc/qa/BrowserActionsHarness.h"
 #include <OpenWave/WallpaperClient.h>
 #include <OpenWave/ApplicationChannel.h>
 
@@ -22,7 +23,6 @@ int main(int argc, char *argv[])
 {
     OpenWave::WebRuntime::configureGraphics();
     QGuiApplication app(argc, argv);
-    OpenWave::FontManager::initialize();
     QFont browserFont = QGuiApplication::font();
     browserFont.setWeight(QFont::ExtraLight);
     QGuiApplication::setFont(browserFont);
@@ -49,6 +49,10 @@ int main(int argc, char *argv[])
     auto *previews = new BrowserPreviews;
     BrowserData browserData(previews);
     BrowserPreferences preferences(browserData.dataPath(), browserData.userPath());
+    if (!browserActionsQaUrl().isEmpty()) {
+        preferences.setRememberTabs(false);
+        preferences.setStartPrivate(false);
+    }
     OceanHistoryManager history(browserData.dataPath());
     // The existing WPE Qt plugin appends cache/HTTP to this cache-only base.
     qputenv("OCEAN_BROWSER_DATA_DIRECTORY", (browserData.dataPath() + QStringLiteral("/Cache")).toUtf8());
@@ -63,6 +67,7 @@ int main(int argc, char *argv[])
     BrowserInput input;
     BrowserWebApps webApps;
     QQmlApplicationEngine engine;
+    OpenWave::Application::initialize(&engine);
     if (!OpenWave::WebRuntime::initialize(&engine)) return 1;
     engine.addImageProvider(QStringLiteral("browserpreviews"), previews);
     engine.rootContext()->setContextProperty(QStringLiteral("BrowserData"), &browserData);
@@ -79,5 +84,6 @@ int main(int argc, char *argv[])
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
                      &app, [] { QCoreApplication::exit(-1); }, Qt::QueuedConnection);
     engine.loadFromModule("OceanBrowser", "Main");
+    installBrowserActionsHarness(&app, &engine, &webApps, &downloads, &preferences);
     return app.exec();
 }

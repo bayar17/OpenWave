@@ -168,6 +168,15 @@ uses smooth mipmap filtering for downscaling. The wallpaper also uses mipmaps;
 its original landscape artwork remains aspect-cropped into the portrait screen.
 The original artwork and angular icon outlines are preserved.
 
+## Quick Menu controls
+
+Hold a control to enter inline editing, drag it to reorder, and use its corner
+toggle to show or hide it. At least one control stays visible so editing can
+always be entered. `AppController` persists the order and visibility.
+The press-and-drag configuration pattern was informed by KDE `plasma-mobile`
+commit `79d525dba45e812bd297bbbcb526b74c11c9974c`; Ocean's implementation is
+native to the existing launcher and preferences API.
+
 Inter Light and Regular are loaded by QML, so the installed launcher and direct
 QML previews use the same fonts. Their actual resolved faces are checked in
 `tst_controls.qml`. The bundled font license and Apache notice accompany both

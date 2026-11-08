@@ -10,6 +10,8 @@
     <method name="SetPermission"><arg name="application" type="s" direction="in"/><arg name="permission" type="s" direction="in"/><arg name="state" type="s" direction="in"/><arg name="duration" type="s" direction="in"/></method>
     <method name="ListApplicationsPermissions"><arg name="policies" type="aa{sv}" direction="out"/></method>
     <method name="AuthorizeFileChooser"><arg name="caller" type="s" direction="in"/><arg name="permission" type="s" direction="in"/><arg name="lease" type="s" direction="out"/></method>
+    <!-- Check preserves a live request grant; Validate consumes it on delivery. -->
+    <method name="CheckLease"><arg name="lease" type="s" direction="in"/><arg name="caller" type="s" direction="in"/><arg name="valid" type="b" direction="out"/></method>
     <method name="ValidateLease"><arg name="lease" type="s" direction="in"/><arg name="caller" type="s" direction="in"/><arg name="valid" type="b" direction="out"/></method>
     <method name="ReleaseLease"><arg name="lease" type="s" direction="in"/><arg name="caller" type="s" direction="in"/></method>
     <signal name="PermissionChanged"><arg name="application" type="s"/><arg name="permission" type="s"/><arg name="state" type="s"/></signal>

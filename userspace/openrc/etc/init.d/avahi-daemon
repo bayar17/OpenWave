@@ -1,0 +1,10 @@
+#!/sbin/openrc-run
+description="mDNS responder"
+command="/usr/sbin/avahi-daemon"
+command_args_foreground="--no-daemon"
+supervisor=supervise-daemon
+
+depend() {
+	need dbus
+	after NetworkManager
+}

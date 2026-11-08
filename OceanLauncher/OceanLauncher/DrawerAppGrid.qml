@@ -6,7 +6,10 @@ Flickable {
     property var apps: []
     property var artwork: ({})
     property real renderScale: 1
+    property bool reduceMotion: false
     property bool draggable: false
+    property bool qaDiagnostics: false
+    property bool qaTargetReady: false
     property bool appDragActive: false
     property real appDragY: 0
     property real cellWidth: 150
@@ -19,6 +22,9 @@ Flickable {
     readonly property int columns: Math.max(1, Math.floor((width + columnSpacing)
                                                         / (cellWidth + columnSpacing)))
     readonly property int rowCount: Math.ceil(count / columns)
+
+    onCountChanged: if (qaDiagnostics)
+        console.info("OCEAN_QA QML drawer-model count=" + count + " rows=" + rowCount)
 
     signal clicked(var app)
     signal appDragStarted(var app, real x, real y)
@@ -78,9 +84,20 @@ Flickable {
         width: root.width
         y: root.topPadding
         spacing: root.rowSpacing
+        move: Transition {
+            NumberAnimation {
+                properties: "x,y"
+                duration: root.reduceMotion ? 0 : 180
+                easing.type: Easing.OutCubic
+            }
+        }
         Repeater {
             id: rowRepeater
             model: root.rowCount
+            onItemAdded: (index, item) => {
+                if (root.qaDiagnostics)
+                    console.info("OCEAN_QA QML drawer-row-created index=" + index)
+            }
             delegate: Row {
                 id: row
                 required property int index
@@ -89,10 +106,21 @@ Flickable {
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.alignWhenCentered: false
                 spacing: root.columnSpacing
+                move: Transition {
+                    NumberAnimation {
+                        properties: "x,y"
+                        duration: root.reduceMotion ? 0 : 180
+                        easing.type: Easing.OutCubic
+                    }
+                }
                 function itemAt(index) { return icons.itemAt(index) }
                 Repeater {
                     id: icons
                     model: row.rowApps
+                    onItemAdded: (index, item) => {
+                        if (root.qaDiagnostics)
+                            console.info("OCEAN_QA QML drawer-delegate-created appId=" + item.appId)
+                    }
                     delegate: DrawerAppIcon {
                         required property string modelData
                         objectName: "drawerApp_" + modelData
@@ -102,6 +130,8 @@ Flickable {
                         width: root.cellWidth
                         height: root.cellHeight
                         renderScale: root.renderScale
+                        qaDiagnostics: root.qaDiagnostics
+                        qaTargetReady: root.qaTargetReady
                         draggable: root.draggable
                         scrollable: true
                         onClicked: app => root.clicked(app)

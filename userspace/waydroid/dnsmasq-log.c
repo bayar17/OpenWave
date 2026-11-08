@@ -1,0 +1,36 @@
+/* Keep the pinned network script unchanged; use dnsmasq's supported file log. */
+#define _GNU_SOURCE
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+int main(int argc, char **argv)
+{
+    if (argc < 2 || argc > 255 || getuid() || geteuid() || getgid() || getegid()) {
+        fputs("Waydroid dnsmasq adapter requires its root network service\n", stderr);
+        return 126;
+    }
+    char context[128];
+    int fd = open("/proc/self/attr/current", O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    ssize_t size = fd < 0 ? -1 : read(fd, context, sizeof(context) - 1);
+    if (fd >= 0) close(fd);
+    if (size <= 0) return 126;
+    while (size && (context[size - 1] == '\0' || context[size - 1] == '\n')) --size;
+    context[size] = '\0';
+    if (strcmp(context, "system_u:system_r:openwave_waydroid_net_t:s0")) {
+        fputs("Waydroid dnsmasq adapter requires the confined network domain\n", stderr);
+        return 126;
+    }
+    char **command = calloc((size_t)argc + 3, sizeof(*command));
+    if (!command) return 127;
+    command[0] = "/usr/sbin/dnsmasq";
+    for (int i = 1; i < argc; ++i) command[i] = argv[i];
+    command[argc] = "--log-facility=/run/waydroid-lxc/dnsmasq.log";
+    command[argc + 1] = "--no-poll";
+    execv(command[0], command);
+    perror("Waydroid dnsmasq adapter");
+    free(command);
+    return 127;
+}

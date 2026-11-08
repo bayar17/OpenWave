@@ -55,11 +55,20 @@ struct OceanDownloadManager::Session {
     bool privateTab;
     int views = 0;
 };
+struct BrowserFileChooserJob {
+    QPointer<OceanDownloadManager> owner;
+    void *context = nullptr;
+    WebKitFileChooserRequest *request = nullptr;
+    OpenWavePortals *portal = nullptr;
+    bool finished = false;
+};
+
 struct OceanDownloadManager::Context {
     OceanDownloadManager *owner;
     QPointer<QObject> object;
     WebKitWebView *native;
     Session *session;
+    QList<BrowserFileChooserJob *> fileChooserJobs;
 };
 struct OceanDownloadManager::Entry {
     OceanDownloadManager *owner;
@@ -200,6 +209,16 @@ OceanDownloadManager::~OceanDownloadManager() {
     m_io.waitForDone(); QCoreApplication::sendPostedEvents(this,QEvent::MetaCall);
     for (const auto &e:m_items) if (active(e->status)) fail(e,tr("Browser closed before completion."));
     const auto views=m_views.keys(); for (auto *v:views) releaseView(v);
+    for (auto *job : std::as_const(m_fileChooserJobs)) {
+        QObject::disconnect(job->portal, nullptr, this, nullptr);
+        if (job->portal) job->portal->cancelRequest();
+        if (job->request) {
+            webkit_file_chooser_request_cancel(job->request);
+            g_object_unref(job->request);
+        }
+        delete job;
+    }
+    m_fileChooserJobs.clear();
     for (const auto &e:m_items) cleanup(e);
     QMetaObject::invokeMethod(m_store,[s=m_store]{s->close();},Qt::BlockingQueuedConnection);
     m_storeThread.quit(); m_storeThread.wait();
@@ -276,9 +295,86 @@ void OceanDownloadManager::attachView(QObject *object,bool privateTab) {
         return TRUE;
     };
     g_signal_connect(view,"context-menu",G_CALLBACK(+menu),context);
+    auto chooser=[](WebKitWebView *, WebKitFileChooserRequest *request, gpointer data)->gboolean {
+        auto *context=static_cast<Context *>(data);
+        auto *owner=context->owner;
+        auto *job=new BrowserFileChooserJob;
+        job->owner=owner;
+        job->context=context;
+        job->request=WEBKIT_FILE_CHOOSER_REQUEST(g_object_ref(request));
+        job->portal=new OpenWavePortals(owner);
+        owner->m_fileChooserJobs.append(job);
+
+        auto finish=[owner](BrowserFileChooserJob *pending, const QStringList &files) {
+            if (!pending || pending->finished) return;
+            pending->finished=true;
+            if (pending->request) {
+                if (!files.isEmpty()) {
+                    QList<QByteArray> encoded;
+                    QVector<const gchar *> paths;
+                    encoded.reserve(files.size()); paths.reserve(files.size()+1);
+                    for (const QString &file : files) encoded.append(QFile::encodeName(file));
+                    for (const QByteArray &file : encoded) paths.append(file.constData());
+                    paths.append(nullptr);
+                    webkit_file_chooser_request_select_files(pending->request, paths.constData());
+                } else {
+                    webkit_file_chooser_request_cancel(pending->request);
+                }
+                g_object_unref(pending->request);
+                pending->request=nullptr;
+            }
+            if (pending->context) {
+                auto *viewContext=static_cast<Context *>(pending->context);
+                viewContext->fileChooserJobs.removeAll(pending);
+            }
+            owner->m_fileChooserJobs.removeAll(pending);
+            delete pending;
+        };
+
+        QObject::connect(job->portal, &OpenWavePortals::completed, owner,
+            [job,finish](const QVariantList &grants) {
+                QStringList files;
+                auto *request=job->request;
+                const bool multiple=request && webkit_file_chooser_request_get_select_multiple(request);
+                if (grants.size() <= (multiple ? 32 : 1)) {
+                    for (const QVariant &entry : grants) {
+                        auto *grant=qobject_cast<PortalGrant *>(entry.value<QObject *>());
+                        if (!grant || grant->writable() || grant->directory()) { files.clear(); break; }
+                        const QUrl temporary=grant->temporaryCopy();
+                        if (!temporary.isLocalFile() || temporary.toLocalFile().isEmpty()) { files.clear(); break; }
+                        files.append(temporary.toLocalFile());
+                    }
+                }
+                finish(job, files);
+            });
+        QObject::connect(job->portal, &OpenWavePortals::cancelled, owner,
+            [job,finish] { finish(job, {}); });
+        QObject::connect(job->portal, &OpenWavePortals::errorOccurred, owner,
+            [job,finish](const QString &) { finish(job, {}); });
+
+        context->fileChooserJobs.append(job);
+        owner->m_activeView=context->object;
+        QVariantList mimeTypes;
+        if (const gchar * const *types=webkit_file_chooser_request_get_mime_types(request))
+            for (const gchar * const *type=types; *type; ++type)
+                mimeTypes.append(QString::fromUtf8(*type));
+        QVariantMap options{{QStringLiteral("title"), QObject::tr("Choose a file")},
+                            {QStringLiteral("mimeTypes"), mimeTypes}};
+        if (webkit_file_chooser_request_get_select_multiple(request))
+            job->portal->openFiles(options);
+        else
+            job->portal->openFile(options);
+        return TRUE;
+    };
+    g_signal_connect(view,"run-file-chooser",G_CALLBACK(+chooser),context);
 }
 void OceanDownloadManager::releaseView(QObject *object) {
     auto *c=m_views.take(object); if (!c) return;
+    const auto chooserJobs=c->fileChooserJobs;
+    for (auto *job : chooserJobs) {
+        job->context=nullptr;
+        if (job->portal) job->portal->cancelRequest();
+    }
     g_signal_handlers_disconnect_by_data(c->native,c); g_object_unref(c->native);
     auto *s=c->session; delete c;
     for (const auto &e:m_items) if (!e->view || e->view==object) { e->view=nullptr; changed(e,false); }

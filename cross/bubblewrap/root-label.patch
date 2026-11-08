@@ -1,0 +1,12 @@
+--- a/bubblewrap.c
++++ b/bubblewrap.c
+@@ -3311,7 +3311,8 @@
+     die_with_mount_error ("Failed to make / slave");
+ 
+   /* Create a tmpfs which we will use as / in the namespace */
+-  if (mount ("tmpfs", base_path, "tmpfs", MS_NODEV | MS_NOSUID, NULL) != 0)
++  cleanup_free char *root_tmpfs_options = label_mount (NULL, opt_file_label);
++  if (mount ("tmpfs", base_path, "tmpfs", MS_NODEV | MS_NOSUID, root_tmpfs_options) != 0)
+     die_with_mount_error ("Failed to mount tmpfs");
+ 
+   old_cwd = get_current_dir_name ();

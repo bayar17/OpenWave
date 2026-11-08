@@ -106,6 +106,8 @@ int fixture(QGuiApplication &app, const QString &appId)
             const bool noResolve = !reply; if (reply) g_variant_unref(reply);
             reply = raw(bus, "org.openwave.Permissions", "/org/openwave/Permissions", "org.openwave.Permissions1", "ValidateLease", g_variant_new("(ss)", "forged", g_dbus_connection_get_unique_name(bus)));
             const bool noBroker = !reply; if (reply) g_variant_unref(reply);
+            reply = raw(bus, "org.openwave.Permissions", "/org/openwave/Permissions", "org.openwave.Permissions1", "CheckLease", g_variant_new("(ss)", "forged", g_dbus_connection_get_unique_name(bus)));
+            const bool noLeaseCheck = !reply; if (reply) g_variant_unref(reply);
             auto administrative = permissions(client, "ListApplicationsPermissions", {}, &error); const bool noAdmin = !error.isEmpty();
             permissions(client, "RevokePermission", {"com.openwave.ocean", "files.read"}, &error); const bool noRevoke = !error.isEmpty();
             int direct = open("/Data/Users/root/Documents/permission-test.txt", O_RDONLY);
@@ -121,7 +123,7 @@ int fixture(QGuiApplication &app, const QString &appId)
             errno = 0; const long cloneResult = syscall(SYS_clone3, nullptr, 0);
             const bool clone3Filtered = cloneResult == -1 && errno == ENOSYS;
             g_object_unref(bus);
-            report({{"uid", int(geteuid())}, {"identity", fields.value("appId").toString()}, {"digest", fields.value("manifestDigest").toString()}, {"noResolve", noResolve}, {"noBroker", noBroker},
+            report({{"uid", int(geteuid())}, {"identity", fields.value("appId").toString()}, {"digest", fields.value("manifestDigest").toString()}, {"noResolve", noResolve}, {"noBroker", noBroker && noLeaseCheck},
                 {"seccomp", prctl(PR_GET_SECCOMP)}, {"clone3Filtered", clone3Filtered}, {"noPrivateLifecycle", noPrivateLifecycle}, {"noAdmin", noAdmin}, {"noRevoke", noRevoke}, {"noDirect", noDirect}, {"noDatabase", noDatabase}, {"noForgedPrompt", noForgedPrompt}});
         } else if (operation == "begin") {
             pendingState = -1; pendingFinished = false;

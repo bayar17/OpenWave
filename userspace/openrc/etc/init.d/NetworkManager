@@ -1,0 +1,13 @@
+#!/sbin/openrc-run
+description="NetworkManager"
+command="/usr/sbin/NetworkManager"
+# No syslog daemon is installed: --debug keeps normal logs on the supervised
+# stderr descriptor instead of silently sending them to /dev/log.
+command_args_foreground="--no-daemon --debug"
+supervisor=supervise-daemon
+output_log="/run/openwave/networkmanager.stdout.log"
+error_log="/run/openwave/networkmanager.stderr.log"
+
+depend() {
+	need dbus udevd iwd openwave-runtime
+}

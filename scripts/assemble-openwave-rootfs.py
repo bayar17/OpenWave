@@ -4,32 +4,55 @@
 The SDK remains the source of development libraries. Existing rootfs state is
 preserved; --base allows the one-time migration of the legacy installation.
 """
+
 import argparse
 import json
 import os
+import posixpath
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'scripts'))
+from openwave_runtime_loader import guest_path, library_aliases, verify_core_loader
+from openwave_graphics_runtime import MESA_RECORD, verify_mesa_runtime
 TRIPLE = os.environ.get('OPENWAVE_TARGET_TRIPLE', 'x86_64-unknown-openwave')
 SDK = Path(os.environ.get('OPENWAVE_SDK', ROOT / 'toolchain'))
-SYSROOT = SDK / 'sysroot' / TRIPLE
+SYSROOT = Path(os.environ.get('OPENWAVE_SYSROOT', SDK / 'sysroot' / TRIPLE)).resolve()
 RPATH_FIXES = []
-STAGE = ROOT / 'out/staging' / TRIPLE / 'userspace'
+STAGE = Path(os.environ.get('OPENWAVE_RUNTIME_STAGE', ROOT / 'out/staging' / TRIPLE / 'userspace')).resolve()
+OPENRC_STAGE = ROOT / 'out/sdk-dependencies' / TRIPLE / 'openrc-openwave/stage'
 RUNTIME = Path(os.environ.get('OPENWAVE_ROOTFS', ROOT / 'rootfs')).resolve()
 # Runtime entry points and helper programs, not development utilities.
-BIN = { 'dbus-daemon', 'udevadm', 'pipewire', 'wireplumber',
-       'wpctl', 'nm-online', 'getent', 'iconv', 'locale', 'gsettings', 'gio', 'gdbus', 'bwrap'}
-SBIN = {'NetworkManager', 'udevd', 'udevadm', 'avahi-daemon', 'iconvconfig'}
+BIN = { 'busybox', 'sh', 'env', 'ip', 'mount', 'umount', 'rc-status', 'rc-depend', 'dbus-daemon', 'udevadm', 'pipewire', 'wireplumber',
+       'wpctl', 'nm-online', 'getent', 'iconv', 'locale', 'gsettings', 'gio', 'gdbus',
+       'bwrap', 'python3', 'python3.14', 'waydroid'}
+BIN.update({
+    'lxc-attach', 'lxc-autostart', 'lxc-cgroup', 'lxc-checkconfig',
+    'lxc-checkpoint', 'lxc-config', 'lxc-console', 'lxc-copy', 'lxc-create',
+    'lxc-destroy', 'lxc-device', 'lxc-execute', 'lxc-freeze', 'lxc-info',
+    'lxc-ls', 'lxc-monitor', 'lxc-start', 'lxc-stop', 'lxc-top',
+    'lxc-unfreeze', 'lxc-unshare', 'lxc-usernsexec', 'lxc-wait',
+})
+SBIN = {'acpid', 'NetworkManager', 'udevd', 'udevadm', 'avahi-daemon', 'iconvconfig',
+        'init.lxc', 'init.lxc.static', 'dnsmasq', 'iptables-apply',
+        'xtables-legacy-multi', 'iptables', 'iptables-legacy',
+        'iptables-restore', 'iptables-legacy-restore', 'iptables-save',
+        'iptables-legacy-save', 'ip6tables', 'ip6tables-legacy',
+        'ip6tables-restore', 'ip6tables-legacy-restore', 'ip6tables-save',
+        'ip6tables-legacy-save'}
 SHARE = {'X11', 'alsa', 'alsa-card-profile', 'applications', 'avahi', 'dbus-1',
+         'desktop-directories', 'icons', 'metainfo', 'waydroid-extra',
          'drirc.d', 'fontconfig', 'fonts', 'glib-2.0', 'gst-plugins-base',
-         'gstreamer-1.0', 'icu', 'libdrm', 'licenses', 'locale', 'ocean-browser',
+         'gstreamer-1.0', 'icu', 'libdrm', 'licenses', 'locale', 'lxc', 'ocean-browser',
          'pipewire', 'pixmaps', 'spa-0.2', 'wireplumber', 'wpe-webkit-2.0',
          'xkeyboard-config-2', 'xml', 'zoneinfo', 'xdg-desktop-portal'}
-QML = {'OpenWave/Fonts', 'OpenWave/Web', 'QML', 'QtQml', 'QtQml/Models', 'QtQml/WorkerScript', 'QtQuick',
+QML = {'OpenWave/Application', 'OpenWave/Fonts', 'OpenWave/Theme', 'OpenWave/Controls', 'OpenWave/Web', 'QML', 'QtQml', 'QtQml/Models', 'QtQml/WorkerScript', 'QtQuick',
        'QtQuick/Window', 'QtQuick/Controls', 'QtQuick/Controls/impl',
        'QtQuick/Controls/Basic', 'QtQuick/Controls/Basic/impl',
        'QtQuick/Controls/Fusion', 'QtQuick/Controls/Fusion/impl',
@@ -46,19 +69,25 @@ PLUGINS = {'platforms/libqeglfs.so', 'platforms/libqwayland.so',
            'sqldrivers/libqsqlite.so', 'iconengines/libqsvgicon.so',
            'tls/libqopensslbackend.so'}
 DEVEL = {'include', 'cmake', 'pkgconfig', 'objects-Release', 'metatypes',
-         'mkspecs', 'modules', 'sbom', 'glib-2.0', 'icu', 'libpng', 'audit'}
+         'mkspecs', 'modules', 'sbom', 'glib-2.0', 'icu', 'libpng', 'audit',
+         'gobject-introspection'}
 DEVEL_EXT = {'.a', '.o', '.la', '.prl', '.pc', '.cmake', '.h', '.hpp', '.qmltypes'}
-
 
 LEGACY_APPS = {'ocean-launcher', 'ocean-browser', 'ocean-files', 'ocean-settings', 'openwave-shell'}
 SERVICES = {'appd', 'permissiond', 'promptd', 'openwave-portal', 'wallpaperagentd', 'timed', 'connectivityd', 'audiod', 'xdg-desktop-portal-openwave'}
 BUNDLES = {'com.openwave.shell': 'ocean-launcher', 'com.openwave.ocean': 'ocean',
            'com.openwave.files': 'ocean-files', 'com.openwave.settings': 'ocean-settings',
-           'com.openwave.photos': 'ocean-photos'}
-
+           'com.openwave.photos': 'ocean-photos',
+           'com.openwave.waterrouge-gallery': 'water-rouge-gallery'}
 
 def runtime_path(rel):
     p = rel.parts
+    # OpenRC is the sole owner of the upstream Waydroid container manager.
+    if rel.as_posix() == 'usr/share/dbus-1/system-services/id.waydro.Container.service':
+        return False
+    if rel.as_posix() == 'usr/lib/waydroid/tools/services/openwave_android_provider.py' \
+            or (p[:3] == ('usr', 'lib', 'waydroid') and '__pycache__' in p):
+        return False
     if len(p) >= 3 and p[:2] == ('usr', 'bin') and p[2] in LEGACY_APPS:
         return False
     if len(p) >= 3 and p[:2] == ('usr', 'libexec') and p[2] in SERVICES:
@@ -113,6 +142,21 @@ def runtime_path(rel):
     return False
 
 
+def source_file_allowed(source_index, rel):
+    # The rootfs base owns the active SELinux policy. Never let SDK policy or
+    # install staging silently replace the policy shipped by the base image.
+    return not (source_index > 0 and rel.parts[:2] in (('etc', 'selinux'), ('etc', 'runlevels')))
+
+
+def busybox_applet(source, relative):
+    """Keep installed applet links when /bin is merged into /usr/bin."""
+    if relative.parent not in (Path('usr/bin'), Path('usr/sbin')) or not source.is_symlink():
+        return False
+    target = os.readlink(source)
+    guest_target = posixpath.normpath(posixpath.join('/' + relative.parent.as_posix(), target))
+    return guest_target in ('/bin/busybox', '/usr/bin/busybox')
+
+
 def copy_file(src, dst):
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.is_dir() and not dst.is_symlink():
@@ -159,6 +203,33 @@ def elf(path):
         return stream.read(4) == b'\x7fELF'
 
 
+def normalize_python_launcher(tree):
+    """Use the explicitly staged Python ABI instead of a stale SDK launcher."""
+    if not guest_path(tree, '/usr/bin/waydroid').is_file():
+        return
+    executable = guest_path(tree, '/usr/bin/python3.14')
+    if not elf(executable) or not executable.stat().st_mode & 0o111:
+        raise RuntimeError('Waydroid needs the target Python 3.14 executable')
+    if not any(guest_path(tree, f'/usr/{lib}/python3.14/encodings/__init__.py').is_file()
+               for lib in ('lib', 'lib64')):
+        raise RuntimeError('Waydroid needs the Python 3.14 standard library')
+    directory = guest_path(tree, '/usr/bin')
+    launcher = directory / 'python3'
+    if launcher.exists() and not launcher.is_symlink():
+        raise RuntimeError('Refusing to replace a separate Python interpreter')
+    if launcher.is_symlink():
+        launcher.unlink()
+    launcher.symlink_to('python3.14')
+    # Upstream's shebang uses this absolute path, even when /bin is merged.
+    environment = directory / 'env'
+    if not guest_path(tree, '/usr/bin/env').is_file():
+        if not elf(guest_path(tree, '/bin/busybox')):
+            raise RuntimeError('Waydroid needs /usr/bin/env or the target BusyBox env applet')
+        if environment.is_symlink():
+            environment.unlink()
+        environment.symlink_to('busybox')
+
+
 def needed(path):
     import struct
     with path.open('rb') as stream:
@@ -186,13 +257,52 @@ def needed(path):
     return names
 
 
+def normalize_trusted_metadata(tree):
+    """Apply appd's fixed trusted-config path requirements after overlays."""
+    root = tree.resolve()
+    for relative, expected_type, mode in (
+        ('etc', 'directory', 0o755),
+        ('etc/openwave', 'directory', 0o755),
+        ('etc/dbus-1', 'directory', 0o755),
+        ('etc/selinux', 'directory', 0o755),
+        ('etc/selinux/openwave', 'directory', 0o755),
+        ('etc/selinux/openwave/policy', 'directory', 0o755),
+        ('etc/selinux/openwave/contexts', 'directory', 0o755),
+        ('etc/selinux/openwave/contexts/files', 'directory', 0o755),
+        ('etc/openwave/appd.conf', 'file', 0o644),
+        ('etc/selinux/config', 'file', 0o644),
+        ('etc/selinux/openwave/policy/policy.35', 'file', 0o644),
+        ('etc/selinux/openwave/contexts/files/file_contexts', 'file', 0o644),
+    ):
+        path = root / relative
+        try:
+            info = path.lstat()
+        except FileNotFoundError as error:
+            raise RuntimeError(f'Missing trusted configuration path: {path}') from error
+        if path.is_symlink():
+            raise RuntimeError(f'Symlink in trusted configuration path: {path}')
+        if expected_type == 'directory' and not path.is_dir():
+            raise RuntimeError(f'Expected directory in trusted configuration path: {path}')
+        if expected_type == 'file' and not path.is_file():
+            raise RuntimeError(f'Expected regular file in trusted configuration path: {path}')
+        path.chmod(mode)
+        if path.stat().st_mode & 0o7777 != mode:
+            raise RuntimeError(f'Could not normalize trusted configuration path mode: {path}')
+    dbus = root / 'etc/dbus-1'
+    for path in dbus.glob('*.conf'):
+        info = path.lstat()
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError(f'Invalid D-Bus configuration object: {path}')
+        path.chmod(0o644)
+
+
 def assemble(base):
     build = Path(tempfile.mkdtemp(prefix='.rootfs-', dir=ROOT / 'out'))
     libraries = {}
     resources = {}
     library_priorities = {}
     try:
-        for source_index, source in enumerate((base, SYSROOT, STAGE)):
+        for source_index, source in enumerate((base, SYSROOT, OPENRC_STAGE, STAGE)):
             if not source.exists():
                 continue
             for directory, dirs, names in os.walk(source):
@@ -222,15 +332,16 @@ def assemble(base):
                             library_priorities[src.name] = priority
                     elif rel.parts[0] not in ('System', 'Applications'):
                         libraries.setdefault(src.name, (src, rel))
-                if runtime_path(rel):
+                if source_file_allowed(source_index, rel) and (runtime_path(rel) or busybox_applet(src, rel)):
                     resources[rel] = src
         # A preserved directory symlink replaces any old materialized subtree.
         links = [rel for rel, src in resources.items() if src.is_symlink() and src.is_dir()]
         resources = {rel: src for rel, src in resources.items() if not any(link in rel.parents for link in links)}
         for rel, src in resources.items():
             copy_file(src, build / rel)
+        normalize_python_launcher(build)
         # Restore directory permissions after parent creation, including private state.
-        for source_index, source in enumerate((base, SYSROOT, STAGE)):
+        for source_index, source in enumerate((base, SYSROOT, OPENRC_STAGE, STAGE)):
             if not source.exists():
                 continue
             for directory, dirs, names in os.walk(source):
@@ -294,10 +405,11 @@ def assemble(base):
             (build / name).mkdir(exist_ok=True)
         (build / 'tmp').chmod(0o1777)
         build.chmod(0o755)
+        normalize_trusted_metadata(build)
         # appd trusts administrative metadata/executables only through roots
         # that cannot be written by a group. Build-host umasks are not policy.
         for name in ('usr', 'usr/bin', 'usr/libexec', 'usr/share',
-                     'usr/share/applications', 'usr/share/pixmaps', 'etc/openwave',
+                     'usr/share/applications', 'usr/share/pixmaps',
                      'var', 'var/lib'):
             (build / name).chmod(0o755)
         for root in ('System', 'System/Applications', 'System/Services', 'Applications'):
@@ -339,13 +451,21 @@ def assemble(base):
                 raise RuntimeError(f'Development file in rootfs: {path}')
             if path.is_symlink() and ('toolchain' in os.readlink(path) or 'fakeroot' in os.readlink(path)):
                 raise RuntimeError(f'SDK link in runtime: {path}')
-        report = {'target': TRIPLE, 'elf_files': len(scanned),
+        aliases, loader_checked = [], 0
+        if TRIPLE == 'x86_64-unknown-openwave':
+            aliases = library_aliases(build, TRIPLE)
+            loader_checked = verify_core_loader(build)
+        mesa = verify_mesa_runtime(build, SYSROOT / 'usr/share/openwave/build/mesa.json')
+        record_path = build / MESA_RECORD
+        if record_path.is_symlink():
+            raise RuntimeError('Refusing symlinked graphics build record')
+        record_path.write_text(json.dumps(mesa, indent=2) + '\n')
+        record_path.chmod(0o644)
+        report = {'graphics_verified': True, 'loader_aliases': aliases, 'loader_checked': loader_checked, 'target': TRIPLE, 'elf_files': len(scanned),
                   'bytes': sum(p.stat().st_size for p in files(build) if not p.is_symlink()),
                   'rpath_fixes': RPATH_FIXES, 'qml_modules': sorted(QML), 'qt_plugins': sorted(PLUGINS)}
         (ROOT / 'out/rootfs-manifest.json').write_text(json.dumps(report, indent=2) + '\n')
-        backup = ROOT / 'out/rootfs-previous'
-        if backup.exists():
-            shutil.rmtree(backup)
+        backup = ROOT / 'out' / ('rootfs-previous-' + uuid.uuid4().hex)
         if RUNTIME.exists():
             RUNTIME.rename(backup)
         build.rename(RUNTIME)
@@ -358,7 +478,13 @@ def assemble(base):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base', type=Path, default=RUNTIME)
+    parser.add_argument('--normalize-trusted-metadata', type=Path,
+                        help='normalize the fixed appd config path in a candidate tree')
     args = parser.parse_args()
+    if args.normalize_trusted_metadata:
+        normalize_trusted_metadata(args.normalize_trusted_metadata)
+        print(f'Normalized trusted appd metadata in {args.normalize_trusted_metadata}')
+        raise SystemExit(0)
     if not args.base.exists():
         raise SystemExit('Specify --base fakeroot for the first runtime migration')
     assemble(args.base.resolve())

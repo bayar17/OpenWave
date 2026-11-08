@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+description="OpenWave device manager"
+command="/usr/sbin/udevd"
+# Resolve GROUP=video/render while loading rules. The account database is part
+# of the root filesystem and is available before this OpenRC service starts.
+command_args="--resolve-names=early"
+command_background="yes"
+pidfile="/run/openwave/udevd.pid"
+
+depend() {
+	need devfs sysfs
+	provide dev
+}
+
+# Device discovery precedes localmount/fsck. The full runtime provisioner
+# waits for localmount, so depending on it here creates a cycle through dev.
+start_pre() {
+	checkpath -d -o root:root -m 0755 /run/openwave || return 1
+	checkpath -d -o root:root -m 0755 /run/udev || return 1
+}
+
+# eudev does not itself replay kernel uevents that happened before its daemon
+# started. Replay the coldplug set, then wait for that finite queue before any
+# device-dependent service is allowed to start.
+start_post() {
+	/usr/bin/udevadm trigger --action=add || return 1
+	/usr/bin/udevadm settle || return 1
+}
