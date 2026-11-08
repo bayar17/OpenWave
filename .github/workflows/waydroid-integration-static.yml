@@ -1,0 +1,33 @@
+name: Waydroid integration orchestrator static checks
+
+on:
+  push:
+    branches:
+      - waydroid/integration-automation-20261108
+    paths:
+      - 'scripts/openwave-waydroid-integration.*'
+      - 'scripts/tests/test_waydroid_orchestrator.py'
+      - '.github/workflows/waydroid-integration-static.yml'
+  pull_request:
+    paths:
+      - 'scripts/openwave-waydroid-integration.*'
+      - 'scripts/tests/test_waydroid_orchestrator.py'
+      - '.github/workflows/waydroid-integration-static.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python syntax
+        run: python3 -m py_compile scripts/openwave-waydroid-integration.py scripts/tests/test_waydroid_orchestrator.py
+      - name: Bash syntax
+        run: bash -n scripts/openwave-waydroid-integration.sh
+      - name: Fail-closed contract regression tests
+        run: python3 -m unittest discover -s scripts/tests -p 'test_waydroid_orchestrator.py' -v
+      - name: CLI parsing
+        run: python3 -I scripts/openwave-waydroid-integration.py --help
