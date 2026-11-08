@@ -208,6 +208,22 @@ class PolicyTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('neverallow', result.stderr)
 
+    def test_appd_can_control_confined_app_but_not_waydroid_mount_helper(self):
+        # appd-to-app control socket is the only new Stage 2H target.
+        valid = self.compile('''
+            (neverallow openwave_appd_t openwave_waydroid_mount_t
+                        (unix_stream_socket (connectto)))
+            (neverallow openwave_appd_t openwave_waydroid_net_t
+                        (unix_stream_socket (connectto)))
+        ''')
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+        rejected = self.compile('''
+            (neverallow openwave_appd_t openwave_app_t
+                        (unix_stream_socket (connectto)))
+        ''')
+        self.assertNotEqual(rejected.returncode, 0, rejected.stderr)
+        self.assertIn('neverallow', rejected.stderr)
+
     def test_mount_helper_stage2a_is_transitional_but_unprivileged(self):
         # This stage validates domain separation, not actual mount ability.
         assertions = '''
