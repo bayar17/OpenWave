@@ -221,6 +221,12 @@ class Runner:
             return False
         if not self.run("build_selinux", [ROOT / "build-openwave", "selinux"], timeout=3600):
             return False
+        # Compile and stage the isolated C helper before full Qt userspace.
+        # WaterRouge SDK component gaps must not conceal this independent
+        # Stage 2A acceptance result, but they still block the full release.
+        if not self.run("build_waydroid_mount", [ROOT / "build-openwave", "waydroid-mount"],
+                        timeout=1800):
+            return False
         if not self.run("build_userspace", [ROOT / "build-openwave", "userspace"], timeout=7200):
             return False
         return self.run("build_rootfs", [ROOT / "build-openwave", "rootfs"], timeout=1800)
