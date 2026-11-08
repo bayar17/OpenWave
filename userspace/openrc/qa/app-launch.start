@@ -120,6 +120,25 @@ run_application() {
     else
         case "$stopped" in *"'state': <'Stopped'>"*) ;; *) okay=0 ;; esac
     fi
+    # Settings and WaterRouge Gallery do not implement ApplicationChannel.
+    # Files, Photos and Ocean Browser do; those MUST acknowledge the JSON
+    # quit request from appd and exit normally instead of using SIGTERM fallback.
+    case "$id:$disposition" in
+        com.openwave.files:stop|com.openwave.photos:stop|com.openwave.ocean:stop)
+            control_checks=$((control_checks + 1))
+            logfile=/run/openwave/appd.stderr.log
+            if grep -Fq "appd: control quit-ack appId=$id pid=$pid" "$logfile" &&
+                grep -Fq "appd: exited appId=$id pid=$pid wait-status=0 stopping=true" "$logfile" &&
+                ! grep -Fq "appd: control quit-fallback appId=$id pid=$pid" "$logfile" &&
+                ! grep -Fq "appd: control quit-timeout appId=$id pid=$pid" "$logfile"; then
+                control_passes=$((control_passes + 1))
+                printf 'APP_TEST CONTROL_ACK %s pid=%s authenticated response and normal exit\n' "$id" "$pid"
+            else
+                printf 'APP_TEST CONTROL_FAIL %s pid=%s missing quit ACK, nonzero exit or fallback\n' "$id" "$pid"
+                okay=0
+            fi
+            ;;
+    esac
     if [ "$okay" = 1 ]; then
         printf 'APP_TEST PASS %s live surface, confinement and %s\n' "$id" "$disposition"
         return 0
@@ -128,6 +147,8 @@ run_application() {
     return 1
 }
 all_passed=1
+control_checks=0
+control_passes=0
 trusted_passed=1
 ordinary_passed=1
 hold_seconds=10
@@ -162,6 +183,12 @@ if [ "$trusted_passed" = 1 ]; then
     # with a trusted native app that OpenRC's supervisor domain may signal.
     run_application com.openwave.settings openwave_settings_t crash || all_passed=0
     run_application com.openwave.settings openwave_settings_t || all_passed=0
+fi
+if [ "$control_checks" -ge 3 ] && [ "$control_passes" -eq "$control_checks" ]; then
+    printf 'APP_CONTROL_PASS authenticated quit acknowledgements and clean exits checks=%s\n' "$control_passes"
+else
+    printf 'APP_CONTROL_FAIL checks=%s passed=%s\n' "$control_checks" "$control_passes"
+    all_passed=0
 fi
 if [ "$all_passed" = 1 ]; then
     printf 'APP_SMOKE PASS confined live app launched through Ocean\n'
