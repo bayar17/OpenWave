@@ -100,19 +100,17 @@ class WaydroidReportTests(unittest.TestCase):
 
     def test_lxc_config_access_denial_reports_exact_path(self):
         serial = (
-            'WAYDROID_QA BEGIN enforcing=1\\n'
+            'WAYDROID_QA BEGIN enforcing=1\n'
             + probe('startup', 'Starting waydroid [ ok ]')
             + probe('request_session', 'OSError: container failed to start', 1)
             + probe('container', 'STOPPED')
-            + 'WAYDROID_QA LOG /var/lib/waydroid/waydroid.log\\n'
-            + '(1916) lxc-start -P /var/lib/waydroid/lxc -F -n waydroid\\n'
+            + 'WAYDROID_QA LOG /var/lib/waydroid/waydroid.log\n'
+            + '(1916) lxc-start -P /var/lib/waydroid/lxc -F -n waydroid\n'
             + 'lxc-start: waydroid: ../../../third_party/lxc-6.0.6/'
               'src/lxc/tools/lxc_start.c: lxc_start_main: 191 '
-              'You lack access to /var/lib/waydroid/lxc\\n'
-            + 'WAYDROID_QA END enforcing=1\\n'
+              'You lack access to /var/lib/waydroid/lxc\n'
+            + 'WAYDROID_QA END enforcing=1\n'
         )
-        # Do not let a test use literal escaped slashes for line delimiters.
-        serial = serial.replace('\\\\n', '\\n')
         result = evaluate(serial)
         self.assertEqual(result['stages']['lxc_config_access'], 'FAIL')
         self.assertEqual(result['lxc_denied_config_path'], '/var/lib/waydroid/lxc')
@@ -120,10 +118,10 @@ class WaydroidReportTests(unittest.TestCase):
 
     def test_lxc_config_access_is_unverified_without_container_evidence(self):
         serial = (
-            'WAYDROID_QA BEGIN enforcing=1\\n'
+            'WAYDROID_QA BEGIN enforcing=1\n'
             + probe('container', 'STOPPED')
-            + 'WAYDROID_QA END enforcing=1\\n'
-        ).replace('\\\\n', '\\n')
+            + 'WAYDROID_QA END enforcing=1\n'
+        )
         result = evaluate(serial)
         self.assertEqual(result['stages']['lxc_config_access'], 'UNVERIFIED')
         self.assertIsNone(result['lxc_denied_config_path'])
