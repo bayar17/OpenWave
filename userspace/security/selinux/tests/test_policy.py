@@ -100,6 +100,25 @@ class PolicyTests(unittest.TestCase):
                 self.assertNotEqual(denied.returncode, 0, denied.stderr)
                 self.assertIn('neverallow', denied.stderr)
 
+    def test_lxc_var_lib_state_parent_is_search_only(self):
+        # Stage 2M got through /var, /sys, /proc and reached the
+        # openwave_state_t-labeled /var/lib parent. Waydroid data itself
+        # remains under the dedicated openwave_waydroid_state_t label.
+        safe = self.compile("""
+            (neverallow openwave_lxc_t openwave_state_t
+                        (dir (read open write create add_name remove_name
+                              setattr mounton relabelfrom relabelto)))
+            (neverallow openwave_lxc_t openwave_state_t
+                        (file (read open write create execute execute_no_trans
+                               append unlink setattr)))
+        """)
+        self.assertEqual(safe.returncode, 0, safe.stderr)
+        denied = self.compile(
+            '(neverallow openwave_lxc_t openwave_state_t (dir (search)))'
+        )
+        self.assertNotEqual(denied.returncode, 0, denied.stderr)
+        self.assertIn('neverallow', denied.stderr)
+
     def test_waydroid_network_authority_is_separate_and_path_scoped(self):
         result = self.compile('''
             (neverallow openwave_waydroid_manager_t self (capability (net_admin net_raw sys_admin)))
