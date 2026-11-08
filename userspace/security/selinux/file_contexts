@@ -113,3 +113,13 @@
 /run/lxc(/.*)? system_u:object_r:openwave_lxc_run_t:s0
 /bin/lxc\-start system_u:object_r:openwave_lxc_start_exec_t:s0
 /usr/bin/lxc\-start system_u:object_r:openwave_lxc_start_exec_t:s0
+
+# Dynamic ELF objects are not mutable runtime or Waydroid state. Only installed
+# system libraries get this trust label; never promote /Applications user bundles.
+# The versioned interpreter's real inode and its ld-linux symlink both match.
+# Verified using libselinux's selabel_lookup_raw, not first-match assumptions.
+/(usr/)?lib(64)?(/[^/]+)*/[^/]+\.so(\.[0-9]+)* system_u:object_r:openwave_shared_lib_t:s0
+/System/Applications/[^/]+/(lib|plugins|qml)(/[^/]+)*/[^/]+\.so(\.[0-9]+)* system_u:object_r:openwave_shared_lib_t:s0
+/System/Services/(lib|plugins)(/[^/]+)*/[^/]+\.so(\.[0-9]+)* system_u:object_r:openwave_shared_lib_t:s0
+/(usr/)?lib(64)?(/[^/]+)*/ld-linux-[^/]+\.so(\.[0-9]+)* system_u:object_r:openwave_elf_loader_t:s0
+/(usr/)?lib(64)?(/[^/]+)*/ld-[0-9]+(\.[0-9]+)*\.so system_u:object_r:openwave_elf_loader_t:s0
