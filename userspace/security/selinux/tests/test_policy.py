@@ -70,6 +70,36 @@ class PolicyTests(unittest.TestCase):
                 self.assertNotEqual(rejected.returncode, 0, rejected.stderr)
                 self.assertIn('neverallow', rejected.stderr)
 
+    def test_lxc_host_path_search_does_not_open_private_or_virtual_filesystems(self):
+        # Runtime proof: lxc_start_main:191 cannot access
+        # /var/lib/waydroid/lxc while AVCs deny search on /var (private),
+        # /proc (proc), /sys (sysfs). Ensure no unbounded file privileges.
+        scopes = ('openwave_private_t', 'openwave_proc_t', 'openwave_sysfs_t')
+        safe = self.compile('''            (neverallow openwave_lxc_t openwave_private_t
+                        (dir (read open write create add_name remove_name
+                              setattr mounton)))
+            (neverallow openwave_lxc_t openwave_private_t
+                        (file (open read write execute execute_no_trans)))
+            (neverallow openwave_lxc_t openwave_proc_t
+                        (dir (read open write create add_name remove_name
+                              setattr mounton)))
+            (neverallow openwave_lxc_t openwave_sysfs_t
+                        (dir (read open write create add_name remove_name
+                              setattr mounton)))
+            (neverallow openwave_lxc_t openwave_proc_t
+                        (file (write create setattr)))
+            (neverallow openwave_lxc_t openwave_sysfs_t
+                        (file (write create setattr)))
+        ''')
+        self.assertEqual(safe.returncode, 0, safe.stderr)
+        for typ in scopes:
+            with self.subTest(typ=typ):
+                denied = self.compile(
+                    '(neverallow openwave_lxc_t ' + typ +
+                    ' (dir (search)))')
+                self.assertNotEqual(denied.returncode, 0, denied.stderr)
+                self.assertIn('neverallow', denied.stderr)
+
     def test_waydroid_network_authority_is_separate_and_path_scoped(self):
         result = self.compile('''
             (neverallow openwave_waydroid_manager_t self (capability (net_admin net_raw sys_admin)))

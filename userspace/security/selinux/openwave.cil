@@ -1412,6 +1412,18 @@
 ;; already granted via the dedicated dynamic-linker client attribute.
 ;; This is directory metadata/traversal only: no listing/open/write/mounton.
 (allow openwave_lxc_t openwave_runtime_t (dir (search getattr)))
+
+;; Stage 2M: after the shared-library loader succeeds, LXC checks its
+;; configuration root (/var/lib/waydroid/lxc) and probes procfs/sysfs.
+;; /var is openwave_private_t, while /proc and /sys roots use their
+;; dedicated pseudo-filesystem types. Path traversal only: no directory
+;; enumeration, file reads, device access, re-labels, or mount authority.
+;; These are type-scoped permissions, not one-path permissions: all
+;; directories carrying these types permit search. Reassess labels as
+;; the host path taxonomy is refined.
+(allow openwave_lxc_t openwave_private_t (dir (search)))
+(allow openwave_lxc_t openwave_proc_t (dir (search)))
+(allow openwave_lxc_t openwave_sysfs_t (dir (search)))
 (allow openwave_lxc_t
        openwave_runtime_t
        (file (open read getattr map)))
