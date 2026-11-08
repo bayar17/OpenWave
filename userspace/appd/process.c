@@ -225,6 +225,7 @@ gboolean appd_watch_children(Manager *m, GError **error)
 static gboolean force_exit(gpointer data)
 {
     Instance *instance = data; instance->deadline = 0;
+    g_warning("appd: control quit-timeout appId=%s pid=%d", instance->app->id, instance->pid);
     kill(-instance->pid, SIGKILL);
     kill_cgroup(instance->cgroup);
     return G_SOURCE_REMOVE;
@@ -266,7 +267,14 @@ static void command_done(Command *c, gboolean success)
     if (!success && instance && !c->quit && !instance->stopping && c->retries--) {
         g_timeout_add(100, retry_command, c); return;
     }
-    if (instance && c->quit && !success) kill(-c->pid, SIGTERM);
+    if (instance && c->quit) {
+        if (success) {
+            g_message("appd: control quit-ack appId=%s pid=%d", instance->app->id, c->pid);
+        } else {
+            g_warning("appd: control quit-fallback appId=%s pid=%d", instance->app->id, c->pid);
+            kill(-c->pid, SIGTERM);
+        }
+    }
     if (instance && !c->quit && !instance->stopping) {
         if (success) appd_emit(c->manager, "ActivationRequested", g_variant_new("(su)", instance->app->id, c->pid));
         else appd_emit(c->manager, "OperationFailed", g_variant_new("(ss)", instance->app->id, "Application activation endpoint is unavailable"));
@@ -303,9 +311,12 @@ static void connected(GObject *source, GAsyncResult *result, gpointer data)
     Command *c = data;
     c->connection = g_socket_client_connect_finish(G_SOCKET_CLIENT(source), result, NULL);
     if (!c->connection) { command_done(c, FALSE); return; }
+    Instance *instance = command_instance(c);
+    if (!instance) { command_done(c, FALSE); return; }
     struct ucred peer; socklen_t size = sizeof(peer);
     int fd = g_socket_get_fd(g_socket_connection_get_socket(c->connection));
-    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &size) || peer.uid != command_instance(c)->uid || peer.pid != c->pid) {
+    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &size) ||
+        size != sizeof(peer) || peer.uid != instance->uid || peer.pid != c->pid) {
         command_done(c, FALSE); return;
     }
     g_output_stream_write_all_async(g_io_stream_get_output_stream(G_IO_STREAM(c->connection)),
