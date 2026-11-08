@@ -171,6 +171,22 @@ class PolicyTests(unittest.TestCase):
                 self.assertNotEqual(fail.returncode, 0, fail.stderr)
                 self.assertIn('neverallow', fail.stderr)
 
+    def test_lxc_self_memfd_create_only_after_run_root_traversal(self):
+        # Stage 2P cleared /run search and reached a self memfd_file create
+        # AVC on lxc-start. Permit only the observed anonymous object
+        # allocation; not executable mappings or unrelated memfd IO.
+        safe = self.compile("""
+            (neverallow openwave_lxc_t self
+                        (memfd_file (read write open append getattr setattr
+                                     lock map execute execmod ioctl)))
+            (neverallow openwave_lxc_t self (process (execmem)))
+        """)
+        self.assertEqual(safe.returncode, 0, safe.stderr)
+        denied = self.compile(
+            '(neverallow openwave_lxc_t self (memfd_file (create)))')
+        self.assertNotEqual(denied.returncode, 0, denied.stderr)
+        self.assertIn('neverallow', denied.stderr)
+
     def test_waydroid_network_authority_is_separate_and_path_scoped(self):
         result = self.compile('''
             (neverallow openwave_waydroid_manager_t self (capability (net_admin net_raw sys_admin)))
