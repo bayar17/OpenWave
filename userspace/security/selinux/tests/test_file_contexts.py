@@ -1,6 +1,7 @@
 """Check production libselinux matching, including overlapping runtime rules."""
 import ctypes as c
 from pathlib import Path
+import os
 import stat
 import unittest
 
@@ -16,11 +17,30 @@ class FileContextsTests(unittest.TestCase):
         library.selabel_lookup_raw.argtypes = [c.c_void_p, c.POINTER(c.c_char_p), c.c_char_p, c.c_int]
         library.freecon.argtypes = [c.c_char_p]
         library.selabel_close.argtypes = [c.c_void_p]
-        path = str(ROOT / 'userspace/security/selinux/file_contexts').encode()
+        path = os.fsencode(os.environ.get('OPENWAVE_FILE_CONTEXTS',
+            ROOT / 'userspace/security/selinux/file_contexts'))
         options = (Option * 1)(Option(3, path))
         handle = library.selabel_open(0, options, 1)
         self.assertTrue(handle)
         cases = [
+            # Versioned interpreter inode and symlink must both use loader type.
+            ('/lib64/ld-linux-x86-64.so.2', stat.S_IFREG, 'openwave_elf_loader_t'),
+            ('/lib64/ld-linux-x86-64.so.2', stat.S_IFLNK, 'openwave_elf_loader_t'),
+            ('/usr/lib64/ld-linux-x86-64.so.2', stat.S_IFREG, 'openwave_elf_loader_t'),
+            ('/lib64/ld-2.41.so', stat.S_IFREG, 'openwave_elf_loader_t'),
+            ('/lib/ld-linux-aarch64.so.1', stat.S_IFREG, 'openwave_elf_loader_t'),
+            ('/lib64/libc.so.6', stat.S_IFREG, 'openwave_shared_lib_t'),
+            ('/usr/lib64/libselinux.so.1', stat.S_IFREG, 'openwave_shared_lib_t'),
+            ('/usr/lib64/liblxc.so.1.8.0', stat.S_IFREG, 'openwave_shared_lib_t'),
+            ('/usr/lib64/glibc-hwcaps/x86-64-v3/libc.so.6',
+             stat.S_IFREG, 'openwave_shared_lib_t'),
+            ('/System/Applications/com.openwave.shell/plugins/imageformats/libjpeg.so',
+             stat.S_IFREG, 'openwave_shared_lib_t'),
+            ('/System/Services/lib/libservice.so.1', stat.S_IFREG, 'openwave_shared_lib_t'),
+            # Never promote user-installed libraries into the trusted system type.
+            ('/Applications/com.example.app/lib/libsample.so.1',
+             stat.S_IFREG, 'openwave_user_bundle_t'),
+            ('/usr/bin/lxc-start', stat.S_IFREG, 'openwave_lxc_start_exec_t'),
             ('/usr/lib/waydroid/data/scripts/waydroid-net.sh', stat.S_IFREG, 'openwave_waydroid_net_exec_t'),
             ('/run/waydroid-lxc/network_up', stat.S_IFREG, 'openwave_waydroid_net_runtime_t'),
             ('/run/xtables.lock', stat.S_IFREG, 'openwave_xtables_lock_t'),
@@ -52,6 +72,15 @@ class FileContextsTests(unittest.TestCase):
             ('/var/lib/NetworkManager/system-connections/private.nmconnection', stat.S_IFREG, 'openwave_networkmanager_state_t'),
             ('/run/user/1000/openwave-logs/ocean.stderr.log', stat.S_IFREG, 'openwave_qa_evidence_t'),
         ]
+        if 'OPENWAVE_FILE_CONTEXTS' in os.environ:
+            # Build-generated entries override the static service fallback.
+            cases.extend([
+                ('/System/Services/appd', stat.S_IFREG, 'openwave_appd_exec_t'),
+                ('/System/Applications/com.openwave.shell/bin/ocean-launcher',
+                 stat.S_IFREG, 'openwave_shell_exec_t'),
+                ('/System/Services/waydroidd', stat.S_IFREG,
+                 'openwave_waydroid_manager_exec_t'),
+            ])
         try:
             for filename, mode, expected in cases:
                 with self.subTest(filename=filename):

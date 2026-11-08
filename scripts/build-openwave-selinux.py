@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'userspace/security/selinux'
@@ -102,7 +104,8 @@ def policy_inputs():
     paths = [Path(__file__).resolve(), SOURCE / 'compile-policy.c',
              SOURCE / 'kernel-policy.c', SOURCE / 'openwave.cil',
              SOURCE / 'file_contexts', SOURCE / 'config',
-             SOURCE / 'tests/inspect_qa_policy.c']
+             SOURCE / 'tests/inspect_qa_policy.c',
+             SOURCE / 'tests/test_file_contexts.py']
     paths.extend((ROOT / 'linux/security/selinux/include').glob('*.h'))
     sepol = ROOT / 'third_party/libsepol-3.11'
     paths.extend(path for base in (sepol / 'src', sepol / 'include', sepol / 'cil')
@@ -204,6 +207,15 @@ def build(sdk, triple, stage, output):
                     str(SOURCE / 'tests/inspect_qa_policy.c'), str(native / 'src/libsepol.a'),
                     '-o', str(inspector)], env=env, check=True)
     subprocess.run([str(inspector), str(policy)], check=True)
+    # The installed map is the static source PLUS generated service
+    # entrypoints. Validate its actual libselinux precedence, not just the
+    # source regexes, before issuing a fresh policy/build manifest.
+    with tempfile.TemporaryDirectory(prefix='context-check-', dir=output) as work:
+        effective = Path(work) / 'file_contexts'
+        effective.write_text(contexts)
+        check_env = {**env, 'OPENWAVE_FILE_CONTEXTS': str(effective)}
+        subprocess.run([sys.executable, str(SOURCE / 'tests/test_file_contexts.py')],
+                       cwd=ROOT, env=check_env, check=True)
     manifest = {
         'schema': 1,
         'target': triple,

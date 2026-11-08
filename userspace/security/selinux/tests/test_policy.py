@@ -208,9 +208,33 @@ class PolicyTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('neverallow', result.stderr)
 
+    def test_linker_objects_are_readonly_for_confined_clients(self):
+        result = self.compile('''
+            (neverallow openwave_app_t openwave_elf_loader_t
+                (file (write append create setattr unlink rename)))
+            (neverallow openwave_lxc_t openwave_shared_lib_t
+                (file (write append create setattr unlink rename)))
+            (neverallow openwave_waydroid_manager_t openwave_shared_lib_t
+                (file (write append create setattr unlink rename)))
+        ''')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for rule in (
+            '(allow openwave_app_t openwave_elf_loader_t (file (write)))',
+            '(allow openwave_appd_t openwave_shared_lib_t (file (setattr)))',
+            '(allow openwave_lxc_t openwave_shared_lib_t (file (write)))',
+            '(allow openwave_waydroid_manager_t openwave_elf_loader_t (file (append)))',
+            '(allow openwave_waydroid_net_t openwave_shared_lib_t (file (relabelto)))',
+            '(allow openwave_lxc_t openwave_shared_lib_t (file (execute_no_trans)))',
+            '(allow openwave_app_t openwave_elf_loader_t (file (entrypoint)))',
+        ):
+            with self.subTest(rule=rule):
+                result = self.compile(rule)
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertIn('neverallow', result.stderr)
+
     def test_binary_inspector_rejects_missing_loader_rule_and_attribute_write(self):
         mutations = [re.sub(
-            r'\(allow openwave_system_t openwave_runtime_t\s+\(file \([^)]*\)\)\)',
+            r'\(allow openwave_dynamic_link_client openwave_elf_loader_t\s+\(file \([^)]*\)\)\)',
             '', POLICY.read_text()), POLICY.read_text() +
             '\n(allow openwave_native_service openwave_runtime_t (file (write)))\n']
         for text in mutations:

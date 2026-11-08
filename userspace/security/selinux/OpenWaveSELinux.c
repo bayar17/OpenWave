@@ -118,7 +118,9 @@ int openwave_selinux_boot(void)
         struct selabel_handle *labels = selabel_open(SELABEL_CTX_FILE, NULL, 0);
         if (!labels) return -1;
         const char *critical[] = {"/", "/init", "/sbin/openrc-init", "/bin/busybox",
-            "/lib64/ld-linux-x86-64.so.2", "/etc/selinux/openwave/policy/policy.35",
+            "/lib64/ld-linux-x86-64.so.2", "/lib64/libc.so.6",
+            "/usr/lib64/libselinux.so.1",
+            "/etc/selinux/openwave/policy/policy.35",
             "/System/Services/appd", "/System/Services/permissiond",
             "/System/Applications/com.openwave.shell/bin/ocean-launcher", NULL};
         for (int i = 0; critical[i]; ++i) {

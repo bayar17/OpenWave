@@ -144,13 +144,51 @@ int main(int argc, char **argv)
         return 2;
     }
     policydb_t *policy = &wrapped->p;
-    const char *executables[] = {"openwave_runtime_t", "openwave_openrc_exec_t"};
+    const char *executables[] = {"openwave_elf_loader_t", "openwave_openrc_exec_t"};
     const char *exec_permissions[] = {"read", "open", "getattr", "map", "execute", "execute_no_trans"};
     int boot_exec = 1;
     for (size_t i = 0; i < 2; ++i)
         for (size_t j = 0; j < 6; ++j)
             boot_exec &= has(policy, "openwave_system_t", executables[i], "file", exec_permissions[j]);
-    check(boot_exec, "PID 1 can execute OpenRC and the runtime dynamic loader");
+    check(boot_exec, "PID 1 can execute OpenRC and the separately labeled ELF interpreter");
+
+    /* The dynamic loader and mapped libraries must be available in each
+     * actual process domain. The labels do not authorize filesystem mutation. */
+    const char *dynamic_domains[] = {
+        "openwave_system_t", "openwave_app_t", "openwave_appd_t",
+        "openwave_shell_t", "openwave_dbus_t",
+        "openwave_waydroid_manager_t", "openwave_waydroid_launcher_t",
+        "openwave_waydroid_helper_t", "openwave_waydroid_net_t",
+        "openwave_lxc_t",
+    };
+    const char *loader_perms[] = {
+        "read", "open", "getattr", "map", "execute", "execute_no_trans",
+    };
+    const char *library_perms[] = {
+        "read", "open", "getattr", "map", "execute",
+    };
+    const char *mutation_perms[] = {
+        "write", "append", "create", "setattr", "unlink", "rename",
+        "relabelfrom", "relabelto",
+    };
+    int linker_access = 1;
+    for (size_t i = 0; i < sizeof(dynamic_domains) / sizeof(dynamic_domains[0]); ++i) {
+        for (size_t j = 0; j < sizeof(loader_perms) / sizeof(loader_perms[0]); ++j)
+            linker_access &= has(policy, dynamic_domains[i], "openwave_elf_loader_t",
+                                 "file", loader_perms[j]);
+        for (size_t j = 0; j < sizeof(library_perms) / sizeof(library_perms[0]); ++j)
+            linker_access &= has(policy, dynamic_domains[i], "openwave_shared_lib_t",
+                                 "file", library_perms[j]);
+        if (strcmp(dynamic_domains[i], "openwave_system_t") != 0) {
+            linker_access &= !has_any(policy, dynamic_domains[i], "openwave_elf_loader_t",
+                                      "file", mutation_perms,
+                                      sizeof(mutation_perms) / sizeof(mutation_perms[0]));
+            linker_access &= !has_any(policy, dynamic_domains[i], "openwave_shared_lib_t",
+                                      "file", mutation_perms,
+                                      sizeof(mutation_perms) / sizeof(mutation_perms[0]));
+        }
+    }
+    check(linker_access, "Native, LXC and Waydroid domains map ELF objects without write authority");
     const char *producer_domains[] = {
         "openwave_appd_t", "openwave_wallpaper_t", "openwave_shell_t" };
     const char *log_permissions[] = {"write", "append"};
