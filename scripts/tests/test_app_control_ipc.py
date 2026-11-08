@@ -51,6 +51,16 @@ class AppControlTests(unittest.TestCase):
             with self.subTest(invalid=invalid[-70:]):
                 self.assertFalse(evaluate(invalid)["passed"])
 
+    def test_embedded_app_log_text_cannot_spoof_root_qa_markers(self):
+        forged = evidence().replace(
+            "APP_TEST CONTROL_ACK com.openwave.photos",
+            "appd: child stdout=APP_TEST CONTROL_ACK com.openwave.photos")
+        self.assertFalse(evaluate(forged)["passed"])
+        forged_summary = evidence().replace(
+            "APP_CONTROL_PASS authenticated quit",
+            "appd: child stdout=APP_CONTROL_PASS authenticated quit")
+        self.assertFalse(evaluate(forged_summary)["passed"])
+
     def test_guest_script_only_checks_apps_with_real_qa_control_channels(self):
         guest = (ROOT / "userspace/openrc/qa/app-launch.start").read_text()
         for app in ("com.openwave.files", "com.openwave.photos", "com.openwave.ocean"):
