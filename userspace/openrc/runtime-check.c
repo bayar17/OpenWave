@@ -9,6 +9,27 @@
 #include <selinux/selinux.h>
 
 #include "../security/selinux/OpenWaveSELinux.h"
+#include "qa-debug-cmdline.h"
+
+/* This exception is intentionally not a production mode. Any missing or
+ * truncated /proc/cmdline evidence fails closed to the enforcing requirement.
+ * The same QA flags are permitted only by the immutable-snapshot test runner.
+ */
+static bool permissive_snapshot_qa_selected(void)
+{
+    FILE *input = fopen("/proc/cmdline", "re");
+    if (!input)
+        return false;
+    char command_line[8192];
+    size_t count = fread(command_line, 1, sizeof(command_line) - 1, input);
+    bool truncated = count == sizeof(command_line) - 1 && fgetc(input) != EOF;
+    bool broken = ferror(input);
+    fclose(input);
+    if (truncated || broken)
+        return false;
+    command_line[count] = '\0';
+    return openwave_permissive_qa_cmdline(command_line);
+}
 
 static int check(const char *path, uid_t uid, gid_t gid, mode_t mode,
                  const char *context)
@@ -82,10 +103,17 @@ int main(int argc, char **argv)
         return 2;
     }
     if (geteuid() != 0) return 126;
-    if (is_selinux_enabled() != 1 || security_getenforce() != 1) {
-        fputs("openwave runtime check: SELinux is not active and enforcing\n", stderr);
+    int selinux_mode = security_getenforce();
+    bool debug_mode = selinux_mode == 0 && permissive_snapshot_qa_selected();
+    if (is_selinux_enabled() != 1 ||
+        (selinux_mode != 1 && !debug_mode)) {
+        fputs("openwave runtime check: SELinux is not active and enforcing "
+              "(no explicit snapshot-QA exception)\n", stderr);
         return 1;
     }
+    if (debug_mode)
+        fputs("openwave runtime check: PERMISSIVE SNAPSHOT QA ONLY; "
+              "not a release verification\n", stderr);
     set_selinuxmnt("/sys/fs/selinux");
     if (selinux_set_policy_root("/etc/selinux/openwave")) {
         perror("openwave runtime check: set SELinux policy root");
@@ -102,8 +130,14 @@ int main(int argc, char **argv)
         const char *context = waydroid ? waydroid_required[i].context : native_required[i].context;
         if (check(path, uid, gid, mode, context)) return 1;
     }
-    puts(waydroid
-        ? "OpenWave Waydroid runtime directories: ownership, mode, and SELinux labels verified"
-        : "OpenWave native runtime directories: ownership, mode, and SELinux labels verified");
+    if (debug_mode) {
+        puts(waydroid
+            ? "OpenWave Waydroid runtime directories: QA_ONLY permissive snapshot checks complete"
+            : "OpenWave native runtime directories: QA_ONLY permissive snapshot checks complete");
+    } else {
+        puts(waydroid
+            ? "OpenWave Waydroid runtime directories: ownership, mode, and SELinux labels verified"
+            : "OpenWave native runtime directories: ownership, mode, and SELinux labels verified");
+    }
     return 0;
 }

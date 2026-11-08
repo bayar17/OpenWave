@@ -149,7 +149,8 @@ def main():
         append += ' openwave.selinux=permissive'
     if args.selinux_debug:
         # Diagnostic-only kernel logging. Never relax security via image edits.
-        append += ' audit=1 log_buf_len=16M printk.time=1'
+        # An explicit fourth token gates the OpenRC runtime-check exception.
+        append += ' audit=1 log_buf_len=16M printk.time=1 openwave.qa=selinux-debug'
     if args.app_launch:
         append += ' openwave.qa=app-launch'
     if args.dns:

@@ -1,7 +1,9 @@
 """Host-only checks for explicit SELinux permissive debug and AVC summaries."""
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -67,6 +69,54 @@ class SelinuxDebugTests(unittest.TestCase):
         self.assertEqual(result['gates']['helper_inode']['detail'], 'owner=0')
         self.assertFalse(result['preflight_passed'])
         self.assertFalse(result['release_ready'])
+
+    def test_native_runtime_exception_requires_exact_debug_tokens(self):
+        compiler = shutil.which('cc') or shutil.which('clang')
+        if compiler is None:
+            self.skipTest('A host C compiler is required')
+        program = (
+            '#include "qa-debug-cmdline.h"\n'
+            'int main(int argc, char **argv) {\n'
+            '  return argc == 2 && openwave_permissive_qa_cmdline(argv[1]) ? 0 : 1;\n'
+            '}\n'
+        )
+        with tempfile.TemporaryDirectory(prefix='openwave-qa-cmdline-') as temporary:
+            source = Path(temporary) / 'test.c'
+            binary = Path(temporary) / 'test'
+            source.write_text(program)
+            build = subprocess.run([
+                compiler, '-std=c11', '-Wall', '-Wextra', '-Werror',
+                '-I', str(ROOT / 'userspace/openrc'),
+                str(source), '-o', str(binary)
+            ], capture_output=True, text=True, timeout=20)
+            self.assertEqual(build.returncode, 0, build.stderr)
+            expected = (
+                'root=/dev/vda openwave.audit=verbose '
+                'openwave.selinux=permissive openwave.qa=mount-preflight '
+                'openwave.qa=selinux-debug'
+            )
+            self.assertEqual(subprocess.run([str(binary), expected]).returncode, 0)
+            self.assertEqual(subprocess.run([str(binary), expected.replace(' ', '\t')]).returncode, 0)
+            for bad in (
+                expected.replace('openwave.selinux=permissive', 'openwave.selinux=enforcing'),
+                expected.replace('openwave.qa=mount-preflight', ''),
+                expected.replace('openwave.qa=selinux-debug', ''),
+                expected.replace('openwave.audit=verbose', ''),
+                expected.replace('openwave.qa=selinux-debug', 'openwave.qa=selinux-debug-forged'),
+                expected.replace('openwave.qa=mount-preflight', 'openwave.qa=mount-preflight-forged'),
+                '',
+            ):
+                with self.subTest(bad=bad):
+                    self.assertEqual(subprocess.run([str(binary), bad]).returncode, 1)
+
+    def test_runtime_gate_default_is_enforcing(self):
+        source = (ROOT / 'userspace/openrc/runtime-check.c').read_text()
+        qemu = (ROOT / 'scripts/test-openwave-boot.py').read_text()
+        self.assertIn('selinux_mode == 0 && permissive_snapshot_qa_selected()', source)
+        self.assertIn('selinux_mode != 1 && !debug_mode', source)
+        self.assertIn('PERMISSIVE SNAPSHOT QA ONLY', source)
+        self.assertIn('openwave.qa=selinux-debug', qemu)
+        self.assertIn('openwave.qa=mount-preflight', qemu)
 
     def test_debug_options_do_not_execute_mount_calls(self):
         guest = (ROOT / 'userspace/openrc/qa/waydroid-mount-preflight.start').read_text()
