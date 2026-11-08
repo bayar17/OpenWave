@@ -273,6 +273,42 @@ class WaydroidReportTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, policy)
 
+    def test_lxc_anonymous_memfd_denial_has_exact_type_and_class(self):
+        serial = (
+            'WAYDROID_QA BEGIN enforcing=1\n'
+            + probe('startup', 'Starting waydroid [ ok ]')
+            + probe('request_session', 'OSError: container failed to start', 1)
+            + probe('container', 'STOPPED')
+            + 'audit: type=1400 audit(1794174210.992:138): '
+              'avc: denied { create } for pid=1962 comm="lxc-start" '
+              'anonclass=[memfd] '
+              'scontext=system_u:system_r:openwave_lxc_t:s0 '
+              'tcontext=system_u:object_r:openwave_lxc_t:s0 '
+              'tclass=memfd_file permissive=0\n'
+            + 'WAYDROID_QA END enforcing=1\n'
+        )
+        result = evaluate(serial)
+        self.assertEqual(result['lxc_search_denial_types'], [])
+        self.assertEqual(result['lxc_avc_denials'], [
+            {'permissions': ['create'], 'target_type': 'openwave_lxc_t',
+             'target_class': 'memfd_file'}])
+        self.assertEqual(result['stages']['container'], 'FAIL')
+        self.assertFalse(result['framework_passed'])
+        self.assertFalse(result['integration_passed'])
+
+    def test_lxc_memfd_policy_is_only_self_create_not_execmem(self):
+        from pathlib import Path
+        policy = (Path(__file__).resolve().parents[2] /
+                  'userspace/security/selinux/openwave.cil').read_text()
+        self.assertEqual(
+            policy.count('(allow openwave_lxc_t self (memfd_file (create)))'),
+            1)
+        self.assertNotIn(
+            '(allow openwave_lxc_t self (memfd_file (create read write open)))',
+            policy)
+        self.assertNotIn(
+            '(allow openwave_lxc_t self (process (execmem)))', policy)
+
     def test_empty_successful_commands_and_missing_container_are_failures(self):
         result = evaluate(probe('container', '') + probe('boot_completed', ''))
         self.assertFalse(result['framework_passed'])
