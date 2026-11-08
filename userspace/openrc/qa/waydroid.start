@@ -121,6 +121,25 @@ if [ "$state" = RUNNING ]; then
     probe logcat /usr/bin/waydroid logcat -- -d -t 100
 else
     printf 'WAYDROID_QA framework=BLOCKED container-not-running\n'
+    # Read-only post-failure inventory. A failed upstream OverlayFS mount
+    # must not be "fixed" by creating or relabeling arbitrary paths here.
+    for path in /var/lib/waydroid/overlay /var/lib/waydroid/overlay/vendor \
+        /var/lib/waydroid/overlay_rw/system /var/lib/waydroid/overlay_rw/vendor \
+        /var/lib/waydroid/overlay_work/system /var/lib/waydroid/overlay_work/vendor; do
+        if [ -d "$path" ]; then
+            printf 'WAYDROID_QA overlay_path=%s status=directory\n' "$path"
+        else
+            printf 'WAYDROID_QA overlay_path=%s status=missing-or-inaccessible\n' "$path"
+        fi
+    done
+    printf 'WAYDROID_QA mountinfo START\n'
+    /bin/busybox grep -E '/var/lib/waydroid/(rootfs|overlay)|/dev/binderfs' /proc/self/mountinfo || true
+    printf 'WAYDROID_QA mountinfo END\n'
+    for log in /var/lib/waydroid/lxc/waydroid.log /var/log/lxc/waydroid.log; do
+        [ -f "$log" ] || continue
+        printf 'WAYDROID_QA LXC_LOG %s\n' "$log"
+        /bin/busybox tail -n 120 "$log"
+    done
 fi
 for log in /run/openwave/waydroid.stdout.log /run/openwave/waydroid.stderr.log /var/lib/waydroid/waydroid.log /run/waydroid-lxc/dnsmasq.log; do
     [ -f "$log" ] || continue

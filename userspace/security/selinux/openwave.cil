@@ -1365,6 +1365,12 @@
 ;; Narrow these after runtime inspection instead of making them production defaults.
 (allow openwave_lxc_t openwave_system_t (dir (search)))
 (allow openwave_lxc_t openwave_system_t (file (read open getattr)))
+;; Stage 2K: lxc-start must traverse the host's root directory before it
+;; resolves its already-confined Waydroid state, runtime, and ELF paths.
+;; EROFS/vendor mount success does not imply this search permission. Grant
+;; search ONLY: no listing, opening, reading, mutation, mounton, or file reads
+;; on the generic openwave_default_t objects.
+(allow openwave_lxc_t openwave_default_t (dir (search)))
 ;; OPENWAVE_LXC_DOMAIN_STAGE_END
 
 ;; OPENWAVE_LXC_DOMAIN_ACTIVATE_BEGIN

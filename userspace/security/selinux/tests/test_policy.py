@@ -32,6 +32,25 @@ class PolicyTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, result.stderr)
                 self.assertIn('neverallow', result.stderr)
 
+    def test_lxc_root_traversal_is_search_only_under_enforcing(self):
+        # The real guest logged repeated denied { search } on host root vda.
+        # Traversal is needed before reaching already-scoped Waydroid paths,
+        # but the LXC process must not gain enumeration, reads or mutations
+        # of generic rootfs directories or files.
+        granted = self.compile('''
+            (neverallow openwave_lxc_t openwave_default_t
+                        (dir (read open write create add_name remove_name
+                              setattr relabelfrom relabelto mounton)))
+            (neverallow openwave_lxc_t openwave_default_t
+                        (file (open read write execute execute_no_trans)))
+        ''')
+        self.assertEqual(granted.returncode, 0, granted.stderr)
+        denied = self.compile('''
+            (neverallow openwave_lxc_t openwave_default_t (dir (search)))
+        ''')
+        self.assertNotEqual(denied.returncode, 0, denied.stderr)
+        self.assertIn('neverallow', denied.stderr)
+
     def test_waydroid_network_authority_is_separate_and_path_scoped(self):
         result = self.compile('''
             (neverallow openwave_waydroid_manager_t self (capability (net_admin net_raw sys_admin)))
