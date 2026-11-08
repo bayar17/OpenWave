@@ -119,6 +119,34 @@ class PolicyTests(unittest.TestCase):
         self.assertNotEqual(denied.returncode, 0, denied.stderr)
         self.assertIn('neverallow', denied.stderr)
 
+    def test_lxc_state_cache_and_read_only_host_metadata_boundary(self):
+        # Stage 2N no longer has a search denial, but lxc-start needs to
+        # create its .cache directory in the Waydroid state type. Only the
+        # previously scoped state type is allowed directory creation.
+        allowed = self.compile("""
+            (neverallow openwave_lxc_t openwave_waydroid_state_t
+                        (dir (setattr relabelfrom relabelto mounton)))
+            (neverallow openwave_lxc_t openwave_run_t
+                        (dir (read open write create add_name remove_name
+                              setattr mounton)))
+            (neverallow openwave_lxc_t openwave_security_t
+                        (filesystem (mount remount unmount)))
+            (neverallow openwave_lxc_t openwave_security_t
+                        (security (load_policy setenforce setbool)))
+            (neverallow openwave_lxc_t openwave_proc_t
+                        (file (write create setattr)))
+        """)
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        for rule in (
+            '(neverallow openwave_lxc_t openwave_waydroid_state_t (dir (create)))',
+            '(neverallow openwave_lxc_t openwave_run_t (dir (getattr)))',
+            '(neverallow openwave_lxc_t openwave_security_t (filesystem (getattr)))',
+        ):
+            with self.subTest(rule=rule):
+                denied = self.compile(rule)
+                self.assertNotEqual(denied.returncode, 0, denied.stderr)
+                self.assertIn('neverallow', denied.stderr)
+
     def test_waydroid_network_authority_is_separate_and_path_scoped(self):
         result = self.compile('''
             (neverallow openwave_waydroid_manager_t self (capability (net_admin net_raw sys_admin)))

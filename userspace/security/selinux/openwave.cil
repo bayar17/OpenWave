@@ -1349,8 +1349,13 @@
        (file (read open getattr write create unlink lock setattr)))
 
 ;; Waydroid's LXC state/configuration area (audit further rights before release).
+;; Stage 2O: lxc-start reaches its own initialization and attempts to
+;; create a .cache directory inside Waydroid's already-confined state
+;; subtree. The parent already allows write/add_name/remove_name, but the
+;; child directory lacked create. Grant create to this one state type only.
+;; This is type-wide, not limited to the basename .cache.
 (allow openwave_lxc_t openwave_waydroid_state_t
-       (dir (search read open getattr write add_name remove_name)))
+       (dir (search read open getattr write add_name remove_name create)))
 (allow openwave_lxc_t openwave_waydroid_state_t
        (file (read open getattr write create setattr lock unlink)))
 (allow openwave_lxc_t openwave_waydroid_state_t
@@ -1424,6 +1429,13 @@
 (allow openwave_lxc_t openwave_private_t (dir (search)))
 (allow openwave_lxc_t openwave_proc_t (dir (search)))
 (allow openwave_lxc_t openwave_sysfs_t (dir (search)))
+
+;; Stage 2O: LXC made metadata-only queries of /run (tmpfs root)
+;; and selinuxfs. These do not permit directory enumeration, file
+;; reads or policy administration. Procfs file/symlink read denials
+;; remain deferred until narrower proc object labeling is audited.
+(allow openwave_lxc_t openwave_run_t (dir (getattr)))
+(allow openwave_lxc_t openwave_security_t (filesystem (getattr)))
 
 ;; Stage 2N: /var/lib itself has the generic state-directory label,
 ;; openwave_state_t, distinct from /var (private_t) and the Waydroid

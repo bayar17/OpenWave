@@ -51,6 +51,29 @@ def evaluate(serial):
         r'scontext=\S*:openwave_lxc_t:s0[^\n]*'
         r'tcontext=\S*:(openwave_[A-Za-z0-9_]+):s0\s+tclass=dir',
         serial)))
+    # Exhaustive typed diagnostics for LXC AVCs, not only { search }.
+    # In Stage 2N the search list was empty while create/getattr/read
+    # denials still blocked lxc-start. Do not imply any missing denial
+    # is proof of success; the container and framework probes remain
+    # authoritative.
+    lxc_denials = []
+    avc_pattern = (
+        r'avc:\s+denied\s+\{\s*([^}]*?)\s*\}'
+        r'[^\n]*?comm="lxc-start"[^\n]*?'
+        r'scontext=\S*:openwave_lxc_t:s0[^\n]*?'
+        r'tcontext=\S*:([a-zA-Z_0-9]+):s0\s+tclass=([a-z_]+)'
+    )
+    for match in re.finditer(avc_pattern, serial):
+        permissions, target_type, target_class = match.groups()
+        record = {
+            'permissions': sorted(set(permissions.split())),
+            'target_type': target_type,
+            'target_class': target_class,
+        }
+        if record not in lxc_denials:
+            lxc_denials.append(record)
+    lxc_denials.sort(key=lambda item: (
+        item['target_type'], item['target_class'], item['permissions']))
     for name, value in [('servicemanager', 'running'), ('zygote', 'running'),
                         ('boot_completed', '1')]:
         stages[name] = ('PASS' if exact(name, value) else 'FAIL') if container else 'BLOCKED'
@@ -74,4 +97,5 @@ def evaluate(serial):
             'integration_passed': False, 'stages': stages, 'probes': probes,
             'lxc_failed_library': loader.group(1) if loader else None,
             'lxc_denied_config_path': denied_config.group(1) if denied_config else None,
-            'lxc_search_denial_types': search_denials}
+            'lxc_search_denial_types': search_denials,
+            'lxc_avc_denials': lxc_denials}

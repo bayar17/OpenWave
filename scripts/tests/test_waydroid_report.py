@@ -182,6 +182,62 @@ class WaydroidReportTests(unittest.TestCase):
         self.assertNotIn(
             '(allow openwave_lxc_t openwave_state_t (file (read open)))', policy)
 
+    def test_lxc_create_cache_and_metadata_denials_are_reported(self):
+        serial = (
+            'WAYDROID_QA BEGIN enforcing=1\n'
+            + probe('startup', 'Starting waydroid [ ok ]')
+            + probe('request_session', 'OSError: container failed to start', 1)
+            + probe('container', 'STOPPED')
+            + 'audit: avc: denied { create } for pid=1957 comm="lxc-start" '
+              'name=".cache" scontext=system_u:system_r:openwave_lxc_t:s0 '
+              'tcontext=system_u:object_r:openwave_waydroid_state_t:s0 '
+              'tclass=dir permissive=0\n'
+            + 'audit: avc: denied { getattr } for pid=1957 comm="lxc-start" '
+              'name="/" scontext=system_u:system_r:openwave_lxc_t:s0 '
+              'tcontext=system_u:object_r:openwave_security_t:s0 '
+              'tclass=filesystem permissive=0\n'
+            + 'audit: avc: denied { read } for pid=1957 comm="lxc-start" '
+              'name="filesystems" scontext=system_u:system_r:openwave_lxc_t:s0 '
+              'tcontext=system_u:object_r:openwave_proc_t:s0 '
+              'tclass=file permissive=0\n'
+            + 'audit: avc: denied { read } for pid=1859 comm="python3.14" '
+              'name="build.prop" scontext=system_u:system_r:openwave_waydroid_manager_t:s0 '
+              'tcontext=system_u:object_r:openwave_default_t:s0 '
+              'tclass=file permissive=0\n'
+            + 'WAYDROID_QA END enforcing=1\n'
+        )
+        result = evaluate(serial)
+        self.assertEqual(result['stages']['container'], 'FAIL')
+        self.assertFalse(result['framework_passed'])
+        self.assertEqual(result['lxc_search_denial_types'], [])
+        self.assertEqual(result['lxc_avc_denials'], [
+            {'permissions': ['read'], 'target_type': 'openwave_proc_t',
+             'target_class': 'file'},
+            {'permissions': ['getattr'], 'target_type': 'openwave_security_t',
+             'target_class': 'filesystem'},
+            {'permissions': ['create'], 'target_type': 'openwave_waydroid_state_t',
+             'target_class': 'dir'},
+        ])
+
+    def test_lxc_create_is_scoped_to_waydroid_state_and_metadata_only(self):
+        from pathlib import Path
+        policy = (Path(__file__).resolve().parents[2] /
+                  'userspace/security/selinux/openwave.cil').read_text()
+        self.assertIn(
+            '(allow openwave_lxc_t openwave_waydroid_state_t\n'
+            '       (dir (search read open getattr write add_name remove_name create)))',
+            policy)
+        self.assertIn('(allow openwave_lxc_t openwave_run_t (dir (getattr)))', policy)
+        self.assertIn(
+            '(allow openwave_lxc_t openwave_security_t (filesystem (getattr)))',
+            policy)
+        self.assertNotIn('(allow openwave_lxc_t openwave_run_t (dir (read open)))',
+                         policy)
+        self.assertNotIn('(allow openwave_lxc_t openwave_proc_t (file (read open)))',
+                         policy)
+        self.assertNotIn('(allow openwave_lxc_t openwave_security_t '
+                         '(security (load_policy)))', policy)
+
     def test_empty_successful_commands_and_missing_container_are_failures(self):
         result = evaluate(probe('container', '') + probe('boot_completed', ''))
         self.assertFalse(result['framework_passed'])
