@@ -20,6 +20,11 @@
 (type openwave_user_bundle_t)
 (type openwave_user_app_exec_t)
 (type openwave_runtime_t)
+; Immutable executable-format infrastructure, not writable service state.
+; The ELF interpreter is distinct from ordinary shared objects because the
+; kernel executes PT_INTERP without a service-domain transition.
+(type openwave_elf_loader_t)
+(type openwave_shared_lib_t)
 (type openwave_shared_t)
 (type openwave_app_data_t)
 (type openwave_user_data_t)
@@ -354,11 +359,41 @@
 (neverallow openwave_app_t openwave_all_types (capability (all)))
 (neverallow openwave_app_t openwave_all_types (capability2 (all)))
 
-; Bootstrap/OpenRC must be able to execute the runtime dynamic loader.
-; The dedicated openwave_openrc_exec_t rule below only covers OpenRC itself,
-; not /lib64/ld-linux-x86-64.so.2 (openwave_runtime_t).
+; Executables that remain openwave_runtime_t still require this during the
+; staged label migration. The ELF interpreter now gets a separate inode type.
+; Do not remove this legacy execute rule before auditing every actual exec path.
 (allow openwave_system_t openwave_runtime_t
     (file (read open getattr map execute execute_no_trans)))
+
+; Only executable-loader clients may map the host's read-only ELF interpreter
+; and trusted shared objects. Unlike the broad native-service attribute, this
+; new attribute conveys ONLY dynamic-linker file access; Waydroid/LXC do not
+; inherit runtime/container privileges through it.
+(typeattribute openwave_dynamic_link_client)
+(typeattributeset openwave_dynamic_link_client
+    (openwave_system_t openwave_app_t openwave_native_service
+     openwave_waydroid_manager_t openwave_waydroid_launcher_t
+     openwave_waydroid_helper_t openwave_waydroid_net_t openwave_lxc_t))
+(allow openwave_dynamic_link_client openwave_elf_loader_t
+    (file (read open getattr map execute execute_no_trans)))
+(allow openwave_dynamic_link_client openwave_elf_loader_t
+    (lnk_file (read getattr)))
+(allow openwave_dynamic_link_client openwave_shared_lib_t
+    (file (read open getattr map execute)))
+(allow openwave_dynamic_link_client openwave_shared_lib_t
+    (lnk_file (read getattr)))
+
+; Runtime mapping never authorizes changing trusted executable bytes. The
+; system supervisor remains responsible for trusted installation/relabeling.
+(typeattribute openwave_untrusted_link_client)
+(typeattributeset openwave_untrusted_link_client
+    (openwave_app_t openwave_native_service
+     openwave_waydroid_manager_t openwave_waydroid_launcher_t
+     openwave_waydroid_helper_t openwave_waydroid_net_t openwave_lxc_t))
+(neverallow openwave_untrusted_link_client openwave_elf_loader_t
+    (file (write append create setattr unlink link rename relabelfrom relabelto)))
+(neverallow openwave_untrusted_link_client openwave_shared_lib_t
+    (file (write append create setattr unlink link rename relabelfrom relabelto)))
 
 ; PID 1 and its child processes need these base permissions after enforcement.
 ; Grant them only to the trusted system domain, not application domains.
