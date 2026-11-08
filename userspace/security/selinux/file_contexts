@@ -123,3 +123,6 @@
 /System/Services/(lib|plugins)(/[^/]+)*/[^/]+\.so(\.[0-9]+)* system_u:object_r:openwave_shared_lib_t:s0
 /(usr/)?lib(64)?(/[^/]+)*/ld-linux-[^/]+\.so(\.[0-9]+)* system_u:object_r:openwave_elf_loader_t:s0
 /(usr/)?lib(64)?(/[^/]+)*/ld-[0-9]+(\.[0-9]+)*\.so system_u:object_r:openwave_elf_loader_t:s0
+
+# Stage 2A helper: installed as a fixed-operation executable, NOT PATH mount(8).
+/usr/libexec/openwave-waydroid/waydroid-mount -- system_u:object_r:openwave_waydroid_mount_exec_t:s0

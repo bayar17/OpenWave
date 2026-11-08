@@ -160,6 +160,7 @@ int main(int argc, char **argv)
         "openwave_waydroid_manager_t", "openwave_waydroid_launcher_t",
         "openwave_waydroid_helper_t", "openwave_waydroid_net_t",
         "openwave_lxc_t",
+        "openwave_waydroid_mount_t",
     };
     const char *loader_perms[] = {
         "read", "open", "getattr", "map", "execute", "execute_no_trans",

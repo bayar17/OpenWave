@@ -7,3 +7,9 @@ add_executable(waydroid-dnsmasq dnsmasq-log.c)
 set_target_properties(waydroid-dnsmasq PROPERTIES OUTPUT_NAME dnsmasq)
 target_compile_options(waydroid-dnsmasq PRIVATE -Wall -Wextra -Werror)
 install(TARGETS waydroid-dnsmasq RUNTIME DESTINATION /usr/libexec/openwave-waydroid)
+
+# Stage 2A: deliberately NOT exposed as "mount"/"umount" in PATH. Upstream
+# Waydroid still owns those calls until its complete lifecycle is audited.
+add_executable(waydroid-mount waydroid_mount.c)
+target_compile_options(waydroid-mount PRIVATE -Wall -Wextra -Werror)
+install(TARGETS waydroid-mount RUNTIME DESTINATION /usr/libexec/openwave-waydroid)
