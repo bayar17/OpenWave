@@ -116,6 +116,38 @@ image_gate('system', 1024, bytes.fromhex('e2e1f5e0'))
 image_gate('vendor', 1080, bytes.fromhex('53ef'))
 record('loop_control', Path('/dev/loop-control').exists(),
        'kernel loop-control node exists')
+# Read-only debug inventory: kernel support and /dev creation are separate
+# prerequisites. The diagnostic must never invoke mknod or modprobe.
+for name, path in (
+    ('loop_sysfs', '/sys/devices/virtual/misc/loop-control/dev'),
+    ('loop_module', '/sys/module/loop'),
+    ('devtmpfs', '/dev'),
+):
+    p = Path(path)
+    print('MOUNT_QA_INFO %s=%s' %
+          (name, 'present' if p.exists() else 'missing'), flush=True)
+try:
+    devices = Path('/proc/devices').read_text()
+    print('MOUNT_QA_INFO loop_block_major=%s' %
+          ('present' if any(line.split()[-1] == 'loop' for line in devices.splitlines()
+                            if line.split()) else 'missing'), flush=True)
+except OSError:
+    print('MOUNT_QA_INFO loop_block_major=unreadable', flush=True)
+try:
+    devices = sorted(p.name for p in Path('/dev').glob('loop[0-9]*'))[:12]
+    print('MOUNT_QA_INFO loop_block_nodes=%s' %
+          (','.join(devices) if devices else 'none'), flush=True)
+except OSError:
+    print('MOUNT_QA_INFO loop_block_nodes=unreadable', flush=True)
+try:
+    filesystems = Path('/proc/filesystems').read_text()
+    for fs_name in ('erofs', 'ext4', 'overlay'):
+        present = any(line.split()[-1] == fs_name for line in filesystems.splitlines()
+                      if line.split())
+        print('MOUNT_QA_INFO fs_%s=%s' %
+              (fs_name, 'available' if present else 'missing'), flush=True)
+except OSError:
+    print('MOUNT_QA_INFO filesystems=unreadable', flush=True)
 mounts = mount_map()
 for destination, filesystem in MOUNTS:
     actual = mounts.get(destination, 'not-mounted')

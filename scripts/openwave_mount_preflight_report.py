@@ -26,7 +26,11 @@ def evaluate(serial: str) -> dict:
         key, state, details = match.groups()
         if key in gates:
             duplicated.append(key)
-        gates[key] = {"status": state, "detail": details or ""}
+        # Kernel audit output can interleave with console printf mid-line.
+        # Keep AVCs in the full serial log; do not absorb them into a gate detail.
+        detail = re.split(r"\baudit: type=|\bavc:\s+denied\b",
+                          details or "", maxsplit=1, flags=re.I)[0].rstrip()
+        gates[key] = {"status": state, "detail": detail}
     info = {}
     for match in INFO.finditer(serial):
         info[match.group(1)] = match.group(2)

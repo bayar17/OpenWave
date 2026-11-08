@@ -84,6 +84,8 @@ def main():
     parser.add_argument('--waydroid', action='store_true', help='Collect bounded Waydroid/framework diagnostics under enforcing SELinux')
     parser.add_argument('--mount-preflight', action='store_true',
                         help='Read-only Waydroid mount-helper prerequisites; no Android startup or mounts')
+    parser.add_argument('--selinux-debug', action='store_true',
+                        help='Allow permissive SELinux ONLY with --mount-preflight; capture AVC evidence in disposable QEMU')
     parser.add_argument('--dns', action='store_true', help='With --app-launch, verify confined app access to live DNS and profile isolation')
     parser.add_argument('--power', choices=('poweroff', 'reboot'), help='Exercise confirmed Ocean power actions; reboot must boot again before powering off')
     parser.add_argument('--usb-wifi', help='Exercise a real host USB Wi-Fi adapter (VID:PID); temporarily detaches it from the host')
@@ -97,7 +99,14 @@ def main():
         parser.error('Run the portal, application, power, Wi-Fi and keyboard suites separately')
     if not 10 <= args.seconds <= 600:
         parser.error('--seconds must be 10..600')
-    if (args.app_launch or args.portal or args.power or args.usb_wifi or args.keyboard or args.browser_actions or args.waydroid or args.mount_preflight) and args.mode != 'enforcing':
+    debug_allowed = args.selinux_debug and args.mount_preflight and args.mode == 'permissive'
+    if args.selinux_debug and not debug_allowed:
+        parser.error('--selinux-debug requires --mount-preflight --mode permissive')
+    if args.mount_preflight and args.mode == 'permissive' and not args.selinux_debug:
+        parser.error('Permissive mount preflight requires explicit --selinux-debug')
+    if (args.app_launch or args.portal or args.power or args.usb_wifi or
+        args.keyboard or args.browser_actions or args.waydroid or
+        args.mount_preflight) and args.mode != 'enforcing' and not debug_allowed:
         parser.error('Guest integration suites require enforcing mode')
     usb = None
     if args.usb_wifi:
@@ -138,6 +147,9 @@ def main():
               'video=Virtual-1:544x960@60e OPENWAVE_DISPLAY_MODE=544x960')
     if args.mode == 'permissive':
         append += ' openwave.selinux=permissive'
+    if args.selinux_debug:
+        # Diagnostic-only kernel logging. Never relax security via image edits.
+        append += ' audit=1 log_buf_len=16M printk.time=1'
     if args.app_launch:
         append += ' openwave.qa=app-launch'
     if args.dns:
@@ -272,6 +284,25 @@ def main():
         report['mount_preflight_passed'] = mount_preflight['preflight_passed']
         (output / 'mount-preflight.json').write_text(
             json.dumps(mount_preflight, indent=2) + '\n')
+    if args.selinux_debug:
+        from openwave_selinux_avc_report import analyze_avcs
+        avcs = analyze_avcs(serial)
+        debug_complete = (
+            mount_preflight['diagnostics_complete']
+            and not mount_preflight['enforcing']
+            and 'MOUNT_QA_BEGIN enforcing=0' in serial
+            and 'MOUNT_QA_END prerequisites=' in serial
+            and unchanged and 'Kernel panic' not in serial
+        )
+        report['selinux_debug_requested'] = True
+        report['selinux_debug_capture_complete'] = debug_complete
+        report['release_ready'] = False
+        report['mount_operations_passed'] = False
+        (output / 'selinux-avc-debug.json').write_text(
+            json.dumps({'schema': 1, 'mode': 'permissive-diagnostic',
+                        'capture_complete': debug_complete,
+                        'release_ready': False,
+                        'avc_summary': avcs}, indent=2) + '\n')
     if args.waydroid:
         from openwave_waydroid_report import evaluate
         waydroid = evaluate(serial)
@@ -285,7 +316,8 @@ def main():
         or (args.keyboard and not report['keyboard_passed']) \
         or (args.browser_actions and not report['browser_actions_passed']) \
         or (args.waydroid and not report['waydroid_framework_passed']) \
-        or (args.mount_preflight and not report['mount_preflight_passed']) \
+        or (args.mount_preflight and not args.selinux_debug and not report['mount_preflight_passed']) \
+        or (args.selinux_debug and not report['selinux_debug_capture_complete']) \
         or (args.power and not report['power_passed']) or (usb and not report['usb_wifi_passed']):
         raise SystemExit(1)
 

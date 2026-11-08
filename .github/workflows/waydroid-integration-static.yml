@@ -10,6 +10,8 @@ on:
       - 'scripts/openwave_mount_preflight_report.py'
       - 'scripts/test-openwave-boot.py'
       - 'scripts/tests/test_mount_preflight_report.py'
+      - 'scripts/openwave_selinux_avc_report.py'
+      - 'scripts/tests/test_selinux_debug.py'
       - 'scripts/prepare-openwave-boot.py'
       - 'userspace/openrc/qa/waydroid-mount-preflight.start'
       - 'userspace/waydroid/waydroid_mount.c'
@@ -30,6 +32,8 @@ on:
       - 'scripts/openwave_mount_preflight_report.py'
       - 'scripts/test-openwave-boot.py'
       - 'scripts/tests/test_mount_preflight_report.py'
+      - 'scripts/openwave_selinux_avc_report.py'
+      - 'scripts/tests/test_selinux_debug.py'
       - 'scripts/prepare-openwave-boot.py'
       - 'userspace/openrc/qa/waydroid-mount-preflight.start'
       - 'userspace/waydroid/waydroid_mount.c'
@@ -54,7 +58,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Python syntax
-        run: python3 -m py_compile scripts/openwave-waydroid-integration.py scripts/tests/test_waydroid_orchestrator.py scripts/openwave_mount_preflight_report.py scripts/test-openwave-boot.py scripts/tests/test_mount_preflight_report.py scripts/prepare-openwave-boot.py
+        run: python3 -m py_compile scripts/openwave-waydroid-integration.py scripts/tests/test_waydroid_orchestrator.py scripts/openwave_mount_preflight_report.py scripts/test-openwave-boot.py scripts/tests/test_mount_preflight_report.py scripts/prepare-openwave-boot.py scripts/openwave_selinux_avc_report.py scripts/tests/test_selinux_debug.py
       - name: Bash syntax
         run: bash -n scripts/openwave-waydroid-integration.sh build-openwave
       - name: Fail-closed contract regression tests
@@ -65,6 +69,8 @@ jobs:
         run: sh -n userspace/openrc/qa/waydroid-mount-preflight.start
       - name: Mount preflight evidence parser
         run: python3 -m unittest discover -s scripts/tests -p 'test_mount_preflight_report.py' -v
+      - name: Explicit SELinux debug gating and AVC report regression tests
+        run: python3 -m unittest discover -s scripts/tests -p 'test_selinux_debug.py' -v
       - name: Bounded QEMU runner supports mount preflight
         run: python3 scripts/test-openwave-boot.py --help | grep -- '--mount-preflight'
       - name: Waydroid fixed-op helper C tests
