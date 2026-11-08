@@ -127,14 +127,30 @@ run_application() {
         com.openwave.files:stop|com.openwave.photos:stop|com.openwave.ocean:stop)
             control_checks=$((control_checks + 1))
             logfile=/run/openwave/appd.stderr.log
+            # A fast Qt quit may be reaped before its asynchronous JSON reply
+            # callback runs. Allow bounded dispatch time before evaluating the
+            # command ACK, never assuming that exit status 0 itself is an ACK.
+            ack_attempt=0
+            while [ "$ack_attempt" -lt 30 ]; do
+                if grep -Fq "appd: control quit-ack appId=$id pid=$pid" "$logfile" ||
+                    grep -Fq "appd: control quit-fallback appId=$id pid=$pid" "$logfile" ||
+                    grep -Fq "appd: control quit-noack-exited appId=$id pid=$pid" "$logfile" ||
+                    grep -Fq "appd: control quit-timeout appId=$id pid=$pid" "$logfile"; then
+                    break
+                fi
+                ack_attempt=$((ack_attempt + 1))
+                sleep 0.1
+            done
             if grep -Fq "appd: control quit-ack appId=$id pid=$pid" "$logfile" &&
                 grep -Fq "appd: exited appId=$id pid=$pid wait-status=0 stopping=true" "$logfile" &&
                 ! grep -Fq "appd: control quit-fallback appId=$id pid=$pid" "$logfile" &&
+                ! grep -Fq "appd: control quit-noack-exited appId=$id pid=$pid" "$logfile" &&
                 ! grep -Fq "appd: control quit-timeout appId=$id pid=$pid" "$logfile"; then
                 control_passes=$((control_passes + 1))
                 printf 'APP_TEST CONTROL_ACK %s pid=%s authenticated response and normal exit\n' "$id" "$pid"
             else
                 printf 'APP_TEST CONTROL_FAIL %s pid=%s missing quit ACK, nonzero exit or fallback\n' "$id" "$pid"
+                grep -aF "appId=$id pid=$pid" "$logfile" | tail -n 8 || true
                 okay=0
             fi
             ;;
