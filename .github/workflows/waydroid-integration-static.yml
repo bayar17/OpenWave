@@ -27,6 +27,8 @@ on:
       - 'userspace/security/selinux/openwave.cil'
       - 'userspace/security/selinux/tests/test_policy.py'
       - 'userspace/appd/process.c'
+      - 'userspace/appd-only/CMakeLists.txt'
+      - 'scripts/tests/test_appd_only_build.py'
       - 'userspace/openrc/qa/app-launch.start'
       - 'scripts/openwave_app_control_report.py'
       - 'scripts/tests/test_app_control_ipc.py'
@@ -56,6 +58,8 @@ on:
       - 'userspace/security/selinux/openwave.cil'
       - 'userspace/security/selinux/tests/test_policy.py'
       - 'userspace/appd/process.c'
+      - 'userspace/appd-only/CMakeLists.txt'
+      - 'scripts/tests/test_appd_only_build.py'
       - 'userspace/openrc/qa/app-launch.start'
       - 'scripts/openwave_app_control_report.py'
       - 'scripts/tests/test_app_control_ipc.py'
@@ -87,6 +91,8 @@ jobs:
         run: python3 -m unittest discover -s scripts/tests -p 'test_selinux_debug.py' -v
       - name: Enforcing appd control socket and graceful quit evidence
         run: python3 -m unittest discover -s scripts/tests -p 'test_app_control_ipc.py' -v
+      - name: Production appd-only CMake configure without missing WaterRouge SDK
+        run: python3 -m unittest discover -s scripts/tests -p 'test_appd_only_build.py' -v
       - name: Bounded QEMU runner supports mount preflight
         run: python3 scripts/test-openwave-boot.py --help | grep -- '--mount-preflight'
       - name: Waydroid fixed-op helper C tests
