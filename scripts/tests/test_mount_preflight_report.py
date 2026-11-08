@@ -58,6 +58,22 @@ class MountPreflightReportTests(unittest.TestCase):
         self.assertNotIn("mount_operations_passed", r)
         self.assertNotIn("android_framework_passed", r)
 
+    def test_crlf_guest_serial_is_accepted(self):
+        self.assertTrue(evaluate(sample().replace("\\n", "\\r\\n"))["preflight_passed"])
+
+    def test_guest_inline_python_is_syntactically_valid(self):
+        script = (Path(__file__).resolve().parents[2] /
+                  "userspace/openrc/qa/waydroid-mount-preflight.start").read_text()
+        self.assertIn("openwave.qa=mount-preflight", script)
+        source = script.split("<<'PY'\\n", 1)[1].rsplit("\\nPY\\n", 1)[0]
+        compile(source, "waydroid-mount-preflight.start", "exec")
+        self.assertNotIn("os.system(", source)
+        self.assertNotIn("subprocess.Popen(", source)
+        self.assertNotIn("MS_BIND", source)
+        self.assertNotIn("umount(", source)
+        self.assertIn("helper_domain_transition=UNVERIFIED", source)
+        self.assertIn("mount_syscalls=NOT_ATTEMPTED", source)
+
     def test_unknown_success_markers_cannot_replace_required_gate(self):
         serial = sample().replace("MOUNT_QA_GATE helper_elf=PASS expected\n",
                                   "MOUNT_QA_GATE placeholder=PASS expected\n")
