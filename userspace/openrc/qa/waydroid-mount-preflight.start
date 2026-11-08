@@ -108,7 +108,10 @@ try:
                '--unbind-vendor-odm' in action.stdout)
 except (OSError, subprocess.TimeoutExpired):
     help_ok = False
-record('helper_help', help_ok, 'read-only CLI invocation (no mount calls)')
+# The observer is not the Waydroid manager domain. Executing the helper
+# from it may be forbidden by SELinux; that denial is NOT a bad helper install.
+print('MOUNT_QA_INFO helper_help=' + ('PASS' if help_ok else 'NOT_EXECUTABLE_FROM_OBSERVER'),
+      flush=True)
 image_gate('system', 1024, bytes.fromhex('e2e1f5e0'))
 image_gate('vendor', 1080, bytes.fromhex('53ef'))
 record('loop_control', Path('/dev/loop-control').exists(),
@@ -127,7 +130,7 @@ for path in OVERLAYS:
                   and not st.st_mode & 0o022 else 'unsafe')
     except OSError:
         status = 'missing'
-    print('MOUNT_QA_INFO overlay_%s=%s' % (path.rsplit('/', 1)[-1], status),
+    print('MOUNT_QA_INFO overlay_%s=%s' % (path.removeprefix('/var/lib/waydroid/').replace('/', '_'), status),
           flush=True)
 print('MOUNT_QA_INFO helper_domain_transition=UNVERIFIED', flush=True)
 print('MOUNT_QA_INFO mount_syscalls=NOT_ATTEMPTED', flush=True)
