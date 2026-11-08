@@ -75,10 +75,10 @@ class SelinuxDebugTests(unittest.TestCase):
         if compiler is None:
             self.skipTest('A host C compiler is required')
         program = (
-            '#include "qa-debug-cmdline.h"\\n'
-            'int main(int argc, char **argv) {\\n'
-            '  return argc == 2 && openwave_permissive_qa_cmdline(argv[1]) ? 0 : 1;\\n'
-            '}\\n'
+            '#include "qa-debug-cmdline.h"\n'
+            'int main(int argc, char **argv) {\n'
+            '  return argc == 2 && openwave_permissive_qa_cmdline(argv[1]) ? 0 : 1;\n'
+            '}\n'
         )
         with tempfile.TemporaryDirectory(prefix='openwave-qa-cmdline-') as temporary:
             source = Path(temporary) / 'test.c'
@@ -96,7 +96,7 @@ class SelinuxDebugTests(unittest.TestCase):
                 'openwave.qa=selinux-debug'
             )
             self.assertEqual(subprocess.run([str(binary), expected]).returncode, 0)
-            self.assertEqual(subprocess.run([str(binary), expected.replace(' ', '\\t')]).returncode, 0)
+            self.assertEqual(subprocess.run([str(binary), expected.replace(' ', '\t')]).returncode, 0)
             for bad in (
                 expected.replace('openwave.selinux=permissive', 'openwave.selinux=enforcing'),
                 expected.replace('openwave.qa=mount-preflight', ''),
