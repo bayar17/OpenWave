@@ -274,7 +274,13 @@ def main():
               'portal_passed': ('PORTAL_SMOKE PASS Settings wallpaper end-to-end' in serial) if args.portal else None,
               'app_launch_requested': args.app_launch,
               'app_launch_passed': ('APP_SMOKE PASS confined live app launched through Ocean' in serial)
-                  if args.app_launch else None}
+                  if args.app_launch else None,
+              'app_control_passed': None}
+    if args.app_launch:
+        from openwave_app_control_report import evaluate as evaluate_control
+        control = evaluate_control(serial)
+        report['app_control_passed'] = control['passed']
+        (output / 'app-control.json').write_text(json.dumps(control, indent=2) + '\n')
     if args.wifi_associate:
         report['usb_wifi_passed'] = 'WIFI_ASSOC PASS associated, DHCP and DNS' in serial and 'WIFI_ASSOC FAIL' not in serial
         report['wifi_association_requested'] = True
@@ -312,7 +318,7 @@ def main():
         (output / 'waydroid.json').write_text(json.dumps(waydroid, indent=2) + '\n')
     (output / 'result.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
-    if not unchanged or process.returncode != 0 or (args.app_launch and not report['app_launch_passed']) or (args.portal and not report['portal_passed']) \
+    if not unchanged or process.returncode != 0 or (args.app_launch and (not report['app_launch_passed'] or not report['app_control_passed'])) or (args.portal and not report['portal_passed']) \
         or (args.dns and not report['dns_passed']) \
         or (args.keyboard and not report['keyboard_passed']) \
         or (args.browser_actions and not report['browser_actions_passed']) \

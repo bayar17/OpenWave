@@ -1036,6 +1036,11 @@
 ; configured session owner before publishing Wayland and session-bus links.
 (allow openwave_appd_t openwave_run_t (sock_file (getattr setattr link rename unlink)))
 (allow openwave_appd_t openwave_dbus_runtime_t (sock_file (getattr setattr link rename unlink)))
+;; Stage 2H: appd sends bounded activate/quit requests to the per-process
+;; ApplicationChannel socket. It authenticates SO_PEERCRED UID and exact PID;
+;; the application accepts only authenticated local peers. This grants no
+;; application-to-broker socket authority or wildcard target domain access.
+(allow openwave_appd_t openwave_app_t (unix_stream_socket (connectto)))
 (allow openwave_appd_t openwave_app_t (process (getattr signal signull sigkill getpgid)))
 (allow openwave_appd_t openwave_app_t (dir (search read open getattr)))
 (allow openwave_appd_t openwave_app_t (file (read open getattr)))
