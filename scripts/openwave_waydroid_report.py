@@ -37,8 +37,8 @@ def evaluate(serial):
     # this message originates from lxc_start_main after libraries loaded.
     # No error alone is not sufficient; only a RUNNING container is PASS.
     denied_config = re.search(
-        r'lxc-start: waydroid: [^\\r\\n]*?You lack access to '
-        r'(/var/lib/waydroid/lxc)(?=\\s|$)',
+        r'lxc-start: waydroid: [^\r\n]*?You lack access to '
+        r'(/var/lib/waydroid/lxc)(?=\s|$)',
         serial)
     stages['lxc_config_access'] = (
         'FAIL' if denied_config else ('PASS' if container else 'UNVERIFIED'))
