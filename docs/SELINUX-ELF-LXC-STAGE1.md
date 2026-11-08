@@ -63,6 +63,15 @@ git fetch origin selinux/stage1-elf-library-isolation-20261108
 git switch selinux/stage1-elf-library-isolation-20261108
 python3 userspace/security/selinux/tests/test_file_contexts.py
 ./build-openwave selinux
+# Verify this stage independently, without changing the full security suite.
+OPENWAVE_POLICY_BUILD="$PWD/out/sdk-dependencies/x86_64-unknown-openwave/selinux-policy" \
+  python3 userspace/security/selinux/tests/test_policy.py -v \
+    -k test_policy_compiles \
+    -k test_linker_objects_are_readonly_for_confined_clients \
+    -k test_binary_inspector_rejects_missing_loader_rule_and_attribute_write
+
+# Separately run the entire security suite and RECORD any outstanding
+# failures; full-suite success is a release gate, not a Stage 1 prerequisite.
 OPENWAVE_POLICY_BUILD="$PWD/out/sdk-dependencies/x86_64-unknown-openwave/selinux-policy" \
   python3 userspace/security/selinux/tests/test_policy.py
 ./build-openwave rootfs
@@ -74,6 +83,28 @@ OPENWAVE_IMAGE_SIZE=6G ./build-openwave image rootfs \
 `inspect-qa-policy` checks and run the effective generated-context tests.
 The image builder checks the exact policy/context hash and reads back inode
 xattrs. **Do not reuse an old boot image**; it would retain old inode labels.
+
+## Observed security-suite debt (2026-11-08)
+
+On the OpenWave build host, all 16 test methods ran: 13 passed and **3
+failed**, all for the same source-policy conflict. The following tests insert
+`neverallow openwave_waydroid_manager_t self (capability (sys_admin ...))`,
+but the current policy contains `(allow openwave_waydroid_manager_t self
+(capability (sys_admin)))` from the earlier Android EROFS/loop-mount
+diagnostics:
+
+- `test_waydroid_manager_can_start_without_host_administration_authority`
+- `test_waydroid_network_authority_is_separate_and_path_scoped`
+- `test_waydroid_provisioning_does_not_enable_container_privileges`
+
+These are genuine **full-security-suite failures**, not a misconfigured test
+compiler. Do not suppress, skip, `expectedFailure`, modify the
+`neverallow` assertions, or issue a production-success report. They are not
+caused by the two new ELF object labels. They will be resolved only by moving
+the image mount/loop setup into a verified, confined provisioning mechanism
+and removing obsolete manager mount/capability grants after enforcing QEMU
+regression testing. The target still needs `lxc-start` transition, real Android
+mount labels, Android boot and appd/Ocean shortcut acceptance.
 
 ## Guest acceptance on a disposable image
 
