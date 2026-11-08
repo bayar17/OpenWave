@@ -51,6 +51,25 @@ class PolicyTests(unittest.TestCase):
         self.assertNotEqual(denied.returncode, 0, denied.stderr)
         self.assertIn('neverallow', denied.stderr)
 
+    def test_lxc_runtime_loader_can_traverse_without_browsing_or_mutating(self):
+        # Stage 2K allowed host root search, but enforcing lxc-start still
+        # failed to load libunwind.so.1 because /etc, /lib64, /usr are
+        # openwave_runtime_t directories with no search access.
+        allowed = self.compile("""
+            (neverallow openwave_lxc_t openwave_runtime_t
+                        (dir (read open write create add_name remove_name
+                              setattr mounton relabelfrom relabelto)))
+        """)
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        for rule in (
+            '(neverallow openwave_lxc_t openwave_runtime_t (dir (search)))',
+            '(neverallow openwave_lxc_t openwave_runtime_t (dir (getattr)))',
+        ):
+            with self.subTest(rule=rule):
+                rejected = self.compile(rule)
+                self.assertNotEqual(rejected.returncode, 0, rejected.stderr)
+                self.assertIn('neverallow', rejected.stderr)
+
     def test_waydroid_network_authority_is_separate_and_path_scoped(self):
         result = self.compile('''
             (neverallow openwave_waydroid_manager_t self (capability (net_admin net_raw sys_admin)))
