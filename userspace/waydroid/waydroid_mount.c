@@ -588,6 +588,131 @@ static int unoverlay_image(const struct overlay_kind *kind)
     return 0;
 }
 
+
+/*
+ * Stage 2D: exact host EGL/ODM directory binds needed by pinned upstream
+ * Waydroid 1.6.3. No user-supplied paths, no PATH shim, no active callsite.
+ * Host sources are OPTIONAL upstream; a missing source fails closed.
+ *
+ * The runtime policy still denies sys_admin. Do not enable these commands
+ * until guest namespace, SELinux, and mount-provenance tests have passed.
+ */
+struct host_dir_bind {
+    const char *name;
+    const char *source;
+    const char *target;
+    const char *parent;
+    unsigned long guest_fs_primary, guest_fs_overlay;
+};
+static const struct host_dir_bind HOST_DIR_BINDS[] = {
+    { "egl32", "/vendor/lib/egl", VENDOR_MOUNT "/lib/egl",
+      VENDOR_MOUNT "/lib", EXT4_SUPER_MAGIC, OVERLAYFS_SUPER_MAGIC },
+    { "egl64", "/vendor/lib64/egl", VENDOR_MOUNT "/lib64/egl",
+      VENDOR_MOUNT "/lib64", EXT4_SUPER_MAGIC, OVERLAYFS_SUPER_MAGIC },
+    { "odm", "/odm", SYSTEM_MOUNT "/odm_extra",
+      SYSTEM_MOUNT, EROFS_SUPER_MAGIC, OVERLAYFS_SUPER_MAGIC },
+    { "vendor-odm", "/vendor/odm", SYSTEM_MOUNT "/odm_extra",
+      SYSTEM_MOUNT, EROFS_SUPER_MAGIC, OVERLAYFS_SUPER_MAGIC },
+};
+#define HOST_BIND_COUNT (sizeof(HOST_DIR_BINDS) / sizeof(HOST_DIR_BINDS[0]))
+
+static int host_dir_bind_op(const struct host_dir_bind *kind, bool unbind)
+{
+    int source = owned_directory(kind->source);
+    if (source < 0)
+        return err("opening approved root-owned host source directory");
+    int parent = owned_directory(kind->parent);
+    if (parent < 0) {
+        close(source);
+        return err("opening approved Android destination parent");
+    }
+    struct statfs parent_fs;
+    if (fstatfs(parent, &parent_fs) ||
+        ((unsigned long)parent_fs.f_type != kind->guest_fs_primary &&
+         (unsigned long)parent_fs.f_type != kind->guest_fs_overlay)) {
+        close(parent); close(source);
+        return reject("Android bind target parent is not expected mounted filesystem");
+    }
+    int target = owned_directory(kind->target);
+    if (target < 0) {
+        close(parent); close(source);
+        return err("opening existing approved Android bind destination");
+    }
+    struct stat source_st, target_st;
+    bool separate = false;
+    if (fstat(source, &source_st) || fstat(target, &target_st) ||
+        target_is_separate_mount(target, parent, &separate)) {
+        close(target); close(parent); close(source);
+        return err("validating host bind source and destination inodes");
+    }
+    if (source_st.st_dev == target_st.st_dev &&
+        source_st.st_ino == target_st.st_ino && !unbind) {
+        close(target); close(parent); close(source);
+        return reject("host and Android target must not already be identical");
+    }
+    if (!unbind && separate) {
+        close(target); close(parent); close(source);
+        return reject("Android host-bind target is already a mountpoint");
+    }
+    if (unbind && (!separate || source_st.st_dev != target_st.st_dev ||
+                   source_st.st_ino != target_st.st_ino)) {
+        close(target); close(parent); close(source);
+        return reject("host-bind target is not mounted from approved source");
+    }
+    char source_path[64], target_path[64];
+    if (fd_string(source, source_path) || fd_string(target, target_path)) {
+        close(target); close(parent); close(source);
+        return reject("unable to pin fixed host-bind directory descriptors");
+    }
+    int rc;
+    int saved;
+    if (unbind) {
+        rc = umount2(target_path, 0); /* no lazy or recursive host mount detach */
+        saved = errno;
+    } else {
+        rc = mount(source_path, target_path, NULL, MS_BIND, NULL);
+        saved = errno;
+        if (!rc) {
+            /* A bind is not made readonly by the initial MS_BIND call. */
+            rc = mount(NULL, target_path, NULL,
+                       MS_REMOUNT | MS_BIND | MS_RDONLY | MS_NOSUID | MS_NODEV,
+                       NULL);
+            saved = errno;
+            if (rc)
+                (void)umount2(target_path, 0);
+        }
+    }
+    close(target); close(parent); close(source);
+    errno = saved;
+    if (rc)
+        return err(unbind ? "unbinding fixed host directory"
+                          : "binding fixed host directory readonly");
+    printf("waydroid-mount: %s host directory %s\n",
+           kind->name, unbind ? "unbound" : "bound readonly");
+    return 0;
+}
+static int dispatch_host_dir_bind(const char *argument)
+{
+    const char *verb = NULL;
+    bool unbind = false;
+    if (!strncmp(argument, "--bind-", 7)) {
+        verb = argument + 7;
+    } else if (!strncmp(argument, "--unbind-", 9)) {
+        verb = argument + 9;
+        unbind = true;
+    } else {
+        return -1;
+    }
+    for (size_t i = 0; i < HOST_BIND_COUNT; ++i) {
+        if (!strcmp(verb, HOST_DIR_BINDS[i].name)) {
+            if (verify_context())
+                return 1;
+            return host_dir_bind_op(&HOST_DIR_BINDS[i], unbind);
+        }
+    }
+    return -1; /* preserve fail-closed unknown-operation handling */
+}
+
 static void usage(void)
 {
     puts("Usage: waydroid-mount --verify-system|--verify-vendor preinstalled|persistent\n"
@@ -596,6 +721,8 @@ static void usage(void)
          "       waydroid-mount --bind-prop|--unbind-prop\n"
          "       waydroid-mount --overlay-system|--overlay-vendor\n"
          "       waydroid-mount --unoverlay-vendor|--unoverlay-system\n"
+         "       waydroid-mount --bind-egl32|--bind-egl64|--bind-odm|--bind-vendor-odm\n"
+         "       waydroid-mount --unbind-egl32|--unbind-egl64|--unbind-odm|--unbind-vendor-odm\n"
          "This Stage 2A helper is not wired into the upstream Waydroid lifecycle.");
 }
 int main(int argc, char **argv)
@@ -650,6 +777,11 @@ int main(int argc, char **argv)
             return rc;
         }
         return mount_image(kind, store);
+    }
+    if (argc == 2) {
+        int host_bind_status = dispatch_host_dir_bind(argv[1]);
+        if (host_bind_status >= 0)
+            return host_bind_status;
     }
     if (argc == 2 && (!strcmp(argv[1], "--overlay-system") ||
                       !strcmp(argv[1], "--overlay-vendor") ||

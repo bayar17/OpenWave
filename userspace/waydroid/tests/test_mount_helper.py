@@ -150,6 +150,48 @@ class MountHelperTests(unittest.TestCase):
         self.assertIn("detach nested vendor/property mount before parent overlay", source)
         self.assertIn("umount2(dest, 0)", source)
 
+    def test_fixed_host_directory_binds_require_confined_guest(self):
+        for kind in ("egl32", "egl64", "odm", "vendor-odm"):
+            for operation in ("bind", "unbind"):
+                with self.subTest(kind=kind, operation=operation):
+                    result = self.run_helper(f"--{operation}-{kind}", test=False)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertNotIn("host directory bound readonly", result.stdout)
+                    self.assertNotIn("host directory unbound", result.stdout)
+
+    def test_host_directory_binds_refuse_arbitrary_paths(self):
+        for args in (("--bind-egl32", "/etc"),
+                     ("--bind-egl64", "--rw"),
+                     ("--bind-odm", "../../"),
+                     ("--bind-vendor-odm", "/"),
+                     ("--unbind-egl32", "/etc"),
+                     ("--unbind-vendor-odm", "--lazy"),
+                     ("--bind-unknown",),
+                     ("--unbind-unknown",)):
+            with self.subTest(args=args):
+                result = self.run_helper(*args, test=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("refused", result.stderr)
+
+    def test_host_directory_binds_have_exact_allowlisted_paths(self):
+        source = SOURCE.read_text()
+        for expected in (
+            '"egl32", "/vendor/lib/egl", VENDOR_MOUNT "/lib/egl"',
+            '"egl64", "/vendor/lib64/egl", VENDOR_MOUNT "/lib64/egl"',
+            '"odm", "/odm", SYSTEM_MOUNT "/odm_extra"',
+            '"vendor-odm", "/vendor/odm", SYSTEM_MOUNT "/odm_extra"',
+            "open_fixed_path(path, O_PATH | O_DIRECTORY)",
+        ):
+            self.assertIn(expected, source)
+        self.assertIn("source_st.st_ino != target_st.st_ino", source)
+
+    def test_host_directory_bind_remount_is_readonly_and_cleanup_is_strict(self):
+        source = SOURCE.read_text()
+        self.assertIn("MS_REMOUNT | MS_BIND | MS_RDONLY | MS_NOSUID | MS_NODEV", source)
+        self.assertIn("target_is_separate_mount(target, parent, &separate)", source)
+        self.assertIn("umount2(target_path, 0)", source)
+        self.assertNotIn("MNT_DETACH", source)
+
     def test_generic_mount_cli_is_rejected(self):
         for args in (("-o", "rw", "/dev/sda", "/"),
                      ("--mount-system", "../../etc"),
