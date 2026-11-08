@@ -49,6 +49,8 @@ class Runner:
                 or self.rootfs == ROOT):
             raise ValueError("Refusing symlinked or external runtime rootfs")
         self.kernel = (ROOT / args.kernel).resolve() if args.kernel else None
+        self.kernel_config = (ROOT / args.kernel_config).resolve() if args.kernel_config else (
+            self.kernel.parents[3] / ".config" if self.kernel else None)
         self.image = (ROOT / args.image).resolve() if args.image else None
         self.evidence_root = (ROOT / "out/waydroid-integration").resolve()
         if (ROOT / "out").is_symlink() or not safe_within(self.evidence_root, ROOT / "out"):
@@ -166,17 +168,21 @@ class Runner:
                 self.gate(f"android_{name}_image", "PASS", str(candidate))
             else:
                 self.gate(f"android_{name}_image", "BLOCKED", str(candidate))
-        # bzImage at build/arch/x86/boot/bzImage -> build/.config.
-        config = self.kernel.parents[3] / ".config" if self.kernel else None
+        config = self.kernel_config
         if config and config.is_file():
-            settings = config.read_text()
-            required = ("CONFIG_SECURITY_SELINUX=y", "CONFIG_ANDROID_BINDER_IPC=y",
-                        "CONFIG_EROFS_FS=y", "CONFIG_BLK_DEV_LOOP=y")
+            settings = set(config.read_text().splitlines())
+            required = ("CONFIG_SECURITY_SELINUX=y", "CONFIG_SECURITY_LANDLOCK=y",
+                        "CONFIG_ANDROID_BINDER_IPC=y", "CONFIG_EROFS_FS=y",
+                        "CONFIG_BLK_DEV_LOOP=y", "CONFIG_VETH=y", "CONFIG_BRIDGE=y")
             missing = [x for x in required if x not in settings]
+            self.record["inputs"]["kernel_config"] = str(config)
+            self.record["inputs"]["kernel_config_sha256"] = digest(config)
             self.gate("kernel_features", "PASS" if not missing else "BLOCKED",
-                      "Requirements checked" if not missing else f"Missing: {missing}")
+                      "Waydroid/SELinux options checked" if not missing
+                      else f"Missing: {missing}")
         else:
-            self.gate("kernel_features", "UNVERIFIED", "Supply --kernel and verify matching .config")
+            self.gate("kernel_features", "UNVERIFIED",
+                      "Supply --kernel-config for the selected Waydroid kernel")
         if self.kernel and self.kernel.is_file():
             self.record["inputs"]["kernel_sha256"] = digest(self.kernel)
             self.gate("kernel_image", "PASS", str(self.kernel))
@@ -290,6 +296,15 @@ class Runner:
             return self.gate("qemu", "BLOCKED", "Supply --image or build a new image in all")
         if not self.kernel or not self.kernel.is_file():
             return self.gate("qemu", "BLOCKED", "Supply --kernel pointing to a Waydroid-capable bzImage")
+        if not self.kernel_config or not self.kernel_config.is_file():
+            return self.gate("qemu", "BLOCKED",
+                             "Matching kernel .config required (--kernel-config)")
+        features = set(self.kernel_config.read_text().splitlines())
+        needed = {"CONFIG_SECURITY_SELINUX=y", "CONFIG_ANDROID_BINDER_IPC=y",
+                  "CONFIG_EROFS_FS=y", "CONFIG_BLK_DEV_LOOP=y"}
+        if not needed.issubset(features):
+            return self.gate("qemu", "BLOCKED",
+                             "Waydroid/SELinux kernel feature preflight failed")
         if not (os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY")):
             return self.gate("qemu", "BLOCKED",
                              "Existing QEMU GTK/VirGL test requires an active graphical display")
@@ -318,6 +333,7 @@ class Runner:
                                "kernel": digest(self.kernel)}
         inputs_ok = (unchanged and result.get("inputs_unchanged") is True
                      and result.get("mode") == "enforcing"
+                     and result.get("boot_report_complete") is True
                      and result.get("kernel_panic") is False)
         self.gate("qemu_inputs_immutable", "PASS" if inputs_ok else "FAIL",
                   "Image/kernel unchanged and enforcing mode" if inputs_ok
@@ -346,13 +362,32 @@ class Runner:
             ][:200]
         self.gate("android_appd_shortcuts", "UNVERIFIED",
                   "QEMU Waydroid probe does not test authenticated appd shortcut launch")
-        return framework
+        if framework:
+            native_dir = self.out / "qemu-native"
+            native_called = self.run("qemu_native_app_runner", [sys.executable,
+                ROOT / "scripts/test-openwave-boot.py",
+                "--app-launch", "--mode", "enforcing",
+                "--seconds", str(min(self.args.seconds, 150)),
+                "--image", self.image, "--kernel", self.kernel,
+                "--output", native_dir], timeout=min(self.args.seconds, 150) + 100)
+            native_json = native_dir / "result.json"
+            native = json.loads(native_json.read_text()) if native_json.is_file() else {}
+            native_ok = (native_called and native.get("mode") == "enforcing"
+                         and native.get("inputs_unchanged") is True
+                         and native.get("app_launch_passed") is True
+                         and native.get("kernel_panic") is False)
+            self.gate("native_app_smoke", "PASS" if native_ok else "FAIL",
+                      "Native appd/Ocean smoke test under enforcing SELinux")
+            return native_ok
+        self.gate("native_app_smoke", "BLOCKED",
+                  "Android framework did not reach prerequisites for subsequent native-app smoke")
+        return False
 
     def report(self):
         self.record["finished_utc"] = datetime.now(timezone.utc).isoformat()
         release_gates = ("full_security_suite", "security_release_gate",
                          "image_build", "image_inode_labels", "qemu_inputs_immutable",
-                         "android_framework", "android_appd_shortcuts")
+                         "android_framework", "native_app_smoke", "android_appd_shortcuts")
         self.record["release_ready"] = all(self.record["gates"].get(x, {}).get("status") == "PASS"
                                             for x in release_gates)
         (self.out / "result.json").write_text(json.dumps(self.record, indent=2, sort_keys=True) + "\n")
@@ -384,6 +419,7 @@ def main():
     parser.add_argument("--rootfs", default="rootfs",
                         help="Existing OpenWave staged runtime root (default: rootfs)")
     parser.add_argument("--kernel", help="Explicit Waydroid-capable bzImage")
+    parser.add_argument("--kernel-config", help="Matching kernel build .config")
     parser.add_argument("--image", help="Existing image for qemu; new image path for image/all")
     parser.add_argument("--image-size", default="6G",
                         help="Fresh rootfs image size (default: 6G)")
