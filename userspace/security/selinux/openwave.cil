@@ -1333,6 +1333,14 @@
 (allow openwave_lxc_t openwave_lxc_start_exec_t
        (file (entrypoint read open getattr execute map)))
 
+;; Stage 2Q: once /run traversal succeeds, LXC requests an anonymous
+;; memfd for its own process and enforcing SELinux denies { create } on
+;; openwave_lxc_t:self memfd_file. Grant precisely the observed creation
+;; operation. No memfd execute/map/write/read, process execmem, file exec,
+;; or LSM policy authority is conferred; future operations require their
+;; own evidence and separate review.
+(allow openwave_lxc_t self (memfd_file (create)))
+
 ;; LXC server's abstract Unix command socket.
 (allow openwave_lxc_t self
        (unix_stream_socket (create bind listen accept read write connectto)))
