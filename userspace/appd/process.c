@@ -234,6 +234,10 @@ static gboolean force_exit(gpointer data)
 typedef struct {
     Manager *manager;
     GPid pid;
+    /* Capture immutable command identity: the child may exit and be reaped
+     * before GIO dispatches the final reply callback. Never dereference the
+     * already-freed Instance merely to record its ACK or failed transport. */
+    char *app_id;
     char **arguments;
     gboolean quit;
     guint retries;
@@ -267,19 +271,22 @@ static void command_done(Command *c, gboolean success)
     if (!success && instance && !c->quit && !instance->stopping && c->retries--) {
         g_timeout_add(100, retry_command, c); return;
     }
-    if (instance && c->quit) {
+    if (c->quit) {
         if (success) {
-            g_message("appd: control quit-ack appId=%s pid=%d", instance->app->id, c->pid);
-        } else {
-            g_warning("appd: control quit-fallback appId=%s pid=%d", instance->app->id, c->pid);
+            /* A valid JSON response may be processed after child reaping. */
+            g_message("appd: control quit-ack appId=%s pid=%d", c->app_id, c->pid);
+        } else if (instance) {
+            g_warning("appd: control quit-fallback appId=%s pid=%d", c->app_id, c->pid);
             kill(-c->pid, SIGTERM);
+        } else {
+            g_warning("appd: control quit-noack-exited appId=%s pid=%d", c->app_id, c->pid);
         }
     }
     if (instance && !c->quit && !instance->stopping) {
         if (success) appd_emit(c->manager, "ActivationRequested", g_variant_new("(su)", instance->app->id, c->pid));
         else appd_emit(c->manager, "OperationFailed", g_variant_new("(ss)", instance->app->id, "Application activation endpoint is unavailable"));
     }
-    g_strfreev(c->arguments); g_free(c->message); g_free(c);
+    g_strfreev(c->arguments); g_free(c->message); g_free(c->app_id); g_free(c);
 }
 static gboolean command_timeout(gpointer data)
 {
@@ -347,6 +354,7 @@ static void quote(GString *text, const char *value)
 static void command(Instance *instance, char **arguments, gboolean quit)
 {
     Command *c = g_new0(Command, 1); c->manager = instance->manager; c->pid = instance->pid;
+    c->app_id = g_strdup(instance->app->id);
     c->quit = quit; c->retries = quit ? 0 : 8; c->arguments = g_strdupv(arguments);
     GString *json = g_string_new(quit ? "{\"command\":\"quit\"}\n" : "{\"command\":\"activate\",\"arguments\":[");
     if (!quit) {
