@@ -42,6 +42,15 @@ def evaluate(serial):
         serial)
     stages['lxc_config_access'] = (
         'FAIL' if denied_config else ('PASS' if container else 'UNVERIFIED'))
+    # Report the exact types still preventing LXC directory traversal.
+    # This is diagnostic only: an empty set does NOT demonstrate that
+    # the container can actually open its configuration or start Android.
+    search_denials = sorted(set(re.findall(
+        r'avc:\s+denied\s+\{\s*search\s*\}[^\n]*'
+        r'comm="lxc-start"[^\n]*'
+        r'scontext=\S*:openwave_lxc_t:s0[^\n]*'
+        r'tcontext=\S*:(openwave_[A-Za-z0-9_]+):s0\s+tclass=dir',
+        serial)))
     for name, value in [('servicemanager', 'running'), ('zygote', 'running'),
                         ('boot_completed', '1')]:
         stages[name] = ('PASS' if exact(name, value) else 'FAIL') if container else 'BLOCKED'
@@ -64,4 +73,5 @@ def evaluate(serial):
     return {'diagnostics_complete': complete, 'framework_passed': framework,
             'integration_passed': False, 'stages': stages, 'probes': probes,
             'lxc_failed_library': loader.group(1) if loader else None,
-            'lxc_denied_config_path': denied_config.group(1) if denied_config else None}
+            'lxc_denied_config_path': denied_config.group(1) if denied_config else None},
+            'lxc_search_denial_types': search_denials
