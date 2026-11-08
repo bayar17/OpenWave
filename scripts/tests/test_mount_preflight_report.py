@@ -74,6 +74,45 @@ class MountPreflightReportTests(unittest.TestCase):
         self.assertIn("helper_domain_transition=UNVERIFIED", source)
         self.assertIn("mount_syscalls=NOT_ATTEMPTED", source)
 
+    def test_kernel_audit_interleave_and_selinux_nul_do_not_corrupt_details(self):
+        text = sample().replace(
+            'MOUNT_QA_GATE helper_inode=PASS expected',
+            'MOUNT_QA_GATE helper_inode=PASS owner=0 mode=755audit: type=1400 audit(1:2)')
+        text = text.replace('MOUNT_QA_END prerequisites=PASS',
+                            'MOUNT_QA_INFO observer_domain=system_u:system_r:openwave_system_t:s0\\x00\n'
+                            'MOUNT_QA_END prerequisites=PASS')
+        text = text.replace('\\x00', '\x00')
+        result = evaluate(text)
+        self.assertTrue(result["preflight_passed"])
+        self.assertEqual(result["gates"]["helper_inode"]["detail"], "owner=0 mode=755")
+        self.assertEqual(result["info"]["observer_domain"],
+                         "system_u:system_r:openwave_system_t:s0")
+
+    def test_observer_never_executes_privileged_helper_during_preflight(self):
+        shell = (Path(__file__).resolve().parents[2] /
+                 "userspace/openrc/qa/waydroid-mount-preflight.start").read_text()
+        source = shell.split("<<'PY'\n", 1)[1].rsplit("\nPY\n", 1)[0]
+        self.assertIn("def helper_inode_ok(path):", source)
+        self.assertIn("st.st_mode & 0o111", source)
+        self.assertNotIn("os.access(", source.split("record('helper_inode'", 1)[1])
+        self.assertIn("helper_inode_ok(HELPER)", source)
+        self.assertNotIn("subprocess.run(", source)
+        self.assertNotIn("subprocess.Popen(", source)
+        self.assertIn("helper_help=NOT_ATTEMPTED_READ_ONLY_OBSERVER", source)
+        self.assertIn("def loop_control_ok():", source)
+        self.assertIn("stat.S_ISCHR(st.st_mode)", source)
+        self.assertIn("os.major(st.st_rdev) == 10", source)
+        self.assertIn("os.minor(st.st_rdev) == 237", source)
+        self.assertNotIn("Path('/dev/loop-control').exists()", source)
+
+    def test_observer_policy_is_metadata_only_and_explicitly_scoped(self):
+        policy = (Path(__file__).resolve().parents[2] /
+                  "userspace/security/selinux/openwave.cil").read_text()
+        self.assertIn("(allow openwave_system_t openwave_waydroid_mount_exec_t\n       (file (getattr read open)))", policy)
+        self.assertIn("(allow openwave_system_t openwave_loop_control_t\n       (chr_file (getattr)))", policy)
+        self.assertNotIn("(allow openwave_system_t openwave_waydroid_mount_exec_t\n       (file (read open getattr map execute)))", policy)
+        self.assertNotIn("(allow openwave_system_t openwave_loop_control_t\n       (chr_file (open read write ioctl)))", policy)
+
     def test_unknown_success_markers_cannot_replace_required_gate(self):
         serial = sample().replace("MOUNT_QA_GATE helper_elf=PASS expected\n",
                                   "MOUNT_QA_GATE placeholder=PASS expected\n")
