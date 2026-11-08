@@ -59,13 +59,13 @@ class MountPreflightReportTests(unittest.TestCase):
         self.assertNotIn("android_framework_passed", r)
 
     def test_crlf_guest_serial_is_accepted(self):
-        self.assertTrue(evaluate(sample().replace("\\n", "\\r\\n"))["preflight_passed"])
+        self.assertTrue(evaluate(sample().replace("\n", "\r\n"))["preflight_passed"])
 
     def test_guest_inline_python_is_syntactically_valid(self):
         script = (Path(__file__).resolve().parents[2] /
                   "userspace/openrc/qa/waydroid-mount-preflight.start").read_text()
         self.assertIn("openwave.qa=mount-preflight", script)
-        source = script.split("<<'PY'\\n", 1)[1].rsplit("\\nPY\\n", 1)[0]
+        source = script.split("<<'PY'\n", 1)[1].rsplit("\nPY\n", 1)[0]
         compile(source, "waydroid-mount-preflight.start", "exec")
         self.assertNotIn("os.system(", source)
         self.assertNotIn("subprocess.Popen(", source)
