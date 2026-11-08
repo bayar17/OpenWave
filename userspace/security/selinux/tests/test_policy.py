@@ -14,6 +14,24 @@ POLICY = ROOT / 'userspace/security/selinux/openwave.cil'
 
 
 class PolicyTests(unittest.TestCase):
+    def test_waydroid_mount_preflight_observer_cannot_execute_or_control_device(self):
+        allowed = self.compile('''
+            (neverallow openwave_system_t openwave_waydroid_mount_exec_t
+                        (file (execute execute_no_trans entrypoint write append setattr)))
+            (neverallow openwave_system_t openwave_loop_control_t
+                        (chr_file (open read write ioctl setattr)))
+        ''')
+        self.assertEqual(allowed.returncode, 0, allowed.stderr)
+        for denied in (
+            '(neverallow openwave_system_t openwave_waydroid_mount_exec_t (file (read)))',
+            '(neverallow openwave_system_t openwave_waydroid_mount_exec_t (file (getattr)))',
+            '(neverallow openwave_system_t openwave_loop_control_t (chr_file (getattr)))',
+        ):
+            with self.subTest(rule=denied):
+                result = self.compile(denied)
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertIn('neverallow', result.stderr)
+
     def test_waydroid_network_authority_is_separate_and_path_scoped(self):
         result = self.compile('''
             (neverallow openwave_waydroid_manager_t self (capability (net_admin net_raw sys_admin)))
