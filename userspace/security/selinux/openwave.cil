@@ -1424,6 +1424,14 @@
 (allow openwave_lxc_t openwave_private_t (dir (search)))
 (allow openwave_lxc_t openwave_proc_t (dir (search)))
 (allow openwave_lxc_t openwave_sysfs_t (dir (search)))
+
+;; Stage 2N: /var/lib itself has the generic state-directory label,
+;; openwave_state_t, distinct from /var (private_t) and the Waydroid
+;; subtrees (waydroid_state_t). The actual enforcing AVC denies ONLY
+;; search on name="lib" under /var and stops lxc-start before config load.
+;; Permit pathname traversal through state-labeled parent directories.
+;; This is type-wide search, not permission to enumerate or read them.
+(allow openwave_lxc_t openwave_state_t (dir (search)))
 (allow openwave_lxc_t
        openwave_runtime_t
        (file (open read getattr map)))
