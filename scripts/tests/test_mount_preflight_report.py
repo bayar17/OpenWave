@@ -74,6 +74,20 @@ class MountPreflightReportTests(unittest.TestCase):
         self.assertIn("helper_domain_transition=UNVERIFIED", source)
         self.assertIn("mount_syscalls=NOT_ATTEMPTED", source)
 
+    def test_kernel_audit_interleave_and_selinux_nul_do_not_corrupt_details(self):
+        text = sample().replace(
+            'MOUNT_QA_GATE helper_inode=PASS expected',
+            'MOUNT_QA_GATE helper_inode=PASS owner=0 mode=755audit: type=1400 audit(1:2)')
+        text = text.replace('MOUNT_QA_END prerequisites=PASS',
+                            'MOUNT_QA_INFO observer_domain=system_u:system_r:openwave_system_t:s0\\x00\n'
+                            'MOUNT_QA_END prerequisites=PASS')
+        text = text.replace('\\x00', '\x00')
+        result = evaluate(text)
+        self.assertTrue(result["preflight_passed"])
+        self.assertEqual(result["gates"]["helper_inode"]["detail"], "owner=0 mode=755")
+        self.assertEqual(result["info"]["observer_domain"],
+                         "system_u:system_r:openwave_system_t:s0")
+
     def test_observer_never_executes_privileged_helper_during_preflight(self):
         shell = (Path(__file__).resolve().parents[2] /
                  "userspace/openrc/qa/waydroid-mount-preflight.start").read_text()
