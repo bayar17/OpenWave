@@ -138,6 +138,50 @@ class WaydroidReportTests(unittest.TestCase):
             self.assertNotIn('(allow openwave_lxc_t ' + typ +
                              ' (file (read open)))', policy)
 
+    def test_lxc_var_lib_search_denial_is_typed_and_does_not_certify_boot(self):
+        serial = (
+            'WAYDROID_QA BEGIN enforcing=1\n'
+            + probe('startup', 'Starting waydroid [ ok ]')
+            + probe('request_session', 'OSError: container failed to start', 1)
+            + probe('container', 'STOPPED')
+            + 'audit: type=1400 audit(1794168547.994:141): avc:  denied  { search } '
+              'for pid=1951 comm="lxc-start" name="lib" dev="vda" ino=10050 '
+              'scontext=system_u:system_r:openwave_lxc_t:s0 '
+              'tcontext=system_u:object_r:openwave_state_t:s0 '
+              'tclass=dir permissive=0\n'
+            + 'WAYDROID_QA END enforcing=1\n'
+        )
+        result = evaluate(serial)
+        self.assertEqual(result['lxc_search_denial_types'], ['openwave_state_t'])
+        self.assertEqual(result['stages']['container'], 'FAIL')
+        self.assertEqual(result['stages']['lxc_config_access'], 'UNVERIFIED')
+        self.assertFalse(result['framework_passed'])
+
+    def test_search_denial_types_do_not_include_non_lxc_processes(self):
+        serial = (
+            'WAYDROID_QA BEGIN enforcing=1\n'
+            + 'audit: avc: denied { search } for pid=55 comm="python3" '
+              'scontext=system_u:system_r:openwave_waydroid_manager_t:s0 '
+              'tcontext=system_u:object_r:openwave_private_t:s0 '
+              'tclass=dir permissive=0\n'
+            + probe('container', 'STOPPED')
+            + 'WAYDROID_QA END enforcing=1\n'
+        )
+        result = evaluate(serial)
+        self.assertEqual(result['lxc_search_denial_types'], [])
+        self.assertFalse(result['framework_passed'])
+
+    def test_lxc_var_lib_state_parent_grant_is_search_only(self):
+        from pathlib import Path
+        policy = (Path(__file__).resolve().parents[2] /
+                  'userspace/security/selinux/openwave.cil').read_text()
+        self.assertEqual(policy.count(
+            '(allow openwave_lxc_t openwave_state_t (dir (search)))'), 1)
+        self.assertNotIn(
+            '(allow openwave_lxc_t openwave_state_t (dir (read open search)))', policy)
+        self.assertNotIn(
+            '(allow openwave_lxc_t openwave_state_t (file (read open)))', policy)
+
     def test_empty_successful_commands_and_missing_container_are_failures(self):
         result = evaluate(probe('container', '') + probe('boot_completed', ''))
         self.assertFalse(result['framework_passed'])
