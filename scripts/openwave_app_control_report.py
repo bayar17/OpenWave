@@ -6,8 +6,8 @@ specific quit ACKs, clean exits and the guest's checked summary.
 """
 import re
 
-ACK = re.compile(r"APP_TEST CONTROL_ACK (com\.openwave\.[a-z0-9-]+) pid=([1-9][0-9]*) authenticated response and normal exit")
-SUMMARY = re.compile(r"APP_CONTROL_PASS authenticated quit acknowledgements and clean exits checks=([1-9][0-9]*)")
+ACK = re.compile(r"^APP_TEST CONTROL_ACK (com\.openwave\.[a-z0-9-]+) pid=([1-9][0-9]*) authenticated response and normal exit$", re.M)
+SUMMARY = re.compile(r"^APP_CONTROL_PASS authenticated quit acknowledgements and clean exits checks=([1-9][0-9]*)$", re.M)
 EXPECTED = frozenset({"com.openwave.files", "com.openwave.photos", "com.openwave.ocean"})
 
 
@@ -23,8 +23,8 @@ def evaluate(serial: str) -> dict:
         and count >= len(EXPECTED) and EXPECTED <= ids
         and "APP_CONTROL_FAIL" not in serial
         and "APP_TEST CONTROL_FAIL" not in serial
-        and "APP_SMOKE PASS confined live app launched through Ocean" in serial
-        and "OPENWAVE_APP_SMOKE_END" in serial
+        and re.search(r"^APP_SMOKE PASS confined live app launched through Ocean$", serial, re.M) is not None
+        and re.search(r"^OPENWAVE_APP_SMOKE_END$", serial, re.M) is not None
     )
     return {
         "schema": 1,
