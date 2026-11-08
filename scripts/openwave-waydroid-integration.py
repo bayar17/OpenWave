@@ -313,6 +313,26 @@ class Runner:
             return self.gate("qemu", "BLOCKED", "QEMU evidence directory already exists")
         before = {"image": digest(self.image), "kernel": digest(self.kernel)}
         self.record["inputs"]["qemu_inputs"] = before
+        # Check native appd/Ocean isolation independently of Waydroid readiness.
+        # Existing QEMU probe flags are mutually exclusive; use two snapshots.
+        native_dir = self.out / "qemu-native"
+        native_called = self.run("qemu_native_app_runner", [sys.executable,
+            ROOT / "scripts/test-openwave-boot.py",
+            "--app-launch", "--mode", "enforcing",
+            "--seconds", str(min(self.args.seconds, 150)),
+            "--image", self.image, "--kernel", self.kernel,
+            "--output", native_dir], timeout=min(self.args.seconds, 150) + 100)
+        native_json = native_dir / "result.json"
+        try:
+            native = json.loads(native_json.read_text()) if native_json.is_file() else {}
+        except (ValueError, OSError):
+            native = {}
+        native_ok = (native_called and native.get("mode") == "enforcing"
+                     and native.get("inputs_unchanged") is True
+                     and native.get("app_launch_passed") is True
+                     and native.get("kernel_panic") is False)
+        self.gate("native_app_smoke", "PASS" if native_ok else "FAIL",
+                  "Independent native appd/Ocean enforcing smoke test")
         called = self.run("qemu_runner", [sys.executable,
             ROOT / "scripts/test-openwave-boot.py",
             "--waydroid", "--mode", "enforcing", "--seconds", str(self.args.seconds),
@@ -362,26 +382,7 @@ class Runner:
             ][:200]
         self.gate("android_appd_shortcuts", "UNVERIFIED",
                   "QEMU Waydroid probe does not test authenticated appd shortcut launch")
-        if framework:
-            native_dir = self.out / "qemu-native"
-            native_called = self.run("qemu_native_app_runner", [sys.executable,
-                ROOT / "scripts/test-openwave-boot.py",
-                "--app-launch", "--mode", "enforcing",
-                "--seconds", str(min(self.args.seconds, 150)),
-                "--image", self.image, "--kernel", self.kernel,
-                "--output", native_dir], timeout=min(self.args.seconds, 150) + 100)
-            native_json = native_dir / "result.json"
-            native = json.loads(native_json.read_text()) if native_json.is_file() else {}
-            native_ok = (native_called and native.get("mode") == "enforcing"
-                         and native.get("inputs_unchanged") is True
-                         and native.get("app_launch_passed") is True
-                         and native.get("kernel_panic") is False)
-            self.gate("native_app_smoke", "PASS" if native_ok else "FAIL",
-                      "Native appd/Ocean smoke test under enforcing SELinux")
-            return native_ok
-        self.gate("native_app_smoke", "BLOCKED",
-                  "Android framework did not reach prerequisites for subsequent native-app smoke")
-        return False
+        return framework and native_ok
 
     def report(self):
         self.record["finished_utc"] = datetime.now(timezone.utc).isoformat()
