@@ -275,9 +275,12 @@ def main():
               'app_launch_requested': args.app_launch,
               'app_launch_passed': ('APP_SMOKE PASS confined live app launched through Ocean' in serial)
                   if args.app_launch else None,
-              'app_control_passed': (
-                  'APP_CONTROL_PASS authenticated quit acknowledgements and clean exits' in serial)
-                  if args.app_launch else None}
+              'app_control_passed': None}
+    if args.app_launch:
+        from openwave_app_control_report import evaluate as evaluate_control
+        control = evaluate_control(serial)
+        report['app_control_passed'] = control['passed']
+        (output / 'app-control.json').write_text(json.dumps(control, indent=2) + '\n')
     if args.wifi_associate:
         report['usb_wifi_passed'] = 'WIFI_ASSOC PASS associated, DHCP and DNS' in serial and 'WIFI_ASSOC FAIL' not in serial
         report['wifi_association_requested'] = True
