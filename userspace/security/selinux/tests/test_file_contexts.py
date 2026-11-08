@@ -41,6 +41,8 @@ class FileContextsTests(unittest.TestCase):
             ('/Applications/com.example.app/lib/libsample.so.1',
              stat.S_IFREG, 'openwave_user_bundle_t'),
             ('/usr/bin/lxc-start', stat.S_IFREG, 'openwave_lxc_start_exec_t'),
+            ('/usr/libexec/openwave-waydroid/waydroid-mount', stat.S_IFREG,
+             'openwave_waydroid_mount_exec_t'),
             ('/usr/lib/waydroid/data/scripts/waydroid-net.sh', stat.S_IFREG, 'openwave_waydroid_net_exec_t'),
             ('/run/waydroid-lxc/network_up', stat.S_IFREG, 'openwave_waydroid_net_runtime_t'),
             ('/run/xtables.lock', stat.S_IFREG, 'openwave_xtables_lock_t'),
