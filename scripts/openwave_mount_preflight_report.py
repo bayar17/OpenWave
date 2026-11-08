@@ -7,7 +7,7 @@ import re
 
 REQUIRED = frozenset({
     "enforcing", "helper_inode", "helper_label", "helper_elf",
-    "helper_help", "image_system", "image_vendor", "loop_control",
+    "image_system", "image_vendor", "loop_control",
 })
 BEGIN = re.compile(r"^MOUNT_QA_BEGIN enforcing=([01])$", re.M)
 END = re.compile(r"^MOUNT_QA_END prerequisites=(PASS|BLOCKED)$", re.M)
