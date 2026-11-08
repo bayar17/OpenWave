@@ -25,6 +25,14 @@ def evaluate(serial):
     stages['session_start'] = (
         ('PASS' if request.get('exit_code') == 0 else 'FAIL')
         if request else 'NOT TESTED')
+    # The manager's D-Bus exception alone hides the underlying early LXC
+    # linker failure. Surface exact library name from the guest's existing
+    # Waydroid log, but never infer "PASS" from an absent error line.
+    loader = re.search(
+        r'lxc-start: error while loading shared libraries: '
+        r'([A-Za-z0-9_+.\-]+): cannot open shared object file: Permission denied',
+        serial)
+    stages['lxc_loader'] = 'FAIL' if loader else 'UNVERIFIED'
     for name, value in [('servicemanager', 'running'), ('zygote', 'running'),
                         ('boot_completed', '1')]:
         stages[name] = ('PASS' if exact(name, value) else 'FAIL') if container else 'BLOCKED'
@@ -45,4 +53,5 @@ def evaluate(serial):
     framework = complete and all(stages[n] == 'PASS' for n in (
         'container', 'servicemanager', 'zygote', 'system_server', 'boot_completed', 'package_manager'))
     return {'diagnostics_complete': complete, 'framework_passed': framework,
-            'integration_passed': False, 'stages': stages, 'probes': probes}
+            'integration_passed': False, 'stages': stages, 'probes': probes,
+            'lxc_failed_library': loader.group(1) if loader else None}

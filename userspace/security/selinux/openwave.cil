@@ -1406,6 +1406,12 @@
        (process (sigchld)))
 
 ;; Diagnostic 87: LXC ELF loader access
+;; Stage 2L: the prior stage granted host root traversal only. Dynamic
+;; linking lxc-start still needs pathname search in /etc, /lib64 and /usr,
+;; all labeled openwave_runtime_t. Read-only shared object mapping was
+;; already granted via the dedicated dynamic-linker client attribute.
+;; This is directory metadata/traversal only: no listing/open/write/mounton.
+(allow openwave_lxc_t openwave_runtime_t (dir (search getattr)))
 (allow openwave_lxc_t
        openwave_runtime_t
        (file (open read getattr map)))

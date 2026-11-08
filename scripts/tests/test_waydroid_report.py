@@ -63,6 +63,41 @@ class WaydroidReportTests(unittest.TestCase):
         self.assertNotIn(
             '(allow openwave_lxc_t openwave_default_t (file (read open)))', policy)
 
+    def test_lxc_libunwind_loader_denial_is_reported_separately(self):
+        log = (
+            'WAYDROID_QA BEGIN enforcing=1\n'
+            + probe('startup', 'Starting waydroid [ ok ]')
+            + probe('request_session', 'OSError: container failed to start', 1)
+            + probe('container', 'STOPPED')
+            + 'WAYDROID_QA LOG /var/lib/waydroid/waydroid.log\n'
+            + 'lxc-start: error while loading shared libraries: libunwind.so.1: '
+              'cannot open shared object file: Permission denied\n'
+            + 'WAYDROID_QA END enforcing=1\n'
+        )
+        result = evaluate(log)
+        self.assertEqual(result['stages']['lxc_loader'], 'FAIL')
+        self.assertEqual(result['lxc_failed_library'], 'libunwind.so.1')
+        self.assertEqual(result['stages']['session_start'], 'FAIL')
+        self.assertFalse(result['framework_passed'])
+
+    def test_missing_lxc_loader_error_does_not_count_as_pass(self):
+        result = evaluate('WAYDROID_QA BEGIN enforcing=1\n'
+                          + probe('container', 'STOPPED')
+                          + 'WAYDROID_QA END enforcing=1\n')
+        self.assertEqual(result['stages']['lxc_loader'], 'UNVERIFIED')
+        self.assertIsNone(result['lxc_failed_library'])
+
+    def test_lxc_runtime_directory_access_is_search_and_getattr_only(self):
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[2]
+        policy = (root / 'userspace/security/selinux/openwave.cil').read_text()
+        self.assertEqual(policy.count(
+            '(allow openwave_lxc_t openwave_runtime_t (dir (search getattr)))'), 1)
+        self.assertNotIn(
+            '(allow openwave_lxc_t openwave_runtime_t (dir (read open search)))', policy)
+        self.assertIn(
+            '(allow openwave_lxc_t openwave_default_t (dir (search)))', policy)
+
     def test_empty_successful_commands_and_missing_container_are_failures(self):
         result = evaluate(probe('container', '') + probe('boot_completed', ''))
         self.assertFalse(result['framework_passed'])
