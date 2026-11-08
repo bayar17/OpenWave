@@ -16,6 +16,8 @@ INFO = re.compile(r"^MOUNT_QA_INFO ([a-z_]+)=([^\r\n]+)$", re.M)
 
 
 def evaluate(serial: str) -> dict:
+    # QEMU serial consoles may emit CRLF; do not misclassify valid guest markers.
+    serial = serial.replace("\r\n", "\n").replace("\r", "\n")
     begins, ends = list(BEGIN.finditer(serial)), list(END.finditer(serial))
     matches = list(GATE.finditer(serial))
     gates = {}
