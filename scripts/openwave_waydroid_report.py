@@ -17,8 +17,14 @@ def evaluate(serial):
     container = exact('container', 'RUNNING')
     stages = {'container': 'PASS' if container else 'FAIL'}
     manager = probes.get('startup', {})
+    # OpenRC starting the manager is not equivalent to the manager's D-Bus
+    # Start(session) call succeeding or LXC entering RUNNING.
     stages['manager'] = 'PASS' if (manager.get('exit_code') == 0
         and 'could not allocate closure' not in serial) else 'FAIL'
+    request = probes.get('request_session')
+    stages['session_start'] = (
+        ('PASS' if request.get('exit_code') == 0 else 'FAIL')
+        if request else 'NOT TESTED')
     for name, value in [('servicemanager', 'running'), ('zygote', 'running'),
                         ('boot_completed', '1')]:
         stages[name] = ('PASS' if exact(name, value) else 'FAIL') if container else 'BLOCKED'
