@@ -35,6 +35,10 @@
 (type openwave_device_t)
 (type openwave_loop_control_t)
 (type openwave_loop_block_t)
+; Stage 2A: dedicated image-mount domain. No mount authority until guest validation.
+(type openwave_waydroid_mount_t)
+(type openwave_waydroid_mount_exec_t)
+(roletype system_r openwave_waydroid_mount_t)
 (type openwave_gpu_t)
 (type openwave_null_t)
 (type openwave_console_t)
@@ -373,7 +377,8 @@
 (typeattributeset openwave_dynamic_link_client
     (openwave_system_t openwave_app_t openwave_native_service
      openwave_waydroid_manager_t openwave_waydroid_launcher_t
-     openwave_waydroid_helper_t openwave_waydroid_net_t openwave_lxc_t))
+     openwave_waydroid_helper_t openwave_waydroid_net_t openwave_lxc_t
+     openwave_waydroid_mount_t))
 (allow openwave_dynamic_link_client openwave_elf_loader_t
     (file (read open getattr map execute execute_no_trans)))
 (allow openwave_dynamic_link_client openwave_elf_loader_t
@@ -389,7 +394,8 @@
 (typeattributeset openwave_untrusted_link_client
     (openwave_app_t openwave_native_service
      openwave_waydroid_manager_t openwave_waydroid_launcher_t
-     openwave_waydroid_helper_t openwave_waydroid_net_t openwave_lxc_t))
+     openwave_waydroid_helper_t openwave_waydroid_net_t openwave_lxc_t
+     openwave_waydroid_mount_t))
 (neverallow openwave_untrusted_link_client openwave_elf_loader_t
     (file (write append create setattr unlink link rename relabelfrom relabelto)))
 (neverallow openwave_untrusted_link_client openwave_shared_lib_t
@@ -1392,3 +1398,39 @@
 (allow openwave_lxc_t
        openwave_runtime_t
        (file (open read getattr map)))
+
+; WAYDROID_MOUNT_BOUNDARY_STAGE2A_BEGIN
+; The fixed-operation executable is not yet invoked by upstream Waydroid.
+; Manager -> helper transition is staged, but filesystem privileges are denied.
+(typetransition openwave_waydroid_manager_t openwave_waydroid_mount_exec_t
+                process openwave_waydroid_mount_t)
+(allow openwave_waydroid_manager_t openwave_waydroid_mount_exec_t
+       (file (read open getattr map execute)))
+(allow openwave_waydroid_manager_t openwave_waydroid_mount_t
+       (process (transition sigchld signull getattr rlimitinh siginh noatsecure)))
+(allow openwave_waydroid_mount_t openwave_waydroid_mount_exec_t
+       (file (entrypoint read open getattr map execute)))
+(allow openwave_waydroid_mount_t openwave_waydroid_manager_t (fd (use)))
+(allow openwave_waydroid_mount_t openwave_waydroid_manager_t (process (sigchld)))
+(allow openwave_waydroid_mount_t self (process (getattr getcap getrlimit)))
+(allow openwave_waydroid_mount_t openwave_default_t (dir (search getattr)))
+(allow openwave_waydroid_mount_t openwave_runtime_t (dir (search getattr)))
+(allow openwave_waydroid_mount_t openwave_waydroid_state_t
+       (dir (search getattr read open)))
+(allow openwave_waydroid_mount_t openwave_waydroid_state_t
+       (file (read open getattr)))
+(allow openwave_waydroid_mount_t openwave_proc_t (dir (search getattr)))
+(allow openwave_waydroid_mount_t openwave_proc_t (file (read open getattr)))
+(allow openwave_waydroid_mount_t openwave_security_t (file (read open getattr)))
+; The new entrypoint is not executable by ordinary native applications.
+(neverallow openwave_app_t openwave_waydroid_mount_exec_t
+            (file (execute execute_no_trans entrypoint)))
+; Do not grant these until the image, mountpoint and namespace checks prove
+; that the helper can safely perform the exact requested operations.
+(neverallow openwave_waydroid_mount_t self
+            (capability (sys_admin sys_boot sys_time net_admin net_raw)))
+(neverallow openwave_waydroid_mount_t openwave_all_types
+            (security (load_policy setenforce)))
+(neverallow openwave_waydroid_mount_t openwave_default_t
+            (filesystem (mount remount unmount)))
+; WAYDROID_MOUNT_BOUNDARY_STAGE2A_END
