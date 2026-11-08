@@ -1404,6 +1404,17 @@
        openwave_runtime_t
        (file (open read getattr map)))
 
+; WAYDROID_MOUNT_OBSERVER_STAGE2I_BEGIN
+; The opt-in read-only preflight runs under the OpenRC system domain.
+; Permit inspection of *only* the fixed helper's inode/ELF/SELinux label
+; and the dedicated loop-control node's metadata. Not execute, ioctl,
+; open device, mount, process transition, or sys_admin authorization.
+(allow openwave_system_t openwave_waydroid_mount_exec_t
+       (file (getattr read open)))
+(allow openwave_system_t openwave_loop_control_t
+       (chr_file (getattr)))
+; WAYDROID_MOUNT_OBSERVER_STAGE2I_END
+
 ; WAYDROID_MOUNT_BOUNDARY_STAGE2A_BEGIN
 ; The fixed-operation executable is not yet invoked by upstream Waydroid.
 ; Manager -> helper transition is staged, but filesystem privileges are denied.
