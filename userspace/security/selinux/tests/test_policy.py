@@ -171,21 +171,28 @@ class PolicyTests(unittest.TestCase):
                 self.assertNotEqual(fail.returncode, 0, fail.stderr)
                 self.assertIn('neverallow', fail.stderr)
 
-    def test_lxc_self_memfd_create_only_after_run_root_traversal(self):
-        # Stage 2P cleared /run search and reached a self memfd_file create
-        # AVC on lxc-start. Permit only the observed anonymous object
-        # allocation; not executable mappings or unrelated memfd IO.
+    def test_lxc_self_memfd_create_and_write_without_exec_or_mapping(self):
+        # Stage 2Q allowed creating the LXC config memfd. The next
+        # enforcing AVC denies writing its contents. Allow only self
+        # create+write, not reading, mapping or executable memory.
         safe = self.compile("""
             (neverallow openwave_lxc_t self
-                        (memfd_file (read write open append getattr setattr
+                        (memfd_file (read open append getattr setattr
                                      lock map execute execmod ioctl)))
             (neverallow openwave_lxc_t self (process (execmem)))
+            (neverallow openwave_lxc_t self
+                        (unix_stream_socket (ioctl shutdown setattr)))
         """)
         self.assertEqual(safe.returncode, 0, safe.stderr)
-        denied = self.compile(
-            '(neverallow openwave_lxc_t self (memfd_file (create)))')
-        self.assertNotEqual(denied.returncode, 0, denied.stderr)
-        self.assertIn('neverallow', denied.stderr)
+        for rule in (
+            '(neverallow openwave_lxc_t self (memfd_file (create)))',
+            '(neverallow openwave_lxc_t self (memfd_file (write)))',
+            '(neverallow openwave_lxc_t self (unix_stream_socket (connect)))',
+        ):
+            with self.subTest(rule=rule):
+                denied = self.compile(rule)
+                self.assertNotEqual(denied.returncode, 0, denied.stderr)
+                self.assertIn('neverallow', denied.stderr)
 
     def test_waydroid_network_authority_is_separate_and_path_scoped(self):
         result = self.compile('''
