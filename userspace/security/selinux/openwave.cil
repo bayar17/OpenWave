@@ -1333,17 +1333,17 @@
 (allow openwave_lxc_t openwave_lxc_start_exec_t
        (file (entrypoint read open getattr execute map)))
 
-;; Stage 2Q: once /run traversal succeeds, LXC requests an anonymous
-;; memfd for its own process and enforcing SELinux denies { create } on
-;; openwave_lxc_t:self memfd_file. Grant precisely the observed creation
-;; operation. No memfd execute/map/write/read, process execmem, file exec,
-;; or LSM policy authority is conferred; future operations require their
-;; own evidence and separate review.
-(allow openwave_lxc_t self (memfd_file (create)))
+;; Stage 2Q allowed LXC to create a self-owned anonymous memfd.
+;; Stage 2R: LXC then attempts to populate /memfd:.lxc_config_file
+;; and enforcing SELinux denies memfd_file {write}. Permit exactly
+;; create+write on self, not mapping/execution, opening or reading.
+(allow openwave_lxc_t self (memfd_file (create write)))
 
-;; LXC server's abstract Unix command socket.
+;; LXC's self-owned abstract Unix socket. Stage 2R adds the observed
+;; socket {connect}; distinct from connectto on an already-bound server.
+;; Do not widen target domains or expose unrelated IPC endpoints.
 (allow openwave_lxc_t self
-       (unix_stream_socket (create bind listen accept read write connectto)))
+       (unix_stream_socket (create bind listen accept read write connect connectto)))
 (allow openwave_waydroid_manager_t openwave_lxc_t
        (unix_stream_socket (connectto)))
 ;; Existing OpenWave QA/system lifecycle clients need the same audited access.
