@@ -1,0 +1,21 @@
+#!/sbin/openrc-run
+description="OpenWave system power actions"
+command="/System/Services/powerd"
+command_background="yes"
+pidfile="/run/openwave/powerd.pid"
+output_log="/run/openwave/powerd.stdout.log"
+error_log="/run/openwave/powerd.stderr.log"
+
+depend() {
+    need dbus openwave-runtime
+}
+start_pre() {
+    /System/Services/openwave-register-service-identity --invalidate powerd || return 1
+}
+start_post() {
+    /System/Services/openwave-register-service-identity powerd || return 1
+    /System/Services/openwave-wait-dbus system org.openwave.Power
+}
+stop_post() {
+    /System/Services/openwave-register-service-identity --invalidate powerd
+}

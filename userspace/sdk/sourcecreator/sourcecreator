@@ -1,0 +1,297 @@
+#!/usr/bin/env python3
+import argparse
+import os
+from pathlib import Path
+import re
+import sys
+import tomllib
+
+ID_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9_-]*(\.[a-zA-Z0-9][a-zA-Z0-9_-]*){2,}$')
+RESERVED_ID_PREFIXES = ('com.openwave.', 'org.openwave.android.', 'org.openwave.webapp.')
+VERSION_PATTERN = re.compile(r'^[0-9]+(\.[0-9]+){0,3}$')
+EXECUTABLE_PATTERN = re.compile(r'^[a-z][a-z0-9_-]{0,63}$')
+LIBRARY_PATTERN = re.compile(r'^[a-z][a-z0-9_]{0,31}$')
+PLACEHOLDER = re.compile(r'@([A-Za-z_][A-Za-z0-9_]*)@')
+DEFAULT_EXTRA_LIBRARY = 'support'
+
+
+class Error(Exception):
+    pass
+
+
+
+def alphanumerics(text):
+    return re.sub(r'[^A-Za-z0-9]+', ' ', text).split()
+
+
+def default_id(name):
+    return 'com.example.' + (''.join(alphanumerics(name)).lower() or 'app')
+
+
+def default_executable(name):
+    return '-'.join(part.lower() for part in alphanumerics(name)) or 'app'
+
+
+def qml_module(name):
+    text = ''.join(part[:1].upper() + part[1:] for part in alphanumerics(name))
+    return text if text[:1].isalpha() else 'App' + text
+
+
+def cmake_name(name):
+    return ''.join(alphanumerics(name)) or 'Application'
+
+
+def class_name(text):
+    return ''.join(part[:1].upper() + part[1:] for part in re.split(r'[_-]+', text))
+
+
+def validate(variables):
+    problems = []
+    if not variables['project_name'].strip() or len(variables['project_name']) > 64 \
+            or any(ord(c) < 32 or c in '"\\' for c in variables['project_name']):
+        problems.append('--project-name must be 1-64 characters without quotes, backslashes or control characters')
+    identifier = variables['project_id']
+    if not ID_PATTERN.match(identifier) or len(identifier) > 128:
+        problems.append(f'--project-id "{identifier}" is not an application id: reverse-domain form such as '
+                        'org.example.myapp (three or more dot-separated parts, letters, digits, - and _)')
+    elif identifier.startswith(RESERVED_ID_PREFIXES):
+        problems.append(f'--project-id "{identifier}" is in a namespace reserved for the system ({", ".join(RESERVED_ID_PREFIXES)})')
+    if not VERSION_PATTERN.match(variables['project_version']):
+        problems.append('--project-version must be numbers separated by dots, for example 1.0.0')
+    if not EXECUTABLE_PATTERN.match(variables['project_executable']):
+        problems.append('--project-executable must be a file name of lower-case letters, digits, - and _ (starting with a letter)')
+    seen = set()
+    for lib in variables['extra_libs']:
+        if not LIBRARY_PATTERN.match(lib):
+            problems.append(f'extra library "{lib}": use lower-case letters, digits and _ (starting with a letter)')
+        if lib in seen:
+            problems.append(f'extra library "{lib}" is listed twice')
+        if lib == variables['project_executable']:
+            problems.append(f'extra library "{lib}" has the name of the executable')
+        seen.add(lib)
+    if problems:
+        raise Error('\n'.join(problems))
+
+
+
+def truthy(value):
+    return bool(value)
+
+
+def lookup(name, scope):
+    if name not in scope:
+        raise Error(f'blueprint uses an unknown variable "{name}"')
+    return scope[name]
+
+
+def substitute(text, scope):
+    return PLACEHOLDER.sub(lambda m: str(lookup(m.group(1), scope)), text)
+
+
+def parse_directives(lines):
+    def block(index, stop):
+        nodes = []
+        while index < len(lines):
+            line = lines[index]
+            directive = line.strip()
+            if directive.startswith('@@'):
+                words = directive[2:].split()
+                keyword = words[0] if words else ''
+                if keyword in stop:
+                    return nodes, index, keyword
+                if keyword == 'if' and len(words) == 2:
+                    then, index, ended = block(index + 1, ('else', 'endif'))
+                    other = []
+                    if ended == 'else':
+                        other, index, ended = block(index + 1, ('endif',))
+                    if ended != 'endif':
+                        raise Error('blueprint: @@if without @@endif')
+                    nodes.append(('if', words[1], then, other))
+                elif keyword == 'for' and len(words) == 4 and words[2] == 'in':
+                    body, index, ended = block(index + 1, ('endfor',))
+                    if ended != 'endfor':
+                        raise Error('blueprint: @@for without @@endfor')
+                    nodes.append(('for', words[1], words[3], body))
+                else:
+                    raise Error(f'blueprint: unknown directive "{directive}"')
+            else:
+                nodes.append(('text', line))
+            index += 1
+        return nodes, index, None
+    nodes, index, ended = block(0, ())
+    return nodes
+
+
+def render_nodes(nodes, scope):
+    out = []
+    for node in nodes:
+        if node[0] == 'text':
+            out.append(substitute(node[1], scope))
+        elif node[0] == 'if':
+            out.extend(render_nodes(node[2] if truthy(lookup(node[1], scope)) else node[3], scope))
+        else:
+            for item in lookup(node[2], scope):
+                inner = dict(scope)
+                inner[node[1]] = item
+                inner[node[1] + '_class'] = class_name(item)
+                out.extend(render_nodes(node[3], inner))
+    return out
+
+
+def render(text, scope):
+    lines = text.split('\n')
+    trailing_newline = text.endswith('\n')
+    if trailing_newline:
+        lines = lines[:-1]
+    result = '\n'.join(render_nodes(parse_directives(lines), scope))
+    return result + '\n' if trailing_newline or result else result
+
+
+
+def find_blueprint(template, explicit=None):
+    if explicit:
+        path = Path(explicit).expanduser()
+        if not path.is_file():
+            raise Error(f'blueprint file not found: {path}')
+        return path
+    if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*', template or ''):
+        raise Error(f'invalid template name "{template}"')
+    places = []
+    if os.environ.get('OPENWAVE_BLUEPRINTS'):
+        places.append(Path(os.environ['OPENWAVE_BLUEPRINTS']))
+    here = Path(__file__).resolve().parent
+    places += [here.parent / 'share/openwave/blueprints', here / 'blueprints']
+    for place in places:
+        if (place / f'{template}.blueprint').is_file():
+            return place / f'{template}.blueprint'
+    raise Error(f'no blueprint for template "{template}" (looked in: {", ".join(str(p) for p in places)}); '
+                'see --list-templates')
+
+
+def list_templates():
+    names = {}
+    here = Path(__file__).resolve().parent
+    places = ([Path(os.environ['OPENWAVE_BLUEPRINTS'])] if os.environ.get('OPENWAVE_BLUEPRINTS') else []) \
+        + [here.parent / 'share/openwave/blueprints', here / 'blueprints']
+    for place in places:
+        for path in sorted(place.glob('*.blueprint')) if place.is_dir() else []:
+            names.setdefault(path.stem, path)
+    return names
+
+
+def load_blueprint(path):
+    try:
+        document = tomllib.loads(path.read_text(encoding='utf-8'))
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise Error(f'cannot read blueprint {path}: {error}')
+    header = document.get('blueprint', {})
+    if header.get('format') != 1:
+        raise Error(f'{path}: unsupported blueprint format {header.get("format")!r} (this sourcecreator reads format 1)')
+    files = document.get('file')
+    if not isinstance(files, list) or not files:
+        raise Error(f'{path}: the blueprint lists no files')
+    for entry in files:
+        if not isinstance(entry.get('path'), str) or not isinstance(entry.get('content'), str) \
+                or set(entry) - {'path', 'content', 'foreach'}:
+            raise Error(f'{path}: every [[file]] needs a string "path" and "content" (and optionally "foreach")')
+    return header, files
+
+
+def plan(files, variables):
+    planned = {}
+    for entry in files:
+        scopes = [variables]
+        if 'foreach' in entry:
+            items = lookup(entry['foreach'], variables)
+            scopes = [dict(variables, lib=item, lib_class=class_name(item)) for item in items]
+        for scope in scopes:
+            relative = substitute(entry['path'], scope)
+            parts = Path(relative).parts
+            if not parts or Path(relative).is_absolute() or '..' in parts or '' in relative.split('/'):
+                raise Error(f'blueprint path escapes the project directory: {relative}')
+            if relative in planned:
+                raise Error(f'blueprint writes {relative} twice')
+            planned[relative] = render(entry['content'], scope)
+    return planned
+
+
+def write_project(directory, planned):
+    directory.mkdir(parents=True, exist_ok=True)
+    if any(directory.iterdir()):
+        raise Error(f'{directory} is not empty; sourcecreator never overwrites existing files')
+    for relative, text in planned.items():
+        target = directory / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, 'x', encoding='utf-8') as stream:
+            stream.write(text)
+
+
+
+def parse_arguments(argv):
+    parser = argparse.ArgumentParser(prog='sourcecreator', description='Create the source tree of a new OpenWave application from a blueprint.',
+                                     formatter_class=argparse.RawDescriptionHelpFormatter,
+                                     epilog='Blueprints: ' + ', '.join(sorted(list_templates())) if list_templates() else None)
+    parser.add_argument('--template', help='blueprint to use (see --list-templates), for example QtQuick')
+    parser.add_argument('--directory', help='where to create the project (created if missing; must be empty)')
+    parser.add_argument('--project-name', help='display name (default: the directory name)')
+    parser.add_argument('--project-id', help='application id, reverse-domain form (default: com.example.<name>)')
+    parser.add_argument('--project-version', default='0.1.0', help='version, numbers separated by dots (default 0.1.0)')
+    parser.add_argument('--project-executable', help='executable file name, lands in bin/ (default: the lower-cased name)')
+    parser.add_argument('--extra-libs', nargs='?', const=DEFAULT_EXTRA_LIBRARY, default=None, metavar='NAMES',
+                        help='the application has libraries of its own still to be compiled: create libs/<name>/ '
+                             f'skeletons, built and installed into the bundle. Comma-separated names (default: {DEFAULT_EXTRA_LIBRARY})')
+    parser.add_argument('--blueprint', help='use this blueprint file instead of looking --template up')
+    parser.add_argument('--list-templates', action='store_true', help='list the available templates and exit')
+    parser.add_argument('--dry-run', action='store_true', help='print the files that would be created and exit')
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    arguments = parse_arguments(sys.argv[1:] if argv is None else argv)
+    try:
+        if arguments.list_templates:
+            for name, path in sorted(list_templates().items()):
+                try:
+                    description = load_blueprint(path)[0].get('description', '')
+                except Error:
+                    description = '(unreadable)'
+                print(f'{name:12} {description}')
+            return 0
+        if not arguments.directory or not (arguments.template or arguments.blueprint):
+            raise Error('--template and --directory are required (sourcecreator --help)')
+        directory = Path(arguments.directory).expanduser().resolve()
+        name = arguments.project_name if arguments.project_name is not None else directory.name
+        executable = (arguments.project_executable or default_executable(name))
+        if executable.startswith('bin/'):
+            executable = executable[4:]
+        libs = [] if arguments.extra_libs is None else [l.strip() for l in arguments.extra_libs.split(',') if l.strip()]
+        if arguments.extra_libs is not None and not libs:
+            raise Error('--extra-libs needs at least one library name')
+        variables = {
+            'project_name': name,
+            'project_id': arguments.project_id or default_id(name),
+            'project_version': arguments.project_version,
+            'project_executable': executable,
+            'project_module': qml_module(name),
+            'project_cmake': cmake_name(name),
+            'extra_libs': libs,
+        }
+        validate(variables)
+        header, files = load_blueprint(find_blueprint(arguments.template, arguments.blueprint))
+        planned = plan(files, variables)
+        if arguments.dry_run:
+            for relative in planned:
+                print(relative)
+            return 0
+        write_project(directory, planned)
+    except Error as error:
+        print(f'sourcecreator: {error}', file=sys.stderr)
+        return 1
+    print(f'created {variables["project_name"]} ({variables["project_id"]} {variables["project_version"]}) in {directory}')
+    for relative in planned:
+        print(f'  {relative}')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

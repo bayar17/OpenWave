@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+description="OpenWave wallpaper service"
+command="/System/Services/wallpaperagentd"
+command_background="yes"
+pidfile="/run/openwave/wallpaper.pid"
+
+start_pre() {
+	/System/Services/openwave-register-service-identity --invalidate wallpaperagentd || return 1
+}
+
+depend() {
+	need dbus openwave-session-bus
+}
+
+start_post() {
+	/System/Services/openwave-register-service-identity wallpaperagentd || return 1
+	/System/Services/openwave-wait-dbus system org.openwave.Wallpaper
+}
+
+stop_post() {
+	/System/Services/openwave-register-service-identity --invalidate wallpaperagentd
+}

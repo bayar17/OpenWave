@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=org.freedesktop.impl.portal.desktop.openwave
+Exec=/System/Services/xdg-desktop-portal-openwave --backend

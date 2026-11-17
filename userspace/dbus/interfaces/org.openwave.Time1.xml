@@ -1,0 +1,18 @@
+<?xml version='1.0' encoding='utf-8'?>
+<node>
+  <interface name="org.openwave.Time1">
+    <method name="GetTimezone">
+      <arg type="s" direction="out" />
+    </method>
+    <method name="ListTimezones">
+      <arg type="as" direction="out" />
+    </method>
+    <method name="SetTimezone">
+      <arg type="s" direction="in" />
+      <arg type="s" direction="out" />
+    </method>
+    <signal name="TimezoneChanged">
+      <arg type="s" />
+    </signal>
+  </interface>
+</node>

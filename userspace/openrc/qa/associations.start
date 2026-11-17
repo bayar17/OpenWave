@@ -1,0 +1,44 @@
+#!/bin/sh
+case " $(cat /proc/cmdline) " in *' openwave.qa=associations '*) ;; *) exit 0 ;; esac
+exec >/dev/console 2>&1
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+printf 'ASSOC_QA_BEGIN enforcing=%s\n' "$(cat /sys/fs/selinux/enforce)"
+call() { /usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Applications --object-path /org/openwave/Applications --method "$@"; }
+n=0
+while [ "$n" -lt 120 ]; do
+    call org.openwave.Applications1.ListApplications >/dev/null 2>&1 && [ -S /run/user/1000/wayland-0 ] && break
+    n=$((n + 1)); sleep 1
+done
+sleep 5
+if call org.openwave.Applications1.SetFileDefault png com.openwave.photos >/tmp/assoc-unauthorized 2>&1; then
+    echo 'ASSOC_QA_FAIL unauthorized default write succeeded'
+elif grep -q 'Only verified Files or Settings' /tmp/assoc-unauthorized; then
+    echo 'ASSOC_QA_PASS unauthorized default write rejected'
+else
+    echo 'ASSOC_QA_FAIL default request failed for an unexpected reason'; cat /tmp/assoc-unauthorized
+fi
+if call org.openwave.AppDeploy1.Run install-android "['test.apk']" '{}' '[]' >/tmp/assoc-unauthorized 2>&1; then
+    echo 'ASSOC_QA_FAIL unauthorized APK install succeeded'
+elif grep -q 'Only the installed appdeploy' /tmp/assoc-unauthorized; then
+    echo 'ASSOC_QA_PASS unauthorized APK install rejected'
+else
+    echo 'ASSOC_QA_FAIL installation request failed for an unexpected reason'; cat /tmp/assoc-unauthorized
+fi
+/System/Services/openwave-launch com.openwave.settings
+sleep 3
+/System/Services/openwave-launch com.openwave.files
+n=0
+while [ "$n" -lt 180 ]; do
+    FILES=$(/bin/busybox pidof ocean-files | /bin/busybox cut -d' ' -f1)
+    SETTINGS=$(/bin/busybox pidof ocean-settings | /bin/busybox cut -d' ' -f1)
+    [ -n "$FILES" ] && cat /proc/$FILES/fd/2 >/tmp/assoc-files.log 2>/dev/null
+    [ -n "$SETTINGS" ] && cat /proc/$SETTINGS/fd/2 >/tmp/assoc-settings.log 2>/dev/null
+    if grep -q ASSOC_QA_FILES_DONE /tmp/assoc-files.log 2>/dev/null && grep -q ASSOC_QA_SETTINGS_DONE /tmp/assoc-settings.log 2>/dev/null; then break; fi
+    if grep -q ASSOC_QA_FAIL /tmp/assoc-files.log /tmp/assoc-settings.log 2>/dev/null; then break; fi
+    n=$((n + 1)); sleep 1
+done
+cat /tmp/assoc-files.log /tmp/assoc-settings.log 2>/dev/null
+GALLERY=$(/bin/busybox pidof ocean-photos | /bin/busybox cut -d' ' -f1)
+[ -n "$GALLERY" ] && cat /proc/$GALLERY/fd/2 2>/dev/null
+printf 'ASSOC_QA_DONE waited=%s files=%s settings=%s gallery=%s enforcing=%s\n' "$n" "$FILES" "$SETTINGS" "$GALLERY" "$(cat /sys/fs/selinux/enforce)"
+cat /run/openwave/appd.stderr.log 2>/dev/null

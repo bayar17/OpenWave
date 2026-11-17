@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Browser
+Exec=/System/Services/openwave-launch com.openwave.ocean
+Icon=ocean-browser
+Categories=Network;WebBrowser;
+Terminal=false
+X-OpenWave-AppId=com.openwave.ocean

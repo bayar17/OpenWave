@@ -1,0 +1,15 @@
+schema = 1
+id = "com.openwave.waterrouge-gallery"
+name = "Water Rouge Gallery"
+version = "0.1.0"
+kind = "application"
+executable = "bin/water-rouge-gallery"
+runtime = "openwave-qt"
+single_instance = true
+accepts_paths = false
+
+[sandbox]
+profile = "standard"
+
+[permissions]
+request = []

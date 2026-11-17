@@ -1,0 +1,21 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -399,7 +399,7 @@
+ add_subdirectory(sign)
+ add_subdirectory(tools)
+ 
+-if (EXISTS ${CMAKE_SOURCE_DIR}/po/rpm.pot)
++if (ENABLE_NLS AND EXISTS ${CMAKE_SOURCE_DIR}/po/rpm.pot)
+ 	add_subdirectory(po)
+ endif()
+ 
+@@ -478,7 +478,8 @@
+ 	add_custom_target(${targetname} DEPENDS ${distname})
+ endfunction()
+ 
+-add_tarball(dist ${PROJECT_NAME}-${PROJECT_VERSION} HEAD)
++# Release-tarball tooling needs git; its BYPRODUCTS rule collides with the target name under Ninja.
++# add_tarball(dist ${PROJECT_NAME}-${PROJECT_VERSION} HEAD)
+ 
+ if (EXISTS ${CMAKE_SOURCE_DIR}/.git)
+ 	execute_process(COMMAND git rev-list --count HEAD

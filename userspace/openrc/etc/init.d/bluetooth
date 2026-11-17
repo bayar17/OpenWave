@@ -1,0 +1,9 @@
+#!/sbin/openrc-run
+description="BlueZ Bluetooth daemon"
+command="/usr/libexec/bluetooth/bluetoothd"
+command_args_foreground="-n"
+supervisor=supervise-daemon
+
+depend() {
+	need dbus udevd
+}

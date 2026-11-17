@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<node>
+  <interface name="org.openwave.AppDeploy1">
+    <method name="Run">
+      <arg name="operation" type="s" direction="in"/>
+      <arg name="arguments" type="as" direction="in"/>
+      <arg name="options" type="a{sv}" direction="in"/>
+      <arg name="files" type="ah" direction="in"/>
+      <arg name="status" type="i" direction="out"/>
+      <arg name="lines" type="as" direction="out"/>
+    </method>
+    <signal name="Progress"><arg name="client" type="s"/><arg name="line" type="s"/></signal>
+  </interface>
+</node>

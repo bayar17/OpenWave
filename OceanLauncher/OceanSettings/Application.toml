@@ -1,0 +1,16 @@
+schema = 1
+id = "com.openwave.settings"
+name = "Settings"
+version = "0.1.0"
+kind = "application"
+executable = "bin/ocean-settings"
+runtime = "openwave-qt"
+icon = "share/icons/icon.png"
+single_instance = true
+accepts_paths = false
+
+[sandbox]
+profile = "standard"
+
+[permissions]
+request = []

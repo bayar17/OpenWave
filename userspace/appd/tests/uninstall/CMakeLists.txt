@@ -1,0 +1,13 @@
+cmake_minimum_required(VERSION 3.21)
+project(WebAppUninstallTests LANGUAGES C)
+add_executable(uninstall-storage-tests storage.c ../../uninstall-storage.c)
+if(CMAKE_CROSSCOMPILING)
+    target_include_directories(uninstall-storage-tests PRIVATE "${CMAKE_SYSROOT}/usr/include/glib-2.0"
+        "${CMAKE_SYSROOT}/usr/lib64/glib-2.0/include")
+    target_link_libraries(uninstall-storage-tests PRIVATE glib-2.0)
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GLIB REQUIRED IMPORTED_TARGET glib-2.0)
+    target_link_libraries(uninstall-storage-tests PRIVATE PkgConfig::GLIB)
+endif()
+target_compile_options(uninstall-storage-tests PRIVATE -Wall -Wextra -Werror)

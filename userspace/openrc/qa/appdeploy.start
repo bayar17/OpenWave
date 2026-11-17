@@ -1,0 +1,396 @@
+#!/bin/sh
+case " $(cat /proc/cmdline) " in *' openwave.qa=appdeploy '*) ;; *) exit 0 ;; esac
+exec >/dev/console 2>&1
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+PY=/usr/bin/python3.14
+TEST=/var/lib/appdeploy/inbox/test
+PKG=$TEST/packages
+AD=/usr/bin/appdeploy
+pass=0; fail=0
+ok()   { pass=$((pass + 1)); printf 'ADQA PASS %s\n' "$1"; }
+bad()  { fail=$((fail + 1)); printf 'ADQA FAIL %s :: %s\n' "$1" "$2"; }
+check() { name=$1; shift; if "$@" >/dev/null 2>&1; then ok "$name"; else bad "$name" "$*"; fi; }
+run() { OUT=$($AD "$@" 2>&1); RC=$?; printf '%s\n' "$OUT" | sed 's/^/    | /'; }
+expect_ok()   { name=$1; shift; run "$@"; if [ $RC = 0 ]; then ok "$name"; else bad "$name" "exit $RC"; fi; }
+expect_fail() { name=$1; pattern=$2; shift 2; run "$@"; case "$OUT" in *"$pattern"*) [ $RC != 0 ] && ok "$name" || bad "$name" "succeeded";; *) bad "$name" "no '$pattern' (exit $RC)";; esac; }
+has() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
+xattr() { $PY -I -c 'import os,sys; print(os.getxattr(sys.argv[1], "security.selinux", follow_symlinks=False).decode().strip("\0"))' "$1" 2>/dev/null; }
+registered() {
+    /usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Applications --object-path /org/openwave/Applications \
+        --method org.openwave.Applications1.ListApplications 2>/dev/null | grep -q "'appId': <'$1'>"
+}
+shot_seq=0
+SHOTS=""
+shot_capture() {
+    shot_seq=$((shot_seq + 1))
+    log=/run/user/1000/openwave-logs/ocean.stderr.log
+    pid=$(/bin/busybox pidof ocean-launcher | /bin/busybox cut -d' ' -f1)
+    printf 'ADQA SHOT name=%s seq=%s pid=%s\n' "$1" "$shot_seq" "$pid"
+    [ -n "$pid" ] || return 0
+    kill -USR1 "$pid"
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        /bin/busybox grep -q "OCEAN_QA_SHOT_END seq=$shot_seq\$" "$log" && break
+        /bin/busybox sleep 0.1
+    done
+    SHOTS="$SHOTS $1:$shot_seq"
+}
+shot_flush() {
+    log=/run/user/1000/openwave-logs/ocean.stderr.log
+    for entry in $SHOTS; do
+        shot_name=${entry%%:*}; shot_number=${entry##*:}
+        /bin/busybox awk -v seq="$shot_number" -v name="$shot_name" '
+            $0 ~ "^OCEAN_QA_SHOT_BEGIN seq=" seq " " { on = 1; print "WAYDROID_QA_SHOT_BEGIN name=" name " " $0; next }
+            on && $0 ~ "^OCEAN_QA_SHOT_DATA " { line = "WAYDROID_QA_SHOT_DATA " substr($0, 20); print line; print line; next }
+            on && $0 ~ "^OCEAN_QA_SHOT_END seq=" seq "$" { print "WAYDROID_QA_SHOT_END name=" name; exit }
+            $0 ~ "^OCEAN_QA_SHOT_FAILED seq=" seq "$" { print "WAYDROID_QA_SHOT_FAILED name=" name; exit }' "$log"
+    done
+    SHOTS=""
+}
+shot() { shot_capture "$1"; shot_flush; }
+SEQ=1
+ui() { printf 'ADQA UI %s seq=%s\n' "$*" "$SEQ"; SEQ=$((SEQ + 1)); }
+cmdline_point() { sed -n "s/.*$1=\\([0-9]*,[0-9]*\\).*/\\1/p" /proc/cmdline | tr ',' ' '; }
+CANCEL=$(cmdline_point adqa.cancel); [ -n "$CANCEL" ] || CANCEL="315 565"
+ACCEPT=$(cmdline_point adqa.accept); [ -n "$ACCEPT" ] || ACCEPT="425 565"
+ACCEPT_WARN="425 616"
+CANCEL_REMOVE="295 593"; ACCEPT_REMOVE="415 593"
+bg_start() { : >/tmp/adqa-bg.out; $AD "$@" >/tmp/adqa-bg.out 2>&1 & BG=$!; }
+bg_wait_for() { n=0; while [ $n -lt ${2:-90} ]; do grep -q "$1" /tmp/adqa-bg.out 2>/dev/null && return 0; kill -0 $BG 2>/dev/null || return 1; n=$((n + 1)); sleep 1; done; return 1; }
+bg_finish() { n=0; while kill -0 $BG 2>/dev/null && [ $n -lt ${1:-60} ]; do n=$((n + 1)); sleep 1; done; if kill -0 $BG 2>/dev/null; then kill $BG; RC=124; else wait $BG; RC=$?; fi; OUT=$(cat /tmp/adqa-bg.out); printf '%s\n' "$OUT" | sed 's/^/    | /'; }
+as_user() { $PY -I -c 'import os,sys; os.setgroups([]); os.setgid(1000); os.setuid(1000); os.execv(sys.argv[1], sys.argv[1:])' "$@"; }
+
+printf 'ADQA_BEGIN selinux=%s\n' "$(cat /sys/fs/selinux/enforce 2>/dev/null)"
+check enforcing grep -q '^1' /sys/fs/selinux/enforce
+n=0; while [ $n -lt 120 ]; do
+    /usr/bin/gdbus call --system --timeout 2 --dest org.openwave.Applications --object-path /org/openwave/Applications \
+        --method org.openwave.Applications1.ListApplications >/dev/null 2>&1 && break
+    n=$((n + 1)); sleep 1
+done
+[ $n -lt 120 ] && ok appd-ready || { bad appd-ready "appd did not answer"; printf 'ADQA_DONE pass=%s fail=%s\n' $pass $fail; exit 1; }
+
+
+DRAWER_HANDLE="272 835"; HELLO_ICON="402 258"; DOCK_FILES="142 893"
+MENU_UNINSTALL="330 382"; MENU_DETAILS="330 447"; MENU_MOVE="330 512"
+UNINSTALL_CANCEL="288 565"; UNINSTALL_ACCEPT="412 565"; DETAILS_CLOSE="272 656"
+menu_section() {
+    printf '\n== Dock and Drawer menu\n'
+    run --yes remove org.openwave.test.hello org.openwave.test.viewer org.openwave.test.lib
+    run --yes install $PKG/org.openwave.test.hello-1.0.0-1.x86_64.rpm
+    n=0; while [ $n -lt 90 ] && [ -z "$(/bin/busybox pidof ocean-launcher)" ]; do n=$((n + 1)); sleep 1; done
+    sleep 8
+    ui swipe $DRAWER_HANDLE 272 150; sleep 3
+    shot menu-drawer-open
+    ui hold $DOCK_FILES; sleep 2; shot menu-system-app; ui tap 272 700; sleep 1
+    ui hold $HELLO_ICON; sleep 2; shot menu-installed-app
+    ui hold $HELLO_ICON; sleep 2; ui tap $MENU_MOVE; sleep 1; shot_capture move-icon-a; sleep 0.25; shot_capture move-icon-b; sleep 0.25; shot_capture move-icon-c; shot_flush
+    ui tap 272 700; sleep 1
+    ui hold $HELLO_ICON; sleep 2; ui tap $MENU_UNINSTALL; sleep 2; shot uninstall-confirmation
+    ui tap $UNINSTALL_CANCEL; sleep 2; shot after-cancel
+    [ -x /Applications/org.openwave.test.hello/bin/hello ] && ok uninstall-cancel-keeps-the-app || bad uninstall-cancel-keeps-the-app "removed"
+    ui hold $HELLO_ICON; sleep 2; ui tap $MENU_UNINSTALL; sleep 2
+    ui tap $UNINSTALL_ACCEPT; sleep 8
+    shot after-uninstall
+    [ -e /Applications/org.openwave.test.hello ] && bad uninstall-removes-the-app "still there" || ok uninstall-removes-the-app
+    run list; has org.openwave.test.hello && bad uninstall-leaves-no-package "$OUT" || ok uninstall-leaves-no-package
+    run --yes install $PKG/org.openwave.test.hello-1.0.0-1.x86_64.rpm
+    sleep 4
+    ui hold $HELLO_ICON; sleep 2; ui tap $MENU_DETAILS; sleep 12
+    shot settings-app-details
+    run --yes remove org.openwave.test.hello
+}
+browser_section() {
+    printf '\n== web engine inside the browser bundle\n'
+    ENGINE=/System/Applications/com.openwave.ocean
+    check engine-is-not-in-usr test ! -e /usr/lib64/libWPEWebKit-2.0.so.1
+    check engine-library-is-in-the-bundle test -f $ENGINE/lib64/libWPEWebKit-2.0.so.1
+    check engine-launchers-are-small sh -c '[ "$(/bin/busybox wc -c < /usr/libexec/wpe-webkit-2.0/WPEWebProcess)" -lt 100000 ]'
+    check engine-has-no-symlinks sh -c "[ -z \"\$(find $ENGINE -type l)\" ]"
+    xattr $ENGINE/lib64/libWPEWebKit-2.0.so.1 | sed 's/^/    label lib64: /'
+    n=0; while [ $n -lt 90 ] && [ -z "$(/bin/busybox pidof ocean-launcher)" ]; do n=$((n + 1)); sleep 1; done
+    sleep 8
+    /System/Services/openwave-launch com.openwave.ocean && ok browser-launch-accepted || bad browser-launch-accepted "openwave-launch refused"
+    n=0; while [ $n -lt 60 ] && [ -z "$(/bin/busybox pidof WPEWebProcess)" ]; do n=$((n + 1)); sleep 1; done
+    sleep 15
+    shot browser-in-its-bundle
+    /usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Applications --object-path /org/openwave/Applications \
+        --method org.openwave.Applications1.ListApplications 2>&1 | tr '{' '\n' | grep "com.openwave.ocean'" | sed 's/^/    appd: /' | /bin/busybox cut -c1-900
+    INFO=$(/usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Applications --object-path /org/openwave/Applications \
+        --method org.openwave.Applications1.ListApplications 2>&1 | tr '{' '\n' | grep "com.openwave.ocean'")
+    case "$INFO" in *"'state': <'Running'>"*) ok browser-runs-from-its-bundle ;; *) bad browser-runs-from-its-bundle "$INFO" ;; esac
+    case "$INFO" in *"'namespaceSandboxed': <true>"*"'seccompFiltered': <true>"*) ok browser-is-sandboxed ;; *) bad browser-is-sandboxed "$INFO" ;; esac
+    /usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Applications --object-path /org/openwave/Applications \
+        --method org.openwave.Applications1.Terminate com.openwave.ocean >/dev/null 2>&1
+    sleep 4
+    printf '    ---- appd.stderr.log (browser)\n'; grep -a "com.openwave.ocean" /run/openwave/appd.stderr.log 2>&1 | tail -12 | /bin/busybox cut -c1-1500 | sed 's/^/    | /'
+}
+webapp_section() {
+    printf '\n== installed website using the browser bundle'"'"'s engine\n'
+    SITE=org.openwave.webapp.hd5541dbe8037a6433e94e9804ab331995630fa2a1794ba3b374d5e2429693891
+    check site-bundle-has-no-engine sh -c "[ -z \"\$(ls /Applications/$SITE/lib64 /Applications/$SITE/sbin 2>/dev/null)\" ]"
+    n=0; while [ $n -lt 90 ] && [ -z "$(/bin/busybox pidof ocean-launcher)" ]; do n=$((n + 1)); sleep 1; done
+    sleep 8
+    /System/Services/openwave-launch $SITE && ok site-launch-accepted || bad site-launch-accepted "openwave-launch refused"
+    sleep 30
+    shot website-in-its-sandbox
+    INFO=$(/usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Applications --object-path /org/openwave/Applications \
+        --method org.openwave.Applications1.ListApplications 2>&1 | tr '{' '\n' | grep "$SITE'")
+    printf '%s\n' "$INFO" | /bin/busybox cut -c1-700 | sed 's/^/    appd: /'
+    case "$INFO" in *"'state': <'Running'>"*) ok site-runs-with-the-browsers-engine ;; *) bad site-runs-with-the-browsers-engine "$INFO" ;; esac
+    case "$INFO" in *"'namespaceSandboxed': <true>"*"'seccompFiltered': <true>"*) ok site-is-sandboxed ;; *) bad site-is-sandboxed "$INFO" ;; esac
+    /usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Applications --object-path /org/openwave/Applications \
+        --method org.openwave.Applications1.Terminate $SITE >/dev/null 2>&1
+    sleep 4
+    printf '    ---- appd.stderr.log (website)\n'; grep -a "$SITE" /run/openwave/appd.stderr.log 2>&1 | tail -8 | /bin/busybox cut -c1-1800 | sed 's/^/    | /'
+}
+prompt_section() {
+    printf '\n== incomplete prompt: accept button text\n'
+    n=0; while [ $n -lt 90 ] && [ -z "$(/bin/busybox pidof ocean-launcher)" ]; do n=$((n + 1)); sleep 1; done
+    sleep 8
+    /System/Services/openwave-launch com.openwave.settings && ok settings-launch-accepted || bad settings-launch-accepted "refused"
+    sleep 15; ui tap 110 104; sleep 3; shot prompt-1-wifi
+    ui tap 438 885; sleep 3; shot prompt-2-add-network
+}
+userpkg_section() {
+    printf '\nUSERPKG == a package made with the SDK (openwave-pack)\n'
+    PKGFILE=$PKG/org.openwave.test.cleanup-1.0.0-1.x86_64.rpm
+    run --yes install $PKGFILE
+    [ $RC = 0 ] && ok userpkg-installs || bad userpkg-installs "exit $RC"
+    run list
+    has org.example.verify && ok userpkg-is-listed || bad userpkg-is-listed "$OUT"
+    ls -l /Applications/org.example.verify/bin /Applications/org.example.verify/lib64 2>&1 | sed 's/^/    | /'
+    xattr /Applications/org.example.verify/bin/verify | sed 's/^/    label bin: /'
+    xattr /Applications/org.example.verify/lib64/libcore.so | sed 's/^/    label lib64: /'
+    [ -e /Applications/org.example.verify/manifest.json ] && ok userpkg-manifest-generated-by-device || bad userpkg-manifest-generated-by-device "missing"
+    n=0; while [ $n -lt 90 ] && [ -z "$(/bin/busybox pidof ocean-launcher)" ]; do n=$((n + 1)); sleep 1; done
+    sleep 8
+    n=0; accepted=0; while [ $n -lt 40 ]; do /System/Services/openwave-launch org.example.verify && { accepted=1; break; }; n=$((n + 1)); sleep 0.5; done
+    [ $accepted = 1 ] && ok userpkg-launch-accepted || bad userpkg-launch-accepted "refused"
+    sleep 15
+    shot userpkg-running
+    INFO=$(/usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Applications --object-path /org/openwave/Applications \
+        --method org.openwave.Applications1.ListApplications 2>&1 | tr '{' '\n' | grep "org.example.verify'")
+    case "$INFO" in *"'state': <'Running'>"*) ok userpkg-runs-confined ;; *) bad userpkg-runs-confined "$INFO" ;; esac
+    /usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Applications --object-path /org/openwave/Applications \
+        --method org.openwave.Applications1.Terminate org.example.verify >/dev/null 2>&1
+    sleep 4
+    grep -a "org.example.verify" /run/openwave/appd.stderr.log 2>&1 | tail -4 | /bin/busybox cut -c1-900 | sed 's/^/    | /'
+}
+pinning_section() {
+    printf '\nPINNING == first install from a publisher pins its key to the application\n'
+    run --yes remove org.openwave.test.pub org.openwave.test.pubadmin org.openwave.test.pubmismatch
+    n=0; while [ $n -lt 90 ] && [ -z "$(/bin/busybox pidof ocean-launcher)" ]; do n=$((n + 1)); sleep 1; done
+    sleep 8
+    bg_start install $PKG/org.openwave.test.pub-1.0.0-1.x86_64.rpm
+    bg_wait_for "Waiting for you to confirm" 60 && ok pub-first-prompt-requested || bad pub-first-prompt-requested "$(cat /tmp/adqa-bg.out)"
+    sleep 1; shot_capture pin-first-countdown
+    ui tap $ACCEPT_WARN; sleep 1
+    kill -0 $BG 2>/dev/null && ok pub-first-early-install-ignored || bad pub-first-early-install-ignored "finished at once: $(cat /tmp/adqa-bg.out)"
+    shot_flush
+    shot_capture pin-first-ready
+    ui tap $ACCEPT_WARN; sleep 2
+    shot_flush
+    bg_finish 90
+    [ $RC = 0 ] && ok pub-first-installed-after-delay || bad pub-first-installed-after-delay "rc=$RC $OUT"
+    check pub-first-files test -d /Applications/org.openwave.test.pub
+    bg_start install $PKG/org.openwave.test.pub-2.0.0-1.x86_64.rpm
+    bg_wait_for "Waiting for you to confirm" 60 && ok pub-update-prompt-requested || bad pub-update-prompt-requested "$(cat /tmp/adqa-bg.out)"
+    sleep 3; shot_capture pin-update-no-warning
+    ui tap $ACCEPT; sleep 2
+    shot_flush
+    bg_finish 90
+    [ $RC = 0 ] && ok pub-update-by-the-same-publisher-needs-no-delay || bad pub-update-by-the-same-publisher-needs-no-delay "rc=$RC $OUT"
+    check pub-updated grep -q 'version = "2.0.0"' /Applications/org.openwave.test.pub/Application.toml
+    expect_fail pub-different-publisher-refused "[publisher]" --yes install $PKG/org.openwave.test.pub-3.0.0-1.x86_64.rpm
+    check pub-still-2 grep -q 'version = "2.0.0"' /Applications/org.openwave.test.pub/Application.toml
+    expect_ok pub-removes --yes remove org.openwave.test.pub
+    expect_ok pub-pin-gone-after-removal --yes install $PKG/org.openwave.test.pub-3.0.0-1.x86_64.rpm
+    run --yes remove org.openwave.test.pub
+    expect_ok pub-admin-key-needs-no-pin --yes install $PKG/org.openwave.test.pubadmin-1.0.0-1.x86_64.rpm
+    run --yes remove org.openwave.test.pubadmin
+    expect_ok pub-mismatched-key-installs-only-as-untrusted --yes install $PKG/org.openwave.test.pubmismatch-1.0.0-1.x86_64.rpm
+    run --yes remove org.openwave.test.pubmismatch
+}
+case " $(cat /proc/cmdline) " in *' adqa.only=pinning '*) pinning_section; shot_flush; printf 'ADQA_DONE pass=%s fail=%s\n' $pass $fail; exit 0 ;; esac
+case " $(cat /proc/cmdline) " in *' adqa.only=userpkg '*) userpkg_section; shot_flush; printf 'ADQA_DONE pass=%s fail=%s\n' $pass $fail; exit 0 ;; esac
+case " $(cat /proc/cmdline) " in *' adqa.only=prompt '*) prompt_section; shot_flush; printf 'ADQA_DONE pass=%s fail=%s\n' $pass $fail; exit 0 ;; esac
+case " $(cat /proc/cmdline) " in *' adqa.only=webapp '*) webapp_section; shot_flush; printf 'ADQA_DONE pass=%s fail=%s\n' $pass $fail; exit 0 ;; esac
+case " $(cat /proc/cmdline) " in *' adqa.only=browser '*) browser_section; shot_flush; printf 'ADQA_DONE pass=%s fail=%s\n' $pass $fail; exit 0 ;; esac
+case " $(cat /proc/cmdline) " in *' adqa.only=menu '*) menu_section; shot_flush; printf 'ADQA_DONE pass=%s fail=%s\n' $pass $fail; exit 0 ;; esac
+
+printf '\n== authorization\n'
+as_user $AD list >/tmp/ad-user.out 2>&1; check unprivileged-may-query sh -c '[ $? = 0 ] || true'
+cp $PKG/org.openwave.test.hello-1.0.0-1.x86_64.rpm /tmp/ad-user-copy.rpm && chmod 644 /tmp/ad-user-copy.rpm
+as_user $AD install /tmp/ad-user-copy.rpm >/tmp/ad-user.out 2>&1
+sed 's/^/    | /' /tmp/ad-user.out
+check unprivileged-cannot-install grep -q "Only an administrator" /tmp/ad-user.out
+as_user $AD --yes install /tmp/ad-user-copy.rpm >/tmp/ad-user.out 2>&1
+check unprivileged-cannot-skip-the-prompt grep -q "Only an administrator" /tmp/ad-user.out
+OUT=$(/usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Applications --object-path /org/openwave/Applications \
+      --method org.openwave.AppDeploy1.Run list @as\ [] @a{sv}\ {} @ah\ [] 2>&1); printf '    | %s\n' "$OUT"
+has "Only the installed appdeploy command" && ok other-clients-are-refused || bad other-clients-are-refused "$OUT"
+run repo list; [ $RC != 0 ] && ok no-repo-command || bad no-repo-command "repo list succeeded"
+run install https://example.org/hello.rpm; [ $RC != 0 ] && ok url-is-not-a-package || bad url-is-not-a-package "$OUT"
+run search viewer; [ $RC != 0 ] && ok no-search-command || bad no-search-command "search succeeded"
+expect_ok list-empty list; has org.openwave.test && bad list-is-empty "$OUT" || ok list-is-empty
+
+printf '\n== local files: plan, dependencies\n'
+expect_ok plan-hello install --plan $PKG/org.openwave.test.hello-1.0.0-1.x86_64.rpm
+[ -d /Applications/org.openwave.test.hello ] && bad plan-changes-nothing "hello installed" || ok plan-changes-nothing
+expect_fail viewer-alone-unresolved "" --yes install $PKG/org.openwave.test.viewer-1.0.0-1.x86_64.rpm
+check nothing-installed-after-unresolved sh -c '! [ -e /Applications/org.openwave.test.viewer ]'
+expect_ok install-viewer-with-library --yes install $PKG/org.openwave.test.viewer-1.0.0-1.x86_64.rpm $PKG/org.openwave.test.lib-1.0.0-1.x86_64.rpm
+check viewer-files test -x /Applications/org.openwave.test.viewer/bin/hello
+check library-files test -f /Applications/org.openwave.test.lib/lib/libappdeploytest.so.1
+registered org.openwave.test.viewer && ok viewer-registered-with-appd || bad viewer-registered-with-appd "not in appd"
+check library-not-registered sh -c '! [ -e /Applications/org.openwave.test.lib/manifest.json ]'
+check manifest-root-owned sh -c '[ "$(stat -c %U:%a /Applications/org.openwave.test.viewer/manifest.json)" = root:644 ]'
+label=$(xattr /Applications/org.openwave.test.viewer/bin/hello); [ "$label" = "system_u:object_r:openwave_user_app_exec_t:s0" ] && ok executable-label || bad executable-label "$label"
+label=$(xattr /Applications/org.openwave.test.viewer/manifest.json); [ "$label" = "system_u:object_r:openwave_user_bundle_t:s0" ] && ok manifest-label || bad manifest-label "$label"
+expect_ok list-after list; has org.openwave.test.viewer && has org.openwave.test.lib && ok list-shows-both || bad list-shows-both "$OUT"
+expect_ok info-viewer info org.openwave.test.viewer; has Viewer && ok info-shows-the-application-name || bad info-shows-the-application-name "$OUT"
+expect_ok verify-viewer verify org.openwave.test.viewer
+expect_fail library-in-use "" --yes remove org.openwave.test.lib
+
+printf '\n== launching an installed application under the existing confinement\n'
+expect_ok install-hello-1 --yes install $PKG/org.openwave.test.hello-1.0.0-1.x86_64.rpm
+/usr/bin/gdbus monitor --system --dest org.openwave.Applications >/tmp/appd-events 2>&1 &
+MON=$!
+sleep 1
+n=0; accepted=0; while [ $n -lt 40 ]; do /System/Services/openwave-launch org.openwave.test.hello && { accepted=1; break; }; n=$((n + 1)); sleep 0.5; done
+[ $accepted = 1 ] && ok launch-accepted || bad launch-accepted "openwave-launch refused"
+sleep 6; kill $MON 2>/dev/null
+sed 's/^/    | /' /tmp/appd-events | tail -8
+if grep -q "ApplicationStopped.*org.openwave.test.hello.*, 0)" /tmp/appd-events; then ok app-ran-and-exited-cleanly
+elif grep -q "ApplicationCrashed.*org.openwave.test.hello" /tmp/appd-events; then bad app-ran-and-exited-cleanly "crashed"
+else bad app-ran-and-exited-cleanly "no event from appd"; fi
+
+printf '\n== the confirmation: a signed application\n'
+expect_ok remove-hello-for-prompt --yes remove org.openwave.test.hello
+bg_start install $PKG/org.openwave.test.hello-1.0.0-1.x86_64.rpm
+bg_wait_for "Waiting for you to confirm" 60 && ok prompt-requested || bad prompt-requested "$(cat /tmp/adqa-bg.out)"
+sleep 3; shot prompt-install-signed; sleep 2
+check nothing-changes-while-the-prompt-is-open sh -c '! [ -e /Applications/org.openwave.test.hello ]'
+ui tap $CANCEL; sleep 2
+bg_finish 30
+has "cancelled" && [ $RC != 0 ] && ok cancel-installs-nothing || bad cancel-installs-nothing "rc=$RC $OUT"
+check nothing-installed-after-cancel sh -c '! [ -e /Applications/org.openwave.test.hello ]'
+bg_start install $PKG/org.openwave.test.hello-1.0.0-1.x86_64.rpm
+bg_wait_for "Waiting for you to confirm" 60 && ok prompt-requested-again || bad prompt-requested-again "$(cat /tmp/adqa-bg.out)"
+sleep 3; ui tap $ACCEPT; sleep 2
+bg_finish 90
+[ $RC = 0 ] && ok install-button-installs || bad install-button-installs "rc=$RC $OUT"
+check hello-installed-after-prompt test -x /Applications/org.openwave.test.hello/bin/hello
+registered org.openwave.test.hello && ok hello-registered-after-prompt || bad hello-registered-after-prompt "not in appd"
+
+printf '\n== update asks too, and an older package is refused\n'
+bg_start install $PKG/org.openwave.test.hello-2.0.0-1.x86_64.rpm
+bg_wait_for "Waiting for you to confirm" 60 && ok update-prompt-requested || bad update-prompt-requested "$(cat /tmp/adqa-bg.out)"
+sleep 3; shot prompt-update; sleep 2; ui tap $ACCEPT; sleep 2
+bg_finish 90
+[ $RC = 0 ] && ok update-confirmed || bad update-confirmed "rc=$RC $OUT"
+check hello-2-installed grep -q 'version = "2.0.0"' /Applications/org.openwave.test.hello/Application.toml
+check hello-2-manifest-permissions grep -q 'files.read' /Applications/org.openwave.test.hello/manifest.json
+expect_fail downgrade-refused "downgrade" --yes install $PKG/org.openwave.test.hello-1.0.0-1.x86_64.rpm
+expect_ok verify-hello verify org.openwave.test.hello
+
+printf '\n== unsigned and untrusted-signer packages: a warning and a delayed Install button\n'
+for pkg in unsigned untrusted; do
+    bg_start install $PKG/org.openwave.test.$pkg-1.0.0-1.x86_64.rpm
+    bg_wait_for "Waiting for you to confirm" 60 && ok "$pkg-prompt-requested" || bad "$pkg-prompt-requested" "$(cat /tmp/adqa-bg.out)"
+    sleep 1; shot_capture "prompt-$pkg-countdown"
+    ui tap $ACCEPT_WARN; sleep 1
+    kill -0 $BG 2>/dev/null && ok "$pkg-early-install-ignored" || bad "$pkg-early-install-ignored" "finished at once: $(cat /tmp/adqa-bg.out)"
+    [ -e /Applications/org.openwave.test.$pkg ] && bad "$pkg-not-installed-early" "installed" || ok "$pkg-not-installed-early"
+    shot_flush
+    shot_capture "prompt-$pkg-ready"
+    ui tap $ACCEPT_WARN; sleep 2
+    shot_flush
+    bg_finish 90
+    [ $RC = 0 ] && ok "$pkg-installed-after-delay" || bad "$pkg-installed-after-delay" "rc=$RC $OUT"
+    check "$pkg-files" test -d /Applications/org.openwave.test.$pkg
+    run --yes remove org.openwave.test.$pkg
+done
+expect_ok yes-installs-unsigned --yes install $PKG/org.openwave.test.unsigned-1.0.0-1.x86_64.rpm
+expect_ok yes-removes-unsigned --yes remove org.openwave.test.unsigned
+
+printf '\n== the standard bundle layout\n'
+expect_ok install-full-layout --yes install $PKG/org.openwave.test.bundle-1.0.0-1.x86_64.rpm
+for d in sbin lib lib64 plugins qml resources/images resources/sounds resources/fonts share/icons share/translations share/data; do
+    check "layout-has-$d" test -e /Applications/org.openwave.test.bundle/$d
+done
+label=$(xattr /Applications/org.openwave.test.bundle/sbin/helper); [ "$label" = "system_u:object_r:openwave_user_app_exec_t:s0" ] && ok sbin-executable-label || bad sbin-executable-label "$label"
+expect_fail reject-nonstandard-directory "[layout]" --yes install $PKG/org.openwave.test.layout-1.0.0-1.x86_64.rpm
+run --yes remove org.openwave.test.bundle
+
+printf '\n== removing asks too, and keeps the data\n'
+bg_start remove org.openwave.test.hello
+bg_wait_for "Waiting for you to confirm" 60 && ok remove-prompt-requested || bad remove-prompt-requested "$(cat /tmp/adqa-bg.out)"
+sleep 3; shot prompt-remove; sleep 2; ui tap $CANCEL_REMOVE; sleep 2
+bg_finish 30
+has "cancelled" && [ $RC != 0 ] && ok remove-cancel-keeps-it || bad remove-cancel-keeps-it "rc=$RC $OUT"
+check hello-still-installed test -x /Applications/org.openwave.test.hello/bin/hello
+bg_start remove org.openwave.test.hello
+bg_wait_for "Waiting for you to confirm" 60 && ok remove-prompt-requested-again || bad remove-prompt-requested-again "$(cat /tmp/adqa-bg.out)"
+sleep 3; ui tap $ACCEPT_REMOVE; sleep 2
+bg_finish 60
+[ $RC = 0 ] && ok remove-button-removes || bad remove-button-removes "rc=$RC $OUT"
+check hello-gone sh -c '! [ -e /Applications/org.openwave.test.hello ]'
+registered org.openwave.test.hello && bad hello-unregistered "still in appd" || ok hello-unregistered
+
+printf '\n== packages that must be rejected (nothing is installed, --yes cannot override policy)\n'
+for pair in scriptlet:scriptlet trigger:scriptlet filetrigger:scriptlet symlink:symlink dotdot:symlink outside:location suid:mode \
+            manifest:manifest noclass:class badtoml:toml mismatch:toml reserved:toml; do
+    name=${pair%%:*}; rule=${pair##*:}
+    expect_fail "reject-$name" "[$rule]" --yes install $PKG/org.openwave.test.$name-1.0.0-1.x86_64.rpm
+    [ -e /Applications/org.openwave.test.$name ] && bad "nothing-installed-$name" "directory exists" || ok "nothing-installed-$name"
+done
+expect_fail reject-tampered-file "[integrity]" --yes install $PKG/org.openwave.test.tampered-1.0.0-1.x86_64.rpm
+expect_fail reject-shell-scriptlet "" --yes install $PKG/org.openwave.test.scriptlet-sh-1.0.0-1.x86_64.rpm
+check no-scriptlet-ran sh -c '! [ -e /tmp/appdeploy-test-scriptlet ]'
+printf 'this is not a package\n' > /tmp/not-a-package.rpm
+expect_fail reject-not-an-rpm "not a usable RPM" --yes install /tmp/not-a-package.rpm
+
+printf '\n== system packages need explicit authorization, a system key and no conflicts\n'
+expect_fail system-needs-flag "[authorization]" --yes install $PKG/openwave-test-sys-a-1.0.0-1.x86_64.rpm
+expect_ok system-install --yes --system install $PKG/openwave-test-sys-a-1.0.0-1.x86_64.rpm
+check system-file test -f /opt/openwave-test/shared.txt
+label=$(xattr /opt/openwave-test/shared.txt); [ "$label" = "system_u:object_r:openwave_package_system_t:s0" ] && ok system-label || bad system-label "$label"
+expect_fail system-conflict "" --yes --system install $PKG/openwave-test-sys-b-1.0.0-1.x86_64.rpm
+check conflicting-file-untouched grep -q 'from a' /opt/openwave-test/shared.txt
+expect_fail system-wrong-key "[signature]" --yes --system install $PKG/openwave-test-sys-bad-1.0.0-1.x86_64.rpm
+expect_fail system-protected-path "[protected-path]" --yes --system install $PKG/openwave-test-sys-etc-1.0.0-1.x86_64.rpm
+check selinux-config-untouched sh -c 'grep -q enforcing /etc/selinux/config || ! grep -q disabled /etc/selinux/config'
+check unowned-file-exists grep -q precious /opt/openwave-test/unowned.txt
+expect_fail unowned-file-protected "already exists" --yes --system install $PKG/openwave-test-sys-unowned-1.0.0-1.x86_64.rpm
+check unowned-file-intact grep -q precious /opt/openwave-test/unowned.txt
+expect_ok system-remove --yes --system remove openwave-test-sys-a
+check system-file-removed sh -c '! [ -e /opt/openwave-test/shared.txt ]'
+
+printf '\n== removal cleanup and data retention\n'
+expect_ok install-cleanup --yes install $PKG/org.openwave.test.cleanup-1.0.0-1.x86_64.rpm
+check cleanup-deep-file test -f /Applications/org.openwave.test.cleanup/share/data/deep/er/file.txt
+expect_ok remove-cleanup --yes remove org.openwave.test.cleanup
+check cleanup-tree-gone sh -c '! [ -e /Applications/org.openwave.test.cleanup ]'
+run --yes install $PKG/org.openwave.test.cleanup-1.0.0-1.x86_64.rpm
+expect_ok remove-purge --yes --purge-data remove org.openwave.test.cleanup
+
+printf '\n== recovery: registry reconciliation\n'
+run --yes install $PKG/org.openwave.test.hello-1.0.0-1.x86_64.rpm
+registered org.openwave.test.hello && ok hello-registered-before-reconcile || bad hello-registered-before-reconcile "not in appd"
+expect_ok reconcile-when-consistent reconcile
+registered org.openwave.test.hello && ok hello-still-registered-after-reconcile || bad hello-still-registered-after-reconcile "not in appd"
+expect_ok verify-after-reconcile verify org.openwave.test.hello
+has "verifies" && ok verify-reports-labels-and-digests || bad verify-reports-labels-and-digests "$OUT"
+
+menu_section
+
+printf '\n== final state\n'
+expect_ok final-list list
+run --yes remove org.openwave.test.hello org.openwave.test.viewer org.openwave.test.lib
+run list; has org.openwave.test && bad everything-removed "$OUT" || ok everything-removed
+run list; [ $RC = 0 ] && ok appd-still-answers-at-the-end || bad appd-still-answers-at-the-end "$OUT"
+check enforcing-at-end grep -q '^1' /sys/fs/selinux/enforce
+for log in /run/openwave/appd.stderr.log /run/openwave/appd.stdout.log /run/openwave/promptd.stderr.log; do
+    [ -r $log ] && tail -40 $log | sed "s|^|ADQA LOG $(basename $log): |"
+done
+printf '\nADQA_DONE pass=%s fail=%s\n' $pass $fail

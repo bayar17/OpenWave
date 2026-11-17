@@ -1,0 +1,406 @@
+#!/usr/bin/env python3
+import argparse
+import getpass
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import tomllib
+
+SDK = Path(__file__).resolve().parent.parent
+ID_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9_-]*(\.[a-zA-Z0-9][a-zA-Z0-9_-]*){2,}$')
+VERSION_PATTERN = re.compile(r'^[0-9]+(\.[0-9]+){0,3}$')
+
+
+class Error(Exception):
+    pass
+
+
+def triple():
+    chosen = os.environ.get('OPENWAVE_TARGET_TRIPLE')
+    if chosen:
+        return chosen
+    found = sorted(path.name for path in (SDK / 'sysroot').glob('*') if path.is_dir())
+    if not found:
+        raise Error(f'no target sysroot in {SDK}')
+    return 'x86_64-unknown-openwave' if 'x86_64-unknown-openwave' in found else found[0]
+
+
+def target_command(tool, arguments):
+    sysroot = SDK / 'sysroot' / triple()
+    program = sysroot / 'usr/bin' / tool
+    loader = sysroot / 'lib64/ld-linux-x86-64.so.2'
+    if not program.is_file() or not loader.is_file():
+        raise Error(f'{tool} is not installed in {sysroot}')
+    library_path = ':'.join(str(sysroot / part) for part in ('usr/lib', 'usr/lib64', 'lib64'))
+    return [str(loader), '--library-path', library_path, str(program), *arguments]
+
+
+def target_environment(extra=None):
+    environment = dict(os.environ)
+    environment['RPM_CONFIGDIR'] = str(SDK / 'sysroot' / triple() / 'usr/lib/rpm')
+    environment.update(extra or {})
+    return environment
+
+
+def tool_name(command):
+    return Path(command[3] if '--library-path' in command else command[0]).name
+
+
+def run(command, environment=None, capture=False, stdin=None):
+    result = subprocess.run(command, env=environment, text=True, input=stdin,
+                            stdout=subprocess.PIPE if capture else None, stderr=subprocess.STDOUT if capture else None)
+    if result.returncode:
+        raise Error(f'{tool_name(command)} failed ({result.returncode})'
+                    + (':\n' + result.stdout if capture and result.stdout else ''))
+    return result.stdout if capture else ''
+
+
+def read_declaration(directory):
+    path = directory / 'Application.toml'
+    if not path.is_file():
+        raise Error(f'{directory} has no Application.toml')
+    try:
+        document = tomllib.loads(path.read_text(encoding='utf-8'))
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise Error(f'Application.toml: {error}')
+    for key in ('id', 'name', 'version'):
+        if not isinstance(document.get(key), str) or not document[key]:
+            raise Error(f'Application.toml needs "{key}"')
+    if not ID_PATTERN.match(document['id']):
+        raise Error(f'"{document["id"]}" is not a valid application id')
+    if not VERSION_PATTERN.match(document['version']):
+        raise Error(f'version "{document["version"]}" must be numbers separated by dots')
+    return document
+
+
+def find_bundle(stage):
+    stage = stage.resolve()
+    if (stage / 'Application.toml').is_file():
+        return stage
+    candidates = [path for path in (stage / 'Applications').glob('*') if (path / 'Application.toml').is_file()]
+    if len(candidates) != 1:
+        raise Error(f'{stage} must contain exactly one Applications/<id>/ bundle (found {len(candidates)}); '
+                    'install with: DESTDIR=stage cmake --install build')
+    return candidates[0]
+
+
+def is_elf(path):
+    try:
+        with open(path, 'rb') as stream:
+            return stream.read(4) == b'\x7fELF'
+    except OSError:
+        return False
+
+
+PUBLISHER_KEY = 'share/openwave/publisher.asc'
+
+
+def export_public_key(key, gnupghome):
+    home = Path(gnupghome).expanduser() if gnupghome else default_home()
+    armored = run(['gpg', '--batch', '--armor', '--export', key], gpg_environment(home), capture=True)
+    if 'BEGIN PGP PUBLIC KEY BLOCK' not in armored:
+        raise Error(f'key {key} is not in {home}')
+    return armored.encode()
+
+
+def package(stage, output, release, license_text, publisher_key=None):
+    bundle = find_bundle(stage)
+    declaration = read_declaration(bundle)
+    identifier = declaration['id']
+    if bundle.name != identifier:
+        raise Error(f'the bundle directory is {bundle.name} but Application.toml says {identifier}')
+    work = Path(tempfile.mkdtemp(prefix='openwave-pack-'))
+    try:
+        root = work / 'root'
+        destination = root / 'Applications' / identifier
+        shutil.copytree(bundle, destination, symlinks=True)
+        manifest = destination / 'manifest.json'
+        if manifest.exists():
+            manifest.unlink()
+        if publisher_key is not None:
+            target = destination / PUBLISHER_KEY
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(publisher_key)
+        entries = [destination]
+        for path in sorted(destination.rglob('*')):
+            entries.append(path)
+        listing, arch = [], 'noarch'
+        for path in entries:
+            relative = '/' + path.relative_to(root).as_posix()
+            if any(character in relative for character in '"%\n\\'):
+                raise Error(f'unsupported character in file name: {relative}')
+            if path.is_symlink():
+                listing.append(f'%attr(-,root,root) "{relative}"')
+            elif path.is_dir():
+                os.chmod(path, 0o755)
+                listing.append(f'%dir %attr(0755,root,root) "{relative}"')
+            elif path.is_file():
+                mode = 0o755 if path.stat().st_mode & 0o111 else 0o644
+                os.chmod(path, mode)
+                if is_elf(path):
+                    arch = 'x86_64'
+                listing.append(f'%attr({mode:04o},root,root) "{relative}"')
+            else:
+                raise Error(f'not a regular file, directory or symbolic link: {relative}')
+        top = work / 'top'
+        for name in ('BUILD', 'RPMS', 'SOURCES', 'SPECS', 'SRPMS'):
+            (top / name).mkdir(parents=True)
+        (top / 'SPECS/files.list').write_text('\n'.join(listing) + '\n')
+        summary = declaration['name'].replace('\n', ' ')
+        spec = top / 'SPECS' / f'{identifier}.spec'
+        spec.write_text(
+            f'Name: {identifier}\nVersion: {declaration["version"]}\nRelease: {release}\n'
+            f'Summary: {summary}\nLicense: {license_text}\nBuildArch: {arch}\n'
+            f'Provides: openwave-application({identifier})\nAutoReqProv: no\n\n'
+            f'%description\n{summary}\n\n%files -f {top}/SPECS/files.list\n')
+        epoch = os.environ.get('SOURCE_DATE_EPOCH') or str(int(max(
+            [path.lstat().st_mtime for path in entries] or [0])))
+        defines = {
+            '_topdir': str(top), '_build_id_links': 'none', 'debug_package': '%{nil}',
+            '__os_install_post': '%{nil}', '__arch_install_post': '%{nil}',
+            '_binary_payload': 'w12.zstdio', '_buildhost': 'openwave-sdk',
+            'source_date_epoch_from_changelog': '0', 'clamp_mtime_to_source_date_epoch': '1',
+            'use_source_date_epoch_as_buildtime': '1', '_use_internal_dependency_generator': '0',
+        }
+        arguments = ['-bb', '--noclean', '--buildroot', str(root)]
+        for name, value in defines.items():
+            arguments += ['--define', f'{name} {value}']
+        arguments.append(str(spec))
+        run(target_command('rpmbuild', arguments), target_environment({'SOURCE_DATE_EPOCH': epoch, 'HOME': str(work)}), capture=True)
+        built = sorted((top / 'RPMS').rglob('*.rpm'))
+        if len(built) != 1:
+            raise Error('rpmbuild produced no package')
+        output.mkdir(parents=True, exist_ok=True)
+        target = output / built[0].name
+        shutil.copy2(built[0], target)
+        return target
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def default_home():
+    return Path(os.environ.get('OPENWAVE_GNUPGHOME') or Path.home() / '.openwave/gnupg')
+
+
+def ensure_agent(environment):
+    missing = [tool for tool in ('gpg', 'gpg-agent') if not shutil.which(tool)]
+    if missing:
+        raise Error(f'{" and ".join(missing)} not found: gpg needs gpg-agent to create and use keys '
+                    '(Debian/Ubuntu: sudo apt install gnupg gpg-agent)')
+    probe = subprocess.run(['gpg-connect-agent', '/bye'], env=environment, text=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT) if shutil.which('gpg-connect-agent') else None
+    if probe is not None and probe.returncode:
+        raise Error(f'gpg-agent cannot be started in {environment["GNUPGHOME"]}:\n{probe.stdout.strip()}\n'
+                    'check with: gpgconf --list-dirs  and  gpgconf --launch gpg-agent')
+
+
+def kill_agent(environment):
+    if shutil.which('gpgconf'):
+        subprocess.run(['gpgconf', '--kill', 'gpg-agent'], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def diagnostics(home, environment):
+    lines = []
+    version = subprocess.run(['gpg', '--version'], env=environment, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    lines.append('gpg: ' + (version.stdout.splitlines() or ['?'])[0])
+    listing = subprocess.run(['gpgconf', '--list-dirs'], env=environment, text=True, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT) if shutil.which('gpgconf') else None
+    directories = {}
+    if listing is not None:
+        for line in listing.stdout.splitlines():
+            name, _, value = line.partition(':')
+            directories[name] = value
+            lines.append('gpgconf ' + line)
+    probes = [home, home / 'private-keys-v1.d']
+    if directories.get('agent-socket'):
+        probes.append(Path(directories['agent-socket']).parent)
+    for probe in probes:
+        if probe.exists():
+            info = probe.stat()
+            lines.append(f'{probe}: mode {oct(info.st_mode & 0o7777)}, owner {info.st_uid}, writable {os.access(probe, os.W_OK)}')
+        else:
+            lines.append(f'{probe}: does not exist')
+    agent = subprocess.run(['gpg-connect-agent', '/bye'], env=environment, text=True, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT) if shutil.which('gpg-connect-agent') else None
+    if agent is not None:
+        lines.append(f'gpg-connect-agent /bye: exit {agent.returncode} {agent.stdout.strip()}')
+    return 'diagnostics:\n  ' + '\n  '.join(lines)
+
+
+def with_agent_retry(action, home, environment):
+    try:
+        return action()
+    except Error:
+        kill_agent(environment)
+    try:
+        return action()
+    except Error as error:
+        raise Error(f'{error}\n{diagnostics(home, environment)}')
+
+
+def gpg_environment(home):
+    home.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(home, 0o700)
+    environment = dict(os.environ)
+    environment['GNUPGHOME'] = str(home)
+    return environment
+
+
+def new_passphrase():
+    supplied = os.environ.get('OPENWAVE_PASSPHRASE')
+    if supplied is not None:
+        return supplied
+    if not sys.stdin.isatty():
+        raise Error('no terminal to ask for a passphrase: use --no-passphrase, or set OPENWAVE_PASSPHRASE')
+    first = getpass.getpass('Passphrase for the new key (empty for none): ')
+    if first and getpass.getpass('Repeat the passphrase: ') != first:
+        raise Error('the passphrases differ')
+    return first
+
+
+def key_passphrase(key, environment, passphrase_file):
+    if passphrase_file:
+        return Path(passphrase_file).read_text().rstrip('\n')
+    probe = subprocess.run(['gpg', '--batch', '--pinentry-mode', 'loopback', '--passphrase', '', '--local-user', key,
+                            '--detach-sign', '--output', '-', os.devnull], env=environment,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if probe.returncode == 0:
+        return ''
+    supplied = os.environ.get('OPENWAVE_PASSPHRASE')
+    if supplied is not None:
+        return supplied
+    if not sys.stdin.isatty():
+        raise Error('the key needs a passphrase and there is no terminal: use --passphrase-file or set OPENWAVE_PASSPHRASE')
+    return getpass.getpass(f'Passphrase for key {key[-16:]}: ')
+
+
+def keygen(arguments):
+    home = Path(arguments.gnupghome).expanduser() if arguments.gnupghome else default_home()
+    environment = gpg_environment(home)
+    ensure_agent(environment)
+    identity = f'{arguments.name} <{arguments.email}>'
+    passphrase = '' if arguments.no_passphrase else new_passphrase()
+    command = ['gpg', '--batch', '--pinentry-mode', 'loopback', '--passphrase-fd', '0', '--quick-generate-key', identity,
+               'rsa3072', 'sign', arguments.expire]
+    with_agent_retry(lambda: run(command, environment, stdin=passphrase + '\n'), home, environment)
+    listing = run(['gpg', '--batch', '--with-colons', '--fingerprint', identity], environment, capture=True)
+    fingerprint = next(line.split(':')[9] for line in listing.splitlines() if line.startswith('fpr:'))
+    public = Path(arguments.public_key or f'{fingerprint[-16:]}.asc').resolve()
+    public.write_text(run(['gpg', '--batch', '--armor', '--export', fingerprint], environment, capture=True))
+    print(f'key {fingerprint}')
+    print(f'private key stays in {home}')
+    print(f'public key {public}: `openwave-pack build --key {fingerprint}` ships it inside your packages, so a person '
+          'installing your application the first time sees who published it and the device pins that key to the '
+          'application; an administrator can also trust it for every application (/etc/appdeploy/keys/application/)')
+    return fingerprint
+
+
+def sign(files, key, gnupghome, passphrase_file=None):
+    home = Path(gnupghome).expanduser() if gnupghome else default_home()
+    environment = target_environment(gpg_environment(home))
+    ensure_agent(environment)
+    passphrase = key_passphrase(key, environment, passphrase_file)
+    with tempfile.TemporaryDirectory(prefix='openwave-pass-') as directory:
+        secret = Path(directory) / 'passphrase'
+        secret.write_text(passphrase)
+        os.chmod(secret, 0o600)
+        extra = f'--pinentry-mode loopback --passphrase-file {secret}'
+        for file in files:
+            command = target_command('rpmsign', ['--addsign', '--define', f'_gpg_name {key}', '--define', f'_gpg_path {home}',
+                                                 '--define', '__gpg /usr/bin/gpg', '--define', f'_gpg_sign_cmd_extra_args {extra}',
+                                                 str(file)])
+            with_agent_retry(lambda: run(command, environment, capture=True), home, environment)
+            print(f'signed {file}')
+
+
+def check(files, trusted_key):
+    environment = target_environment()
+    with tempfile.TemporaryDirectory(prefix='openwave-keys-') as keys:
+        arguments = []
+        if trusted_key:
+            for part in ('', 'application', 'system'):
+                (Path(keys) / part).mkdir(exist_ok=True)
+                os.chmod(Path(keys) / part, 0o700)
+            shutil.copy2(trusted_key, Path(keys) / 'application' / 'developer.asc')
+            os.chmod(Path(keys) / 'application' / 'developer.asc', 0o644)
+            arguments = ['--keys', keys]
+        status = 0
+        for file in files:
+            result = subprocess.run(target_command('appdeploy-check', arguments + [str(file)]), env=environment, text=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            query = subprocess.run(target_command('rpm', ['-qp', '--qf', '%{RSAHEADER:pgpsig}', str(file)]), env=environment,
+                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            embedded = query.stdout.strip()
+            embedded = 'none' if not embedded or embedded == '(none)' else embedded
+            lines = result.stdout.splitlines()
+            if embedded != 'none':
+                lines = [line.replace('the package is not signed', 'signed, but not by an installed application key') for line in lines]
+            print(f'{file}\n  embedded signature {embedded}\n' + ''.join(f'  {line}\n' for line in lines), end='')
+            status = max(status, result.returncode)
+        return status
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog='openwave-pack', description='Package, sign and check OpenWave applications.')
+    commands = parser.add_subparsers(dest='command', required=True)
+    sub = commands.add_parser('keygen', help='create a signing key and export its public half')
+    sub.add_argument('--name', required=True)
+    sub.add_argument('--email', required=True)
+    sub.add_argument('--gnupghome')
+    sub.add_argument('--public-key', help='where to write the public key (default: ./<key id>.asc)')
+    sub.add_argument('--expire', default='3y')
+    sub.add_argument('--no-passphrase', action='store_true')
+    sub = commands.add_parser('package', help='turn an installed stage tree into an .rpm')
+    sub.add_argument('--stage', required=True, type=Path, help='the DESTDIR of `cmake --install` (or the bundle directory)')
+    sub.add_argument('--output', type=Path, default=Path('.'))
+    sub.add_argument('--release', default='1')
+    sub.add_argument('--license', default='Proprietary')
+    sub.add_argument('--publisher-key', type=Path, help='your public key (.asc), shipped in the package so the device can pin it')
+    sub = commands.add_parser('sign', help='sign packages with a key')
+    sub.add_argument('packages', nargs='+', type=Path)
+    sub.add_argument('--key', required=True)
+    sub.add_argument('--gnupghome')
+    sub.add_argument('--passphrase-file', help='file holding the key\'s passphrase (otherwise asked for on the terminal when needed)')
+    sub = commands.add_parser('check', help='apply the device\'s package policy and report the signature verdict')
+    sub.add_argument('packages', nargs='+', type=Path)
+    sub.add_argument('--trust-key', type=Path, help='a public key to treat as an installed application key')
+    sub = commands.add_parser('build', help='package, sign and check in one step')
+    sub.add_argument('--stage', required=True, type=Path)
+    sub.add_argument('--output', type=Path, default=Path('.'))
+    sub.add_argument('--release', default='1')
+    sub.add_argument('--license', default='Proprietary')
+    sub.add_argument('--key')
+    sub.add_argument('--gnupghome')
+    sub.add_argument('--passphrase-file')
+    sub.add_argument('--trust-key', type=Path)
+    arguments = parser.parse_args(argv)
+    try:
+        if arguments.command == 'keygen':
+            keygen(arguments)
+            return 0
+        if arguments.command == 'package':
+            print(package(arguments.stage, arguments.output, arguments.release, arguments.license,
+                          arguments.publisher_key.read_bytes() if arguments.publisher_key else None))
+            return 0
+        if arguments.command == 'sign':
+            sign(arguments.packages, arguments.key, arguments.gnupghome, arguments.passphrase_file)
+            return 0
+        if arguments.command == 'check':
+            return check(arguments.packages, arguments.trust_key)
+        publisher_key = export_public_key(arguments.key, arguments.gnupghome) if arguments.key else None
+        built = package(arguments.stage, arguments.output, arguments.release, arguments.license, publisher_key)
+        print(f'built {built}')
+        if arguments.key:
+            sign([built], arguments.key, arguments.gnupghome, arguments.passphrase_file)
+        return check([built], arguments.trust_key)
+    except Error as error:
+        print(f'openwave-pack: {error}', file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

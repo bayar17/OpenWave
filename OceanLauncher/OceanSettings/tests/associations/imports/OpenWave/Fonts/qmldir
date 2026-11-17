@@ -1,0 +1,2 @@
+module OpenWave.Fonts
+singleton Fonts 1.0 Fonts.qml

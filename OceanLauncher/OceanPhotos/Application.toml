@@ -1,0 +1,19 @@
+schema = 1
+id = "com.openwave.photos"
+name = "Gallery"
+version = "0.1.0"
+kind = "application"
+executable = "bin/ocean-photos"
+runtime = "openwave-qt"
+icon = "share/icons/icon.svg"
+single_instance = true
+accepts_paths = true
+developer = "OpenWave"
+opens = ["png", "jpg", "jpeg", "webp", "gif", "svg"]
+mime_types = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"]
+
+[sandbox]
+profile = "standard"
+
+[permissions]
+request = ["files.read"]

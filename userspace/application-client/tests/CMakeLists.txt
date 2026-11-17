@@ -1,0 +1,16 @@
+cmake_minimum_required(VERSION 3.21)
+project(ApplicationChannelTests LANGUAGES CXX)
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_CXX_STANDARD 17)
+enable_testing()
+find_package(Qt6 REQUIRED COMPONENTS Core Network Test)
+find_package(OpenWaveSDK REQUIRED COMPONENTS Applications)
+add_executable(application-channel-tests tst_channel.cpp)
+target_link_libraries(application-channel-tests PRIVATE OpenWave::Applications Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME application-channel COMMAND application-channel-tests)
+add_executable(application-layout-tests tst_layout.cpp
+    ../../../OceanLauncher/OceanLauncher/AppController.cpp)
+target_link_libraries(application-layout-tests PRIVATE OpenWave::Applications Qt6::Core Qt6::Network Qt6::Test)
+set_target_properties(application-channel-tests application-layout-tests PROPERTIES
+    BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "$ORIGIN/../lib;$ORIGIN/../lib64")
+add_test(NAME application-layout COMMAND application-layout-tests)

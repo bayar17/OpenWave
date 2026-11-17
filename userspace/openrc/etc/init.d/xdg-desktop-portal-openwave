@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+description="OpenWave XDG portal implementation"
+command="/System/Services/xdg-desktop-portal-openwave"
+command_background="yes"
+pidfile="/run/openwave/xdg-desktop-portal-openwave.pid"
+output_log="/run/openwave/xdg-portal.stdout.log"
+error_log="/run/openwave/xdg-portal.stderr.log"
+export HOME="/var/lib/ocean"
+export USER="ocean"
+export LOGNAME="ocean"
+export XDG_RUNTIME_DIR="/run/user/1000"
+export DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/bus"
+
+depend() {
+	need dbus openwave-session-bus
+}
+
+start_post() {
+	/System/Services/openwave-wait-dbus session \
+		org.freedesktop.portal.Desktop org.freedesktop.impl.portal.desktop.openwave
+}

@@ -1,0 +1,533 @@
+#!/bin/sh
+# Opt-in diagnostics only; OpenRC remains the sole container-manager owner.
+case " $(cat /proc/cmdline) " in *' openwave.qa=waydroid '*) ;; *) exit 0 ;; esac
+exec >/dev/console 2>&1
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+export PYTHONDONTWRITEBYTECODE=1
+BOOT_WAIT=240
+for token in $(cat /proc/cmdline); do
+    case "$token" in
+        openwave.qa.waydroid-wait=*[!0-9]*|openwave.qa.waydroid-wait=) ;;
+        openwave.qa.waydroid-wait=*)
+            value=${token#openwave.qa.waydroid-wait=}
+            [ "$value" -ge 60 ] && [ "$value" -le 1700 ] && BOOT_WAIT=$value ;;
+    esac
+done
+export BOOT_WAIT
+printf 'WAYDROID_QA BEGIN enforcing=%s\n' "$(cat /sys/fs/selinux/enforce)"
+probe() {
+    name=$1; shift
+    limit=8
+    case "$name" in navigation_state|suspend_request|cleanup_after_stop|logcat*|watchdog_subject|user_data_prepare|android_labels|hwc_dump|composer_state|android_tasks|composer_log|sf_task_streams|overlay_fabricate) limit=25 ;; esac
+    [ "$name" != teardown ] || limit=90
+    [ "$name" != initialize ] || limit=25
+    [ "$name" != startup ] || limit=30
+    [ "$name" != request_session ] || limit=60
+    [ "$name" != boot_wait ] || limit=$((BOOT_WAIT + 20))
+    printf 'WAYDROID_PROBE_BEGIN %s\n' "$name"
+    /bin/busybox timeout "$limit" "$@"
+    result=$?
+    printf '\nWAYDROID_PROBE_END %s exit=%s\n' "$name" "$result"
+}
+export ANDROID="/usr/bin/lxc-attach -P /var/lib/waydroid/lxc -n waydroid --clear-env --set-var PATH=/product/bin:/apex/com.android.runtime/bin:/apex/com.android.art/bin:/system_ext/bin:/system/bin:/system/xbin:/vendor/bin --set-var ANDROID_ROOT=/system --set-var ANDROID_DATA=/data --"
+probe kernel /bin/busybox uname -a
+probe filesystems /bin/busybox cat /proc/filesystems
+probe devices /bin/busybox ls -ld /dev/binderfs /dev/binder /dev/anbox-binder /dev/dri/renderD128
+probe openrc /sbin/rc-service waydroid status
+probe provisioning /sbin/rc-service waydroid-runtime start
+if [ ! -f /var/lib/waydroid/waydroid.cfg ] \
+    && [ -s /usr/share/waydroid-extra/images/system.img ] \
+    && [ -s /usr/share/waydroid-extra/images/vendor.img ]; then
+    # The administrator-selected images are preinstalled. Upstream recognizes
+    # this location without downloading, replacing data, or starting Android.
+    probe initialize /usr/bin/waydroid init \
+        -i /usr/share/waydroid-extra/images \
+        -c https://waydroid-atv.github.io/ota/a17-qpr0/system \
+        -v https://waydroid-atv.github.io/ota/a17-qpr0/vendor \
+        -r lineage -s GAPPS
+fi
+probe binder_reprovision /usr/bin/python3.14 - <<'PY'
+import hashlib
+import subprocess
+from pathlib import Path
+config = Path('/var/lib/waydroid/waydroid.cfg')
+before = hashlib.sha256(config.read_bytes()).digest()
+subprocess.run(['/usr/bin/umount', '/dev/binderfs'], check=True)
+subprocess.run(['/usr/bin/python3.14', '-I',
+                '/usr/libexec/openwave-waydroid-binder.py'], check=True)
+assert hashlib.sha256(config.read_bytes()).digest() == before
+print('Binder remount recovery PASS; Android configuration unchanged')
+PY
+probe pulse_service /bin/sh -c '
+    /sbin/rc-service pipewire-pulse start; status=$?
+    /sbin/rc-service pipewire-pulse status
+    exit $status'
+probe startup /sbin/rc-service waydroid start
+probe binder_labels /usr/bin/python3.14 - <<'PY'
+import os
+import stat
+for name in sorted(os.listdir('/dev/binderfs')):
+    path = '/dev/binderfs/' + name
+    info = os.stat(path)
+    print(path, 'character=' + str(stat.S_ISCHR(info.st_mode)),
+          os.getxattr(path, 'security.selinux').rstrip(b'\0').decode())
+PY
+probe runtime /System/Services/openwave-runtime-check --waydroid
+probe version /usr/bin/waydroid --version
+probe status /usr/bin/waydroid status
+if /System/Services/openwave-wait-dbus system id.waydro.Container; then
+    # Boot diagnostic: ask upstream's root manager to create the dedicated
+    # Waydroid user's container. This does not certify a running user session,
+    # application provider, or authenticated Ocean surfaces.
+    probe session_data /lib/rc/bin/checkpath -d -o waydroid:waydroid -m 0700 /var/lib/waydroid-user/data
+    nodes=/var/lib/waydroid/lxc/waydroid/config_nodes
+    kmsg_bind=no
+    [ "$(cat /sys/fs/selinux/enforce)" = 0 ] && kmsg_bind=yes
+    case " $(cat /proc/cmdline) " in *' openwave.qa=android-kmsg '*) kmsg_bind=yes ;; esac
+    if [ "$kmsg_bind" = yes ] && [ -f "$nodes" ] \
+        && ! /bin/busybox grep -q OPENWAVE_QA_DIAGNOSTICS "$nodes"; then
+        {
+            printf '# OPENWAVE_QA_DIAGNOSTICS begin (openwave.qa=waydroid only)\n'
+            printf 'lxc.mount.entry = /dev/kmsg dev/kmsg none bind,create=file,optional 0 0\n'
+            printf '# OPENWAVE_QA_DIAGNOSTICS end\n'
+        } >> "$nodes" && printf 'WAYDROID_QA diagnostics=config_nodes kmsg appended\n'
+    fi
+    probe pulse_socket /bin/sh -c '
+        /bin/busybox ls -ld /run/user/1000/pulse /run/user/1000/pulse/native 2>&1
+        for path in /run/user/1000/pulse /run/user/1000/pulse/native /run/user/1000/pipewire-0; do
+            /usr/bin/python3.14 -I -c "import os,sys; print(sys.argv[1], os.getxattr(sys.argv[1], \"security.selinux\").rstrip(b\"\\0\").decode())" "$path" 2>&1 | /bin/busybox tail -n 1
+        done
+        [ -S /run/user/1000/pulse/native ]'
+    probe request_session /usr/bin/python3.14 - <<'PY'
+import os
+import dbus
+
+assert os.getuid() == os.geteuid() == 0
+assert 'openwave.qa=waydroid' in open('/proc/cmdline').read().split()
+session = {
+    'user_name': 'waydroid', 'user_id': '990', 'group_id': '990',
+    'host_user': '/var/lib/waydroid-user', 'pid': str(os.getpid()),
+    'xdg_data_home': '/var/lib/waydroid-user',
+    'xdg_runtime_dir': '/run/waydroid',
+    'wayland_display': '/run/user/1000/wayland-0',
+    'pulse_runtime_path': '/run/user/1000/pulse',
+    'waydroid_user_state': '/var/lib/waydroid-user',
+    'waydroid_data': '/var/lib/waydroid-user/data',
+    'state': 'STOPPED', 'lcd_density': '0', 'background_start': 'true',
+}
+manager = dbus.Interface(dbus.SystemBus().get_object(
+    'id.waydro.Container', '/ContainerManager'), 'id.waydro.ContainerManager')
+manager.Start(dbus.Dictionary(session, signature='ss'), timeout=55)
+print('Upstream container Start returned; framework readiness is checked separately')
+PY
+fi
+probe container /usr/bin/lxc-info -P /var/lib/waydroid/lxc -n waydroid -sH
+probe container_domains /usr/bin/python3.14 -I - <<'PY'
+import os
+seen = {}
+for pid in filter(str.isdigit, os.listdir('/proc')):
+    try:
+        context = open(f'/proc/{pid}/attr/current').read().rstrip('\0\n')
+        if not any(word in context for word in ('lxc', 'waydroid', 'android')):
+            continue
+        name = open(f'/proc/{pid}/comm').read().strip()
+        with open(f'/proc/{pid}/status') as status:
+            fields = dict(line.split(':\t', 1) for line in status if ':\t' in line)
+    except OSError:
+        continue
+    key = (context, name, fields.get('NoNewPrivs', '?').strip(),
+           fields.get('Seccomp', '?').strip(), fields.get('CapEff', '?').strip())
+    seen[key] = seen.get(key, 0) + 1
+for (context, name, nnp, seccomp, caps), count in sorted(seen.items()):
+    print(f'{context} comm={name} count={count} nnp={nnp} seccomp={seccomp} capeff={caps}')
+print(f'container-related processes: {sum(seen.values())}')
+PY
+if [ -f /var/lib/waydroid/waydroid.cfg ]; then
+    printf 'WAYDROID_QA initialized=yes\n'
+else
+    printf 'WAYDROID_QA initialized=no\n'
+fi
+for image in system vendor; do
+    found=no
+    for directory in /var/lib/waydroid/images /usr/share/waydroid-extra/images; do
+        if [ -s "$directory/$image.img" ]; then
+            printf 'WAYDROID_QA image=%s present=yes path=%s\n' "$image" "$directory/$image.img"
+            found=yes
+            break
+        fi
+    done
+    if [ "$found" = no ]; then
+        printf 'WAYDROID_QA image=%s present=no\n' "$image"
+    fi
+done
+state=$(/bin/busybox timeout 3 /usr/bin/lxc-info -P /var/lib/waydroid/lxc -n waydroid -sH 2>/dev/null)
+if [ "$state" = RUNNING ]; then
+    # Android cold boot continues after LXC reports RUNNING. Poll inside the
+    # container, without elevated LXC/LSM bypass options, before final probes.
+    probe boot_wait /bin/sh -c '
+        i=0
+        while [ "$((i * 2))" -lt "$BOOT_WAIT" ]; do
+            state=$(/usr/bin/lxc-info -P /var/lib/waydroid/lxc -n waydroid -sH 2>/dev/null)
+            if [ "$state" = FROZEN ] && [ -n "$completed" ]; then
+                echo "container FROZEN by upstream suspend about $(( (i * 2) - completed )) seconds after boot_completed"; exit 0
+            fi
+            if [ "$state" != RUNNING ]; then
+                echo "container left RUNNING state: ${state:-unknown}"; exit 2
+            fi
+            value=$($ANDROID /system/bin/getprop sys.boot_completed 2>/dev/null </dev/null)
+            if [ "$value" = 1 ] && [ -z "$completed" ]; then
+                completed=$((i * 2)); hold_until=$((i + 90))
+                echo "sys.boot_completed=1 after about $completed seconds"
+            fi
+            if [ -n "$completed" ] && [ "$i" -ge "$hold_until" ]; then
+                echo "framework stable for 180 seconds after boot_completed"; exit 0
+            fi
+            pid=$($ANDROID /system/bin/pidof zygote64 2>/dev/null </dev/null | /bin/busybox tr " " "\n" | /bin/busybox sort -n | /bin/busybox head -n 1)
+            if [ -n "$first_zygote" ] && [ -n "$pid" ] && [ "$pid" != "$first_zygote" ]; then
+                echo "zygote restarted (pid $first_zygote -> $pid) after about $((i * 2)) seconds"; exit 3
+            fi
+            [ -n "$first_zygote" ] || first_zygote=$pid
+            i=$((i + 1)); /bin/busybox sleep 2
+        done
+        if [ -n "$completed" ]; then
+            echo "wait budget ended $(( (i * 2) - completed )) seconds after boot_completed, before the 180 second hold"; exit 4
+        fi
+        echo "sys.boot_completed not set after about $((i * 2)) seconds"; exit 1'
+    inside() { name=$1; shift; probe "$name" /bin/sh -c 'out=$($ANDROID "$@" 2>&1 </dev/null); status=$?; printf "%s\n" "$out"; exit $status' sh "$@"; }
+    probe cpu_after_boot /bin/sh -c '/bin/busybox top -b -n 1 | /bin/busybox head -n 16; /bin/busybox ps -o pid,args | /bin/busybox grep -E "android-apps|first-run|lxc-attach" | /bin/busybox grep -v grep; /bin/busybox grep -E "^(MemTotal|MemFree|MemAvailable|Cached|Shmem|Unevictable|SwapTotal|SwapFree):" /proc/meminfo; echo threads=$(/bin/busybox ls /proc | /bin/busybox grep -c "^[0-9]")'
+    probe suspend_state /bin/sh -c '
+        /usr/bin/lxc-info -P /var/lib/waydroid/lxc -n waydroid -sH
+        /bin/busybox grep -E "lxc-freeze|lxc-unfreeze|uspend" /var/lib/waydroid/waydroid.log | /bin/busybox tail -n 6
+        /usr/bin/lxc-unfreeze -P /var/lib/waydroid/lxc -n waydroid 2>&1; true'
+    /bin/busybox sleep 20
+    probe tombstone /bin/sh -c '
+        dir=/var/lib/waydroid-user/data/tombstones
+        /bin/busybox ls -l "$dir" 2>&1
+        for file in "$dir"/tombstone_[0-9][0-9]; do
+            [ -f "$file" ] || continue
+            echo "== $file"; /bin/busybox head -n 110 "$file"; break
+        done'
+    inside watchdog_subject /system/bin/sh -c 'logcat -d -b main,system,events | grep -E "WATCHDOG KILLING|Blocked in (handler|monitor)|watchdog: " | head -n 12'
+    probe watchdog_trace /bin/sh -c '
+        dir=/var/lib/waydroid-user/data/anr
+        /bin/busybox ls -l "$dir" 2>&1 | /bin/busybox head -n 8
+        last=
+        for file in "$dir"/anr_*; do [ -f "$file" ] && last=$file; done
+        [ -n "$last" ] || exit 0
+        echo "== $last"; /bin/busybox head -n 3 "$last"
+        for thread in android.fg android.ui android.display android.bg main; do
+            /bin/busybox grep -A 45 "^\"$thread\" " "$last" | /bin/busybox grep -E "^\"|^  at |waiting|held by|- locked|native: #0[0-3]" | /bin/busybox head -n 34
+        done'
+    probe user_data_errors /bin/sh -c '
+        /bin/busybox tail -n 25 /var/lib/waydroid-user/data/system/uiderrors.txt 2>&1
+        /bin/busybox ls -ld /var/lib/waydroid-user/data /var/lib/waydroid-user/data/user /var/lib/waydroid-user/data/user/0 /var/lib/waydroid-user/data/user_de /var/lib/waydroid-user/data/user_de/0 /var/lib/waydroid-user/data/misc_ce /var/lib/waydroid-user/data/misc_ce/0 /var/lib/waydroid-user/data/system_ce /var/lib/waydroid-user/data/media 2>&1'
+    inside user_data_prepare /system/bin/sh -c 'logcat -d -b main,system | grep -E "failed to prepare|prepareUser|Destroying user|vold  *:|Vold|installd.*(Failed|fail)|fscrypt|quota|user.serial|enforceSerial" | head -n 45'
+    inside android_processes /system/bin/ps -A -o PID,USER,NAME
+    inside android_init_services /system/bin/sh -c \
+        'getprop | grep -E "init\.svc\.|sys\.boot|dev\.bootcomplete|ro\.build\.version\.(release|sdk)|bpf\.progs_loaded"'
+    inside servicemanager /system/bin/getprop init.svc.servicemanager
+    probe mount_helper_state /usr/bin/python3.14 -I - <<'PY'
+for line in open('/proc/self/mountinfo'):
+    if '/var/lib/waydroid/rootfs' in line:
+        fields, _, tail = line.rstrip('\n').partition(' - ')
+        fields = fields.split()
+        print(f'mount {fields[4]} opts={fields[5]} fs={tail.split()[0]} super={tail.split()[2]} root={fields[3]}')
+print('MANAGER_PROP_BEGIN')
+print(open('/var/lib/waydroid/waydroid.prop').read(), end='')
+print('MANAGER_PROP_END')
+PY
+    inside android_property_file /system/bin/sh -c 'echo ANDROID_PROP_BEGIN; cat /vendor/waydroid.prop; echo ANDROID_PROP_END; getprop waydroid.wayland_display'
+    inside zygote /system/bin/getprop init.svc.zygote
+    inside android_labels /system/bin/ls -Zd /vendor /vendor/build.prop /vendor/bin/waydroid-init /system/build.prop /vendor/waydroid.prop
+    inside system_server /system/bin/pidof system_server
+    inside boot_completed /system/bin/getprop sys.boot_completed
+    inside packages /system/bin/cmd package list packages
+    probe applications /usr/bin/waydroid app list
+    disk=$(/bin/busybox cat /sys/block/vda/dev 2>/dev/null)
+    inside device_isolation /system/bin/sh -c '
+        node=/dev/openwave-qa-host-disk
+        rm -f "$node"
+        mknod "$node" b "${1%%:*}" "${1##*:}" || { echo "mknod-refused"; exit 0; }
+        if head -c 512 "$node" > /dev/null 2>&1; then echo "HOST-DISK-READABLE $1"; rm -f "$node"; exit 1; fi
+        echo "host-disk-blocked $1"; rm -f "$node"' qa "$disk"
+    inside logcat_errors /system/bin/sh -c 'logcat -d -b main,system,crash "*:E" | tail -n 120'
+    inside logcat_crash /system/bin/sh -c 'logcat -d -b crash | tail -n 160'
+    inside logcat_fatal /system/bin/sh -c 'logcat -d -b main,system | grep -E "FATAL|Fatal signal|Watchdog|System.exit|Shutting down VM|has died|Exit zygote|JNI DETECTED|Abort message" | tail -n 60'
+    inside logcat /system/bin/logcat -d -t 80
+    /usr/bin/lxc-unfreeze -P /var/lib/waydroid/lxc -n waydroid >/dev/null 2>&1
+    shot_seq=0
+    shot() {
+        shot_seq=$((shot_seq + 1))
+        log=/run/user/1000/openwave-logs/ocean.stderr.log
+        pid=$(/bin/busybox pidof ocean-launcher | /bin/busybox cut -d' ' -f1)
+        printf 'WAYDROID_QA SHOT name=%s seq=%s pid=%s\n' "$1" "$shot_seq" "$pid"
+        [ -n "$pid" ] || return 0
+        kill -USR1 "$pid"
+        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+            /bin/busybox grep -q "OCEAN_QA_SHOT_END seq=$shot_seq\$" "$log" && break
+            /bin/busybox sleep 0.5
+        done
+        /bin/busybox awk -v seq="$shot_seq" -v name="$1" '
+            $0 ~ "^OCEAN_QA_SHOT_BEGIN seq=" seq " " { on = 1; print "WAYDROID_QA_SHOT_BEGIN name=" name " " $0; next }
+            on && $0 ~ "^OCEAN_QA_SHOT_DATA " { line = "WAYDROID_QA_SHOT_DATA " substr($0, 20); print line; print line; next }
+            on && $0 ~ "^OCEAN_QA_SHOT_END seq=" seq "$" { print "WAYDROID_QA_SHOT_END name=" name; exit }
+            $0 ~ "^OCEAN_QA_SHOT_FAILED seq=" seq "$" { print "WAYDROID_QA_SHOT_FAILED name=" name; exit }' "$log"
+    }
+    inside android_wake /system/bin/sh -c 'input keyevent KEYCODE_WAKEUP; dumpsys power | grep -E "mWakefulness=|Display Power"'
+    inside display_props /system/bin/sh -c 'getprop | grep -E "waydroid|sf.lcd|hwcomposer|gralloc|setupwizard"'
+    shot home-before-launch
+    inside launcher_activities /system/bin/cmd package query-activities --brief --components \
+        -a android.intent.action.MAIN -c android.intent.category.LAUNCHER
+    target=$($ANDROID /system/bin/cmd package query-activities --brief --components \
+        -a android.intent.action.MAIN -c android.intent.category.LAUNCHER </dev/null 2>/dev/null \
+        | /bin/busybox tr -d '\r' | /bin/busybox awk '
+            /^com\.android\.deskclock\// { c = $0 } /^org\.lineageos\.etar\// { e = $0 }
+            /^com\.android\.settings\// { s = $0 }
+            END { if (c) print c; else if (e) print e; else if (s) print s }')
+    printf 'WAYDROID_QA app_target=%s\n' "$target"
+    if [ -n "$target" ]; then
+        package=${target%%/*}
+        hwc=$($ANDROID /system/bin/pidof android.hardware.graphics.composer@2.1-service </dev/null 2>/dev/null | /bin/busybox tr -d '\r')
+        printf 'WAYDROID_QA hwc_pid=%s\n' "$hwc"
+        inside hwc_sockets /system/bin/sh -c 'ls -l /proc/$1/fd 2>&1 | grep -c socket; grep -E "wayland|xdg" /proc/net/unix | head; ls -l /run/xdg 2>&1' qa "$hwc"
+        inside multi_windows /system/bin/getprop persist.waydroid.multi_windows
+        inside app_active /system/bin/service call waydroidplatform 2 s16 waydroid.active_apps s16 Waydroid
+        inside app_launch /system/bin/service call waydroidplatform 7 s16 "$package"
+        /bin/busybox sleep 1
+        shot app-launch-1s
+        /bin/busybox sleep 2
+        shot app-launch-3s
+        inside app_policy /system/bin/service call waydroidplatform 9 i32 2 s16 policy_control s16 'immersive.status=*'
+        /bin/busybox sleep 5
+        inside app_resumed /system/bin/sh -c 'dumpsys activity activities | grep -E "topResumedActivity|ResumedActivity:" | head -5'
+        inside app_process /system/bin/pidof "$package"
+        inside app_windows /system/bin/sh -c 'dumpsys window | grep -E "mCurrentFocus|mFocusedApp" | head -4'
+        inside sf_layers /system/bin/sh -c 'dumpsys SurfaceFlinger --list | head -40'
+        shot app-launched
+        /bin/busybox sleep 5
+        shot app-settled
+    fi
+    probe android_icons /bin/sh -c '/bin/busybox ls -la /var/lib/waydroid-user/data/icons 2>&1 | /bin/busybox head -n 30'
+    probe appd_android_catalogue /bin/sh -c '/usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Applications --object-path /org/openwave/Applications --method org.openwave.Applications1.ListApplications | /bin/busybox grep -o "org\.openwave\.android\.[A-Za-z0-9_.]*" | /bin/busybox sort -u'
+    inside navbar_layout /system/bin/sh -c 'settings delete secure sysui_nav_bar; settings get secure sysui_nav_bar'
+    probe appd_android_launch /usr/bin/gdbus call --system --timeout 10 --dest org.openwave.Applications \
+        --object-path /org/openwave/Applications --method org.openwave.Applications1.Launch \
+        org.openwave.android.com.android.calculator2 '@as []'
+    /bin/busybox sleep 2
+    shot appd-launch-2s
+    /bin/busybox sleep 8
+    probe appd_android_state /bin/sh -c '/usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Applications --object-path /org/openwave/Applications --method org.openwave.Applications1.GetApplicationInfo org.openwave.android.com.android.calculator2 | /bin/busybox grep -o "'"'"'\(state\|error\|kind\|launchable\)'"'"': <[^>]*>"'
+    inside calculator_resumed /system/bin/sh -c 'dumpsys activity activities | grep -E "topResumedActivity|ResumedActivity:" | head -3'
+    shot appd-launched
+    ui_dump() { $ANDROID /system/bin/sh -c 'uiautomator dump /data/local/tmp/openwave-ui.xml >/dev/null 2>&1; cat /data/local/tmp/openwave-ui.xml' </dev/null 2>/dev/null | /bin/busybox tr '>' '\n'; }
+    ui_center() { ui_dump | /bin/busybox grep -E "$1" | /bin/busybox head -n 1 | /bin/busybox sed -nE 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/p' | /bin/busybox awk '{ print int(($1+$3)/2), int(($2+$4)/2) }'; }
+    size=$($ANDROID /system/bin/wm size </dev/null 2>/dev/null | /bin/busybox tail -n 1 | /bin/busybox sed 's/.*: //' | /bin/busybox tr -d '\r')
+    printf 'WAYDROID_QA android_display=%s\n' "$size"
+    aw=${size%x*}; ah=${size#*x}
+    to_screen() { /bin/busybox awk -v x="$1" -v y="$2" -v aw="$aw" -v ah="$ah" 'BEGIN { s = 544 / aw; printf "%d %d", x * s, 960 - ah * s + y * s }'; }
+    tap_android() {
+        set -- $(ui_center "$1") "$2"
+        [ -n "$2" ] && [ -n "$3" ] || { printf 'WAYDROID_QA tap_target_missing seq=%s\n' "$3"; return 1; }
+        set -- $(to_screen "$1" "$2") "$3"
+        printf 'WAYDROID_QA INPUT tap %s %s seq=%s\n' "$1" "$2" "$3"
+        /bin/busybox sleep 3
+    }
+    tap_android 'resource-id="com.android.calculator2:id/digit_7"' 1
+    ui_dump | /bin/busybox grep -oE 'resource-id="com.android.calculator2:id/formula"[^>]*' | /bin/busybox grep -oE 'text="[^"]*"' | /bin/busybox sed 's/^/WAYDROID_QA calculator_formula /'
+    shot after-tap
+    inside overlay_state /system/bin/sh -c 'cmd overlay list | grep -i openwave'
+    probe appd_android_log /bin/sh -c '/bin/busybox grep -E "Android|watcher" /run/openwave/appd.stderr.log /run/openwave/appd.stdout.log | /bin/busybox tail -n 20'
+    inside user_monitor /system/bin/sh -c 'service list | grep -i waydroid'
+    inside home_chooser /system/bin/sh -c 'echo chooser-tasks=$(dumpsys activity activities | grep -c "Task[{].*ResolverActivity")'
+    inside navbar_buttons /system/bin/sh -c 'dumpsys statusbar | grep -m 3 -iE "mDisabled1|disable1|DISABLE_HOME|DISABLE_RECENT" | cut -c1-160'
+    inside navigation_state /system/bin/sh -c "echo home=\$(cmd package resolve-activity --brief -c android.intent.category.HOME -a android.intent.action.MAIN | tail -n 1); echo mode=\$(settings get secure navigation_mode); dumpsys window windows | grep -iE 'Window[{][^ ]+ [^ ]+ [^ ]*(navigation|taskbar|navbar)' | cut -c1-120; dumpsys window | grep -m 2 -E 'type=navigationBars frame' | cut -c1-140; cmd overlay list | grep -iE 'openwave|navbar'"
+    inside display_config /system/bin/sh -c 'wm size; wm density; dumpsys window | grep -m 2 -oE "sw[0-9]+dp|smallestScreenWidthDp=[0-9]+"'
+    inside uiautomator_check /system/bin/sh -c 'uiautomator dump /data/local/tmp/openwave-ui.xml 2>&1 | tail -3; ls -l /data/local/tmp/openwave-ui.xml 2>&1'
+    probe appd_android_before_back /usr/bin/gdbus call --system --timeout 10 --dest org.openwave.Applications \
+        --object-path /org/openwave/Applications --method org.openwave.Applications1.Launch \
+        org.openwave.android.com.android.calculator2 '@as []'
+    /bin/busybox sleep 6
+    inside before_back /system/bin/sh -c 'dumpsys activity activities | grep -E "topResumedActivity" | head -1'
+    shot before-back
+    printf 'WAYDROID_QA INPUT tap 76 598 seq=1\n'
+    /bin/busybox sleep 3
+    shot after-tap-7
+    printf 'WAYDROID_QA INPUT tap 272 926 seq=2\n'
+    /bin/busybox sleep 4
+    if $ANDROID /system/bin/sh -c 'dumpsys activity activities | grep -q "topResumedActivity.*calculator2"' </dev/null; then
+        printf 'WAYDROID_QA back_position=not-centre\n'
+        printf 'WAYDROID_QA INPUT tap 116 926 seq=4\n'
+    else
+        printf 'WAYDROID_QA back_position=centre\n'
+    fi
+    /bin/busybox sleep 4
+    inside after_back /system/bin/sh -c 'dumpsys activity activities | grep -E "topResumedActivity" | head -2; echo calculator-activities=$(dumpsys activity activities | grep -c "com.android.calculator2/.Calculator"); logcat -d -b events | grep -E "wm_finish_activity.*calculator2" | tail -3'
+    shot after-back
+    probe appd_android_launch_for_back /usr/bin/gdbus call --system --timeout 10 --dest org.openwave.Applications \
+        --object-path /org/openwave/Applications --method org.openwave.Applications1.Launch \
+        org.openwave.android.com.android.calculator2 '@as []'
+    /bin/busybox sleep 6
+    inside home_permissions /system/bin/sh -c 'dumpsys package com.openwave.tinh | grep -E "codePath|REAL_GET_TASKS|REORDER_TASKS|flags=|privateFlags=" | head -8'
+    for press in 1 2 3 4; do
+        printf 'WAYDROID_QA INPUT tap 116 926 seq=1%s\n' "$press"
+        /bin/busybox sleep 5
+        top=$($ANDROID /system/bin/sh -c 'dumpsys activity activities | grep -m 1 -oE "topResumedActivity=ActivityRecord[{][^ ]+ [^ ]+ [^ ]+"' </dev/null 2>/dev/null | /bin/busybox awk '{print $NF}')
+        case "$top" in
+            com.openwave.tinh/*|com.android.launcher3/*|*FallbackHome*|'') verdict=HOME-SHOWN ;;
+            *) verdict=app ;;
+        esac
+        backs=$($ANDROID /system/bin/sh -c 'logcat -d -b events -t 400 | grep -cE "wm_back|sysui_multi_action.*back|notification_panel|wm_task_moved|wm_task_to_front"' </dev/null 2>/dev/null)
+        printf 'WAYDROID_QA back_press n=%s top=%s verdict=%s events=%s mode=%s\n' "$press" "${top:-unknown}" "$verdict" "${backs:-?}" "$($ANDROID /system/bin/settings get secure navigation_mode </dev/null 2>/dev/null)"
+    done
+    shot after-back-presses
+    probe ocean_after_back /bin/busybox sh -c '/bin/busybox grep -E "Ocean (removed|showing|resuming)|surface-(created|unassociated)" /run/user/1000/openwave-logs/ocean.stderr.log | /bin/busybox tail -n 8'
+    probe appd_android_relaunch_for_home /usr/bin/gdbus call --system --timeout 10 --dest org.openwave.Applications \
+        --object-path /org/openwave/Applications --method org.openwave.Applications1.Launch \
+        org.openwave.android.com.android.calculator2 '@as []'
+    /bin/busybox sleep 6
+    shot before-home
+    printf 'WAYDROID_QA INPUT key home seq=3\n'
+    /bin/busybox sleep 4
+    shot after-home
+    inside tasks_before_card_close /system/bin/sh -c 'dumpsys activity activities | grep -E "^ +\* Task[{]|topResumedActivity" | cut -c1-140 | head -12'
+    printf 'WAYDROID_QA INPUT swipe 200 260 5 260 seq=20\n'
+    /bin/busybox sleep 6
+    shot after-card-close
+    probe ocean_card_close /bin/busybox sh -c '/bin/busybox grep -E "requested termination|fully terminated" /run/user/1000/openwave-logs/ocean.stderr.log | /bin/busybox tail -n 4'
+    probe appd_close_log /bin/sh -c '/bin/busybox grep -E "close-all" /run/openwave/appd.stderr.log | /bin/busybox tail -n 3'
+    inside home_close_log /system/bin/sh -c 'logcat -d -s TINH:* ActivityManager:I | grep -E "TINH|Force stopping|CLOSE_APPS" | tail -n 8'
+    inside tasks_after_card_close /system/bin/sh -c 'dumpsys activity activities | grep -E "^ +\* Task[{]|topResumedActivity" | cut -c1-140 | head -12; echo app-tasks=$(dumpsys activity activities | grep -E "^ +\* Task[{]" | grep -vcE "tinh|launcher3|FallbackHome|type=home|type=recents")'
+    probe appd_android_relaunch_after_close /usr/bin/gdbus call --system --timeout 10 --dest org.openwave.Applications \
+        --object-path /org/openwave/Applications --method org.openwave.Applications1.Launch \
+        org.openwave.android.com.android.calculator2 '@as []'
+    /bin/busybox sleep 10
+    shot relaunch-after-close
+    inside relaunch_after_close /system/bin/sh -c 'dumpsys activity activities | grep -m 1 topResumedActivity | cut -c1-120'
+    probe ocean_relaunch_after_close /bin/busybox sh -c '/bin/busybox grep -E "Ocean (showing|resuming|removed)|surface-(created|appid)" /run/user/1000/openwave-logs/ocean.stderr.log | /bin/busybox tail -n 5'
+    probe appd_relaunch_log /bin/sh -c '/bin/busybox grep -E "Android (launch|close-all)" /run/openwave/appd.stderr.log | /bin/busybox tail -n 3'
+    inside app_exits_in_android /system/bin/am force-stop com.android.calculator2
+    /bin/busybox sleep 8
+    probe watcher_crashes /bin/sh -c 'echo watcher-stops=$(/bin/busybox grep -c "event watcher stopped" /run/openwave/appd.stderr.log) segfaults=$(/bin/busybox dmesg | /bin/busybox grep -c "android-apps.*segfault")'
+    shot after-android-idle
+    inside android_idle_state /system/bin/sh -c 'settings get global openwave_android_idle; dumpsys activity activities | grep -m 1 topResumedActivity | cut -c1-110'
+    probe appd_idle_log /bin/sh -c '/bin/busybox grep -E "reported idle|watcher" /run/openwave/appd.stderr.log | /bin/busybox tail -n 3'
+    probe ocean_idle_log /bin/busybox sh -c '/bin/busybox grep -E "retiring the Android window|Ocean showing Home" /run/user/1000/openwave-logs/ocean.stderr.log | /bin/busybox tail -n 3'
+    probe appd_android_relaunch_after_idle /usr/bin/gdbus call --system --timeout 10 --dest org.openwave.Applications \
+        --object-path /org/openwave/Applications --method org.openwave.Applications1.Launch \
+        org.openwave.android.com.android.calculator2 '@as []'
+    /bin/busybox sleep 10
+    shot relaunch-after-idle
+    inside relaunch_after_idle /system/bin/sh -c 'settings get global openwave_android_idle; dumpsys activity activities | grep -m 1 topResumedActivity | cut -c1-110'
+    probe ocean_home /bin/busybox grep -E "Ocean showing Home|Ocean showing Android window|background|exit" /run/user/1000/openwave-logs/ocean.stderr.log
+    probe android_first_run /bin/sh -c '/bin/busybox cat /run/openwave/waydroid-first-run.log 2>&1'
+    inside setup_wizards /system/bin/sh -c 'pm list packages -d | grep -i setupwizard; settings get global device_provisioned; settings get secure user_setup_complete'
+    inside android_tasks /system/bin/sh -c 'settings get global device_provisioned; settings get secure user_setup_complete; dumpsys activity recents | grep -E "Recent #|realActivity" | head -20; logcat -d -b main,system,events | grep -iE "removeTask|wm_task_removed|wm_finish_activity|setupwizard|am_kill" | tail -40'
+    inside composer_log /system/bin/sh -c 'pids=$(ps -A -o PID,NAME | grep -iE "composer|waydroid" | awk "{print \$1}" | tr "\n" "|" | sed "s/|\$//"); echo "pids=$pids"; logcat -d -b all | grep -E "^[0-9-]+ [0-9:.]+ +($pids) " | tail -n 200'
+    inside android_provision /system/bin/sh -c 'settings put global device_provisioned 1; settings put secure user_setup_complete 1; settings get global device_provisioned; settings get secure user_setup_complete'
+    probe appd_android_relaunch /usr/bin/gdbus call --system --timeout 10 --dest org.openwave.Applications \
+        --object-path /org/openwave/Applications --method org.openwave.Applications1.Launch \
+        org.openwave.android.com.android.calculator2 '@as []'
+    /bin/busybox sleep 1
+    shot provisioned-launch-1s
+    /bin/busybox sleep 2
+    shot provisioned-launch-3s
+    /bin/busybox sleep 6
+    shot provisioned-launch-9s
+    inside provisioned_resumed /system/bin/sh -c 'dumpsys activity activities | grep -E "topResumedActivity" | head -2; getprop waydroid.open_windows; getprop waydroid.task_list'
+    probe wayland_buffers /bin/sh -c 'l=/run/user/1000/openwave-logs/ocean.stderr.log; echo "dmabuf-globals:"; /bin/busybox grep -oE "global\([0-9]+, \"(zwp_linux_dmabuf_v1|wl_drm|wl_shm|wp_presentation|xdg_activation_v1)\", [0-9]+\)" $l | /bin/busybox sort | /bin/busybox uniq -c; echo "dmabuf-binds=$(/bin/busybox grep -cE "bind\([0-9]+, \"zwp_linux_dmabuf_v1\"" $l) params=$(/bin/busybox grep -c "create_params" $l) immed=$(/bin/busybox grep -c "create_immed" $l) created=$(/bin/busybox grep -c "zwp_linux_buffer_params_v1#[0-9]*.created" $l) failed=$(/bin/busybox grep -c "zwp_linux_buffer_params_v1#[0-9]*.failed" $l) registries=$(/bin/busybox grep -c "get_registry" $l)"; /bin/busybox grep -E "zwp_linux_dmabuf_v1#[0-9]+\.(format|modifier)" $l | /bin/busybox head -n 6'
+    inside sf_task_streams /system/bin/sh -c 'logcat -d -b all | grep -iE "TaskStream|task.stream|post_task|WaydroidDisplay|waydroid.*display" | tail -n 40; dumpsys SurfaceFlinger | grep -iE -A4 "task stream|waydroid" | head -40'
+    inside composer_state /system/bin/sh -c 'getprop | grep -E "log\.tag|waydroid\.(active_apps|open|task|dump|width|height)|multi_windows|doze|setupwizard"; echo ---; dumpsys SurfaceFlinger | grep -iE "composition|hwc|layers:|Display [0-9]|power mode|activeMode" | head -60'
+    inside hwc_services /system/bin/sh -c 'service list | grep -iE "waydroid|platform"; lshal 2>/dev/null | grep -iE "waydroid|composer" | head'
+    inside hwc_dump /system/bin/sh -c 'setprop waydroid.dump_hal 1; sleep 2; logcat -d -b main,system | grep -E "creating toplevel|taskCreated|taskRemoved|taskFocusChanged|active_apps=|task streams|compositor closed|closing card|calibrat|wayland-hwc" | tail -n 120'
+    probe ocean_log /bin/sh -c '/bin/busybox grep -v -E "OCEAN_QA_SHOT|^\[ *[0-9.]+\] " /run/user/1000/openwave-logs/ocean.stderr.log | /bin/busybox tail -n 120'
+    if case " $(cat /proc/cmdline) " in *" openwave.qa=wayland-debug "*) true ;; *) false ;; esac; then
+        probe wayland_protocol /bin/sh -c '/bin/busybox grep -A80 "set_app_id(\"waydroid\." /run/user/1000/openwave-logs/ocean.stderr.log | /bin/busybox grep -vE "frame|wl_callback|damage|wl_buffer#[0-9]+\.release|set_source|set_destination|delete_id" | /bin/busybox head -n 260'
+    fi
+    probe ocean_surfaces /bin/busybox grep -E "OCEAN_QA (surface|launch|appd)|Ocean (received|removed|presenting)" \
+        /run/user/1000/openwave-logs/ocean.stderr.log /run/user/1000/openwave-logs/ocean.stdout.log
+    inside android_network /system/bin/sh -c 'ip -4 addr show eth0 | grep inet; ip route show table all | grep default; ping -c 2 -W 2 192.168.240.1 | tail -n 2; ping -c 2 -W 3 1.1.1.1 | tail -n 2; echo preinit-ok=$(grep -c "Failed to mount /proc/sys/net" /var/lib/waydroid/waydroid.log 2>/dev/null)'
+    probe android_network_host /bin/sh -c 'for d in /sys/class/net/*; do n=$(/bin/busybox basename $d); echo "link $n master=$(/bin/busybox readlink $d/master 2>/dev/null | /bin/busybox sed "s#.*/##")"; done; /bin/busybox grep -aE "DHCPACK" /run/waydroid-lxc/dnsmasq.log | /bin/busybox tail -n 1 | /bin/busybox cut -c1-120'
+    inside shared_storage_android /system/bin/sh -c 'sm list-volumes all 2>&1 | head -n 3; ls -ln /data/media/0; mkdir -p /data/media/0/OpenWaveQA && echo from-android > /data/media/0/OpenWaveQA/hello.txt && chown 10121:1023 /data/media/0/OpenWaveQA /data/media/0/OpenWaveQA/hello.txt && chmod 2770 /data/media/0/OpenWaveQA && chmod 0660 /data/media/0/OpenWaveQA/hello.txt; ls -lnd /data/media/0/OpenWaveQA'
+    probe shared_storage_host /usr/bin/python3.14 -I -c '
+import os, time
+b = "/Data/Users/ocean/AndroidData"
+for _ in range(20):
+    if os.path.exists(b + "/OpenWaveQA/hello.txt"): break
+    time.sleep(2)
+print("host label:", os.getxattr(b, "security.selinux").decode().strip("\0"))
+st = os.stat(b); print("host dir: mode=%o uid=%d gid=%d" % (st.st_mode, st.st_uid, st.st_gid))
+print("host listing:", sorted(os.listdir(b)))
+print([l.split()[4] for l in open("/proc/self/mountinfo") if "AndroidData" in l.split()[4]])
+os.setgroups([1023]); os.setgid(1000); os.setuid(1000)
+print("ocean lists OpenWaveQA:", sorted(os.listdir(b + "/OpenWaveQA")))
+'
+    probe native_launch /System/Services/openwave-launch com.openwave.files
+    /bin/busybox sleep 8
+    probe native_state /bin/sh -c '/usr/bin/gdbus call --system --timeout 3 --dest org.openwave.Applications --object-path /org/openwave/Applications --method org.openwave.Applications1.GetApplicationInfo com.openwave.files | /bin/busybox grep -oE "(state|pid|error).: <[^>]*>" | /bin/busybox tr "\n" " "; echo; /bin/busybox grep -E "cannot join|cannot pin" /run/openwave/appd.stderr.log | /bin/busybox tail -n 2'
+    shot native-files-with-android
+    probe native_stop /usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Applications \
+        --object-path /org/openwave/Applications --method org.openwave.Applications1.Terminate com.openwave.files
+    /bin/busybox sleep 4
+    probe acceptance_launch /usr/bin/gdbus call --system --timeout 10 --dest org.openwave.Applications \
+        --object-path /org/openwave/Applications --method org.openwave.Applications1.Launch \
+        org.openwave.android.com.android.calculator2 '@as []'
+    /bin/busybox sleep 8
+    probe suspend_request /usr/bin/gdbus call --system --timeout 20 --dest id.waydro.Container \
+        --object-path /ContainerManager --method id.waydro.ContainerManager.Freeze
+    /bin/busybox sleep 6
+    probe suspended_state /bin/sh -c 'echo container=$(/usr/bin/lxc-info -P /var/lib/waydroid/lxc -n waydroid -sH 2>&1)'
+    shot suspended
+    probe resume_launch /usr/bin/gdbus call --system --timeout 10 --dest org.openwave.Applications \
+        --object-path /org/openwave/Applications --method org.openwave.Applications1.Launch \
+        org.openwave.android.com.android.calculator2 '@as []'
+    /bin/busybox sleep 10
+    probe resumed_state /bin/sh -c 'echo container=$(/usr/bin/lxc-info -P /var/lib/waydroid/lxc -n waydroid -sH 2>&1)'
+    inside resumed_app /system/bin/sh -c 'dumpsys activity activities | grep -m 1 topResumedActivity | cut -c1-110'
+    printf 'WAYDROID_QA INPUT tap 76 598 seq=30\n'
+    /bin/busybox sleep 3
+    shot resumed-tap-7
+    probe acceptance_appd_log /bin/sh -c '/bin/busybox grep -E "Android (session|launch|close-all)|watcher|idle" /run/openwave/appd.stderr.log | /bin/busybox tail -n 8'
+    probe teardown /bin/sh -c '
+        /sbin/rc-service waydroid stop
+        echo "rootfs_mounts_after_stop=$(/bin/busybox grep -c " /var/lib/waydroid/rootfs" /proc/self/mountinfo)"
+        /bin/busybox grep " /var/lib/waydroid/rootfs" /proc/self/mountinfo
+        for f in /sys/block/loop*/loop/backing_file; do [ -f "$f" ] && echo "loop_in_use $f $(/bin/busybox cat "$f")"; done
+        echo "container=$(/usr/bin/lxc-info -P /var/lib/waydroid/lxc -n waydroid -sH 2>&1)"
+        /bin/busybox grep -E "waydroid-mount|openwave-waydroid (u)?mount|% (u)?mount " /var/lib/waydroid/waydroid.log | /bin/busybox tail -n 40'
+    /bin/busybox sleep 12
+    probe cleanup_after_stop /bin/sh -c '
+        echo "android_helpers=$(/bin/busybox ps -o args | /bin/busybox grep -c "[o]penwave-waydroid/android-apps")"
+        echo "first_run=$(/bin/busybox ps -o args | /bin/busybox grep -c "[o]penwave-waydroid-first-run")"
+        echo "lxc_processes=$(/bin/busybox ps -o args | /bin/busybox grep -cE "^(/usr/bin/)?lxc-(start|attach)")"
+        echo "waydroid_mounts=$(/bin/busybox grep -c " /var/lib/waydroid" /proc/self/mountinfo)"
+        /usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Applications --object-path /org/openwave/Applications --method org.openwave.Applications1.ListApplications | /bin/busybox grep -o "org\.openwave\.android\.[A-Za-z0-9_.]*.\{0,400\}" | /bin/busybox grep -o "launchable.: <[a-z]*>" | /bin/busybox sort | /bin/busybox uniq -c
+        /bin/busybox grep -E "Android (session|event watcher)" /run/openwave/appd.stderr.log | /bin/busybox tail -n 3'
+    shot after-android-stop
+else
+    printf 'WAYDROID_QA framework=BLOCKED container-not-running\n'
+    # Read-only post-failure inventory. A failed upstream OverlayFS mount
+    # must not be "fixed" by creating or relabeling arbitrary paths here.
+    for path in /var/lib/waydroid/overlay /var/lib/waydroid/overlay/vendor \
+        /var/lib/waydroid/overlay_rw/system /var/lib/waydroid/overlay_rw/vendor \
+        /var/lib/waydroid/overlay_work/system /var/lib/waydroid/overlay_work/vendor; do
+        if [ -d "$path" ]; then
+            printf 'WAYDROID_QA overlay_path=%s status=directory\n' "$path"
+        else
+            printf 'WAYDROID_QA overlay_path=%s status=missing-or-inaccessible\n' "$path"
+        fi
+    done
+    printf 'WAYDROID_QA mountinfo START\n'
+    /bin/busybox grep -E '/var/lib/waydroid/(rootfs|overlay)|/dev/binderfs' /proc/self/mountinfo || true
+    printf 'WAYDROID_QA mountinfo END\n'
+    for log in /var/lib/waydroid/lxc/waydroid.log /var/log/lxc/waydroid.log; do
+        [ -f "$log" ] || continue
+        printf 'WAYDROID_QA LXC_LOG %s\n' "$log"
+        /bin/busybox tail -n 120 "$log"
+    done
+fi
+for log in /run/openwave/waydroid.stdout.log /run/openwave/waydroid.stderr.log /var/lib/waydroid/waydroid.log /run/waydroid-lxc/dnsmasq.log; do
+    [ -f "$log" ] || continue
+    printf 'WAYDROID_QA LOG %s\n' "$log"
+    /bin/busybox tail -80 "$log"
+done
+printf 'WAYDROID_QA END enforcing=%s\n' "$(cat /sys/fs/selinux/enforce)"

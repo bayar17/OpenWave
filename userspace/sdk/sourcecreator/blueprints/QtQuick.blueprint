@@ -1,0 +1,265 @@
+
+[blueprint]
+format = 1
+name = "QtQuick"
+description = "Qt Quick application: QML window, a C++ backend, CMake build and Application.toml"
+
+[[file]]
+path = "Application.toml"
+content = '''
+schema = 1
+id = "@project_id@"
+name = "@project_name@"
+version = "@project_version@"
+kind = "application"
+executable = "bin/@project_executable@"
+runtime = "openwave-qt"
+icon = "share/icons/icon.svg"
+single_instance = true
+accepts_paths = false
+
+[sandbox]
+profile = "standard"
+
+[permissions]
+request = []
+'''
+
+[[file]]
+path = "CMakeLists.txt"
+content = '''
+cmake_minimum_required(VERSION 3.21)
+project(@project_cmake@ VERSION @project_version@ LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(Qt6 6.10 REQUIRED COMPONENTS Quick)
+find_package(OpenWaveSDK REQUIRED COMPONENTS Fonts)
+qt_standard_project_setup(REQUIRES 6.10)
+@@if extra_libs
+
+@@for lib in extra_libs
+add_subdirectory(libs/@lib@)
+@@endfor
+@@endif
+
+set_source_files_properties(src/Main.qml PROPERTIES QT_RESOURCE_ALIAS Main.qml)
+qt_add_executable(@project_executable@ src/Main.cpp include/Main.hpp)
+qt_add_qml_module(@project_executable@
+    URI @project_module@ VERSION 1.0
+    IMPORT_PATH "${OpenWaveSDK_QML_IMPORT_PATH}"
+    QML_FILES src/Main.qml)
+target_include_directories(@project_executable@ PRIVATE include)
+target_link_libraries(@project_executable@ PRIVATE Qt6::Quick OpenWave::Fonts)
+@@for lib in extra_libs
+target_link_libraries(@project_executable@ PRIVATE @lib@)
+@@endfor
+
+include("${OpenWaveSDK_DIR}/OpenWaveBundle.cmake")
+openwave_install_bundle(@project_executable@ @project_id@)
+install(FILES share/icons/icon.svg DESTINATION /Applications/@project_id@/share/icons)
+'''
+
+[[file]]
+path = "src/Main.qml"
+content = '''
+import QtQuick
+import OpenWave.Fonts 1.0
+
+Window {
+    visible: true
+    color: "#1f2a30"
+    title: backend.title
+
+    Backend { id: backend }
+
+    Column {
+        anchors.centerIn: parent
+        spacing: 24
+        Image {
+            source: "file:///Applications/@project_id@/share/icons/icon.svg"
+            width: 160; height: 160
+            anchors.horizontalCenter: parent.horizontalCenter
+        }
+        Text {
+            text: backend.title
+            color: "white"
+            font.family: Fonts.family
+            font.pixelSize: 44
+            anchors.horizontalCenter: parent.horizontalCenter
+        }
+        Text {
+            text: backend.message
+            color: "#a8ffffff"
+            font.family: Fonts.family
+            font.pixelSize: 26
+            anchors.horizontalCenter: parent.horizontalCenter
+        }
+    }
+}
+'''
+
+[[file]]
+path = "src/Main.cpp"
+content = '''
+#include "Main.hpp"
+
+#include <OpenWave/FontManager.h>
+#include <QGuiApplication>
+#include <QQmlApplicationEngine>
+@@for lib in extra_libs
+#include <@lib@/@lib@.hpp>
+@@endfor
+
+Backend::Backend(QObject *parent) : QObject(parent) {}
+
+QString Backend::title() const
+{
+    return QStringLiteral("@project_name@");
+}
+
+QString Backend::message() const
+{
+@@if extra_libs
+    QString text = QStringLiteral("@project_id@ @project_version@");
+@@for lib in extra_libs
+    text += QStringLiteral("\n") + QString::fromStdString(@lib@::describe());
+@@endfor
+    return text;
+@@else
+    return QStringLiteral("@project_id@ @project_version@");
+@@endif
+}
+
+int main(int argc, char *argv[])
+{
+    QGuiApplication app(argc, argv);
+    OpenWave::FontManager::initialize();
+    QQmlApplicationEngine engine;
+    QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app,
+                     [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);
+    engine.loadFromModule("@project_module@", "Main");
+    return app.exec();
+}
+'''
+
+[[file]]
+path = "include/Main.hpp"
+content = '''
+#pragma once
+
+#include <QObject>
+#include <QString>
+#include <QtQml/qqmlregistration.h>
+
+class Backend : public QObject
+{
+    Q_OBJECT
+    QML_ELEMENT
+    Q_PROPERTY(QString title READ title CONSTANT)
+    Q_PROPERTY(QString message READ message CONSTANT)
+
+public:
+    explicit Backend(QObject *parent = nullptr);
+    QString title() const;
+    QString message() const;
+};
+'''
+
+[[file]]
+path = "share/icons/icon.svg"
+content = '''
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg width="100%" height="100%" viewBox="0 0 700 700" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:affinity="https://www.affinity.studio/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:1.5;">
+    <g transform="matrix(1,0,0,1,-150,-150)">
+        <g id="Raster" transform="matrix(0.875,0,0,0.875,62.5,62.5)">
+            <path d="M100,100L628,100L900,340L900,900L372,900L100,660L100,100Z" style="fill:url(#_Radial1);"/>
+            <g clip-path="url(#_clip2)">
+                <g transform="matrix(1.142857,0,0,1.142857,-71.428571,-71.428571)">
+                    <g transform="matrix(0.999286,-0.000714,-0.000714,0.999286,1.214286,1.214286)">
+                        <path d="M150,150L850,850" style="fill:none;stroke:white;stroke-width:1.7px;"/>
+                    </g>
+                    <g transform="matrix(1.006849,-0.006849,-0.006849,1.006849,-1,1)">
+                        <path d="M702,848L848,702" style="fill:none;stroke:white;stroke-width:1.7px;"/>
+                    </g>
+                    <g transform="matrix(1,0,0,1.010811,0,-7.167568)">
+                        <path d="M665,848C665,848 780.625,809.35 848,663" style="fill:none;stroke:white;stroke-width:1.69px;"/>
+                    </g>
+                    <g transform="matrix(-1.011942,0.011942,0.011942,-1.011942,999.743592,999.743592)">
+                        <path d="M702,848L848,702" style="fill:none;stroke:white;stroke-width:1.7px;"/>
+                    </g>
+                    <g transform="matrix(-1.016393,-0,0,-1.01885,1011.901639,1013.984502)">
+                        <path d="M665,848C665,848 780.625,809.35 848,663" style="fill:none;stroke:white;stroke-width:1.67px;"/>
+                    </g>
+                    <g transform="matrix(0.993763,0,0,1.008448,-90.298337,-116.667902)">
+                        <ellipse cx="593.5" cy="611.5" rx="240.5" ry="236.5" style="fill:none;stroke:white;stroke-width:1.7px;"/>
+                    </g>
+                    <path d="M150,500L848,500" style="fill:none;stroke:white;stroke-width:1.7px;"/>
+                    <g transform="matrix(1.164488,-0.163779,-0.163779,1.163073,-73.612077,75.286163)">
+                        <path d="M500,736.5L848,390" style="fill:none;stroke:white;stroke-width:1.7px;"/>
+                    </g>
+                    <path d="M389,150L850,612" style="fill:none;stroke:white;stroke-width:1.7px;"/>
+                    <path d="M500,500L738,262" style="fill:none;stroke:white;stroke-width:1.7px;"/>
+                    <g transform="matrix(1,0,0,1,0.5,0)">
+                        <path d="M500,150L499,850" style="fill:none;stroke:white;stroke-width:1.7px;"/>
+                    </g>
+                    <path d="M150,390L611,850" style="fill:none;stroke:white;stroke-width:1.7px;"/>
+                    <g transform="matrix(1.004228,-0.004219,-0.004219,1.00421,-0.00446,0.004451)">
+                        <path d="M500,500L263,736.5" style="fill:none;stroke:white;stroke-width:1.7px;"/>
+                    </g>
+                    <path d="M611,150L150,612" style="fill:none;stroke:white;stroke-width:1.7px;"/>
+                </g>
+            </g>
+        </g>
+    </g>
+    <defs>
+        <clipPath id="_clip2">
+            <path d="M100,100L628,100L900,340L900,900L372,900L100,660L100,100Z"/>
+        </clipPath>
+        <radialGradient id="_Radial1" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="matrix(800,0,0,800,100,500)"><stop offset="0" style="stop-color:rgb(152,152,152);stop-opacity:1"/><stop offset="1" style="stop-color:rgb(72,72,72);stop-opacity:1"/></radialGradient>
+    </defs>
+</svg>
+'''
+
+[[file]]
+foreach = "extra_libs"
+path = "libs/@lib@/CMakeLists.txt"
+content = '''
+add_library(@lib@ SHARED src/@lib@.cpp)
+target_include_directories(@lib@ PUBLIC include)
+set_target_properties(@lib@ PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "/Applications/@project_id@/lib64;/usr/lib64;/usr/lib")
+install(TARGETS @lib@ LIBRARY DESTINATION /Applications/@project_id@/lib64)
+'''
+
+[[file]]
+foreach = "extra_libs"
+path = "libs/@lib@/include/@lib@/@lib@.hpp"
+content = '''
+#pragma once
+
+#include <string>
+
+namespace @lib@ {
+
+std::string describe();
+
+}  // namespace @lib@
+'''
+
+[[file]]
+foreach = "extra_libs"
+path = "libs/@lib@/src/@lib@.cpp"
+content = '''
+#include <@lib@/@lib@.hpp>
+
+namespace @lib@ {
+
+std::string describe()
+{
+    return "library @lib@ is part of @project_name@";
+}
+
+}  // namespace @lib@
+'''

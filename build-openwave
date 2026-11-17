@@ -1,0 +1,1525 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -z "${OPENWAVE_SDK:-}" && -d "$ROOT/out/os-sdk/sysroot" ]]; then export OPENWAVE_SDK="$ROOT/out/os-sdk"; fi
+
+usage() {
+    cat <<'HELP'
+Usage: ./build-openwave COMMAND [OPTIONS]
+
+  all                            Patch/build LLVM, dependencies, kernel and userspace
+  llvm                          Patch/build/install the native Clang/LLVM compiler
+  sysroot                       Bootstrap Linux/glibc headers, compiler-rt builtins, then full glibc
+  cross-files                   Regenerate SDK-local Meson/CMake machine files
+  graphics                      Build Mesa EGL/GLES2 into target sysroot
+  base-libs [LIB]               Build OpenSSL, PCRE2, libxcrypt, libffi, libpng and libjpeg-turbo into the sysroot
+  libdbus                       Build libdbus-1 into the target sysroot
+  udev                          Build libudev (eudev) and libgudev into the target sysroot
+  libmnl                        Build libmnl (and check libsepol/libselinux) for iproute2
+  qt                            Fetch and cross-build Qt (host tools into toolchain/, target into the sysroot)
+  qtwayland                     Build QtWayland, wayland and xkbcommon for the target
+  util-linux                    Cross-build util-linux mount/umount and libmount
+  busybox                       Cross-build BusyBox
+  wpe-qt-adapter                Build WPE's Qt binding against the target Qt
+  check-deps                    Report which base libraries the sysroot has and what builds each
+  userspace                      Build system apps/services into staging only
+  openrc [--clean]              Cross-build and stage OpenRC only (no rootfs/image)
+  sdk                           Build and install the public API client libraries
+  kernel                        Build the kernel with application isolation enabled
+  llvm-patch                    Initialize LLVM sources and apply the OpenWave patch
+  browser-engine [all|deps|media|engine]
+                                Download/build browser codecs and/or build WPE
+  audio                         Download/build ALSA, PipeWire, WirePlumber and audio kernel
+  bluetooth-audio               Build Bluetooth audio dependencies
+  mdns                          Download/build Avahi and its dependencies
+  waydroid-host-deps            Stage pinned Waydroid, iproute2, and networking tools
+  waydroid-bindings             Build target Python GI bindings against the SDK
+  waydroid-mount                Cross-build/install only the Stage 2A mount helper (no Qt SDK)
+  selinux                       Build SELinux libraries and OpenWave policy
+  bubblewrap                    Download/build Bubblewrap and libcap into rootfs
+  packaging                     Download/build RPM, libsolv, librepo and libdnf5 into the sysroot
+  tzdata                        Install time zone data into runtime staging
+  rootfs                        Assemble runtime files into rootfs (no image)
+  image ROOTFS NEW_IMAGE        Create a new ext4 image; never overwrite one
+  test-permissions NEW_TEST_IMAGE
+                                Build and test permission enforcement in QEMU
+  test-appd NEW_TEST_IMAGE       Build and run application daemon tests in QEMU
+  test-selinux NEW_TEST_IMAGE    Build and test SELinux confinement in QEMU
+  test-browser-input NEW_TEST_IMAGE
+                                Build and run browser pointer tests in QEMU
+
+Source env.sh for the Qt application development environment.
+Launch images with run-openwave. SDK export remains scripts/export-openwave-sdk.py.
+HELP
+}
+
+prepare_llvm() {
+    local source="$ROOT/llvm-project" patch="$ROOT/patches/llvm/openwave-llvm.patch"
+    if [[ ! -f "$patch" ]]; then
+        echo "Missing OpenWave LLVM patch: $patch" >&2
+        return 1
+    fi
+    if [[ ! -e "$source/.git" ]]; then
+        git -C "$ROOT" submodule update --init --depth 1 -- llvm-project
+    fi
+    if git -C "$source" apply --reverse --check "$patch" 2>/dev/null; then
+        echo "OpenWave LLVM patch already applied."
+        return 0
+    fi
+    if ! git -C "$source" apply --check "$patch"; then
+        echo "OpenWave LLVM patch conflicts with this checkout; stopping without changing its files." >&2
+        return 1
+    fi
+    git -C "$source" apply --whitespace=nowarn "$patch"
+    echo "Applied OpenWave LLVM patch."
+}
+
+build_llvm_patch() (
+    prepare_llvm
+)
+
+build_llvm() (
+    prepare_llvm
+    SDK="${OPENWAVE_SDK:-$ROOT/toolchain}"
+    BUILD="${OPENWAVE_LLVM_BUILD:-$ROOT/out/llvm-build}"
+    configure=(-S "$ROOT/llvm-project/llvm" -B "$BUILD" -G Ninja
+               -DCMAKE_INSTALL_PREFIX="$SDK")
+    if [[ ! -f "$BUILD/CMakeCache.txt" ]]; then
+        configure+=(-DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS='clang;lld'
+                    -DLLVM_TARGETS_TO_BUILD="${OPENWAVE_LLVM_TARGETS:-X86}"
+                    -DLLVM_PARALLEL_LINK_JOBS=1
+                    -DLLVM_INCLUDE_TESTS=OFF -DLLVM_BUILD_TESTS=OFF
+                    -DCMAKE_C_COMPILER="${OPENWAVE_HOST_CC:-/usr/bin/cc}"
+                    -DCMAKE_CXX_COMPILER="${OPENWAVE_HOST_CXX:-/usr/bin/c++}")
+    fi
+    native=(env -u CC -u CXX -u AR -u AS -u LD -u NM -u RANLIB -u STRIP
+            -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS -u CPATH
+            -u C_INCLUDE_PATH -u CPLUS_INCLUDE_PATH
+            -u CMAKE_TOOLCHAIN_FILE -u CMAKE_PREFIX_PATH -u PKG_CONFIG_PATH
+            -u PKG_CONFIG_SYSROOT_DIR -u PKG_CONFIG_LIBDIR -u LLVM)
+    "${native[@]}" cmake "${configure[@]}"
+    "${native[@]}" cmake --build "$BUILD" --parallel "${OPENWAVE_BUILD_JOBS:-4}"
+    "${native[@]}" cmake --install "$BUILD"
+)
+
+
+run_dep() {
+    local name="$1" marker="$2"; shift 2
+    if [[ -e "$marker" && " ${OPENWAVE_REBUILD:-} " != *" $name "* && " ${OPENWAVE_REBUILD:-} " != *" all "* ]]; then
+        echo "[$name] already built ($marker); OPENWAVE_REBUILD=$name rebuilds it"
+        return 0
+    fi
+    echo "[$name] building"
+    "$@"
+}
+
+build_base_libs() (
+    source "$ROOT/env.sh" --build
+    local only="${1:-}" lib marker
+    for entry in openssl:libssl.so pcre2:libpcre2-8.a libxcrypt:libcrypt.so libffi:libffi.so libpng:libpng16.so libjpeg-turbo:libjpeg.so; do
+        lib="${entry%%:*}"; marker="$OPENWAVE_SYSROOT/usr/lib64/${entry#*:}"
+        [[ -n "$only" && "$only" != "$lib" ]] && continue
+        run_dep "$lib" "$marker" bash "$ROOT/scripts/build-base-libs.sh" "$lib"
+    done
+)
+
+build_libdbus() (
+    source "$ROOT/env.sh" --build
+    run_dep libdbus "$OPENWAVE_SYSROOT/usr/lib64/libdbus-1.so" \
+        env OPENWAVE_REPO_ROOT="$ROOT" bash "$ROOT/scripts/build-libdbus-openwave.sh"
+)
+
+build_udev() (
+    source "$ROOT/env.sh" --build
+    run_dep udev "$OPENWAVE_SYSROOT/usr/lib64/libgudev-1.0.so" bash "$ROOT/scripts/build-udev-libraries.sh"
+)
+
+build_libmnl() (
+    source "$ROOT/env.sh" --build
+    run_dep libmnl "$OPENWAVE_SYSROOT/usr/lib64/libmnl.so" bash "$ROOT/scripts/build-network-security-libs.sh"
+)
+
+build_qt() (
+    source "$ROOT/env.sh" --build
+    run_dep qt "$OPENWAVE_SYSROOT/usr/lib64/libQt6Core.so.6" bash -c '
+        bash "$1/scripts/build-qt-openwave.sh" fetch && bash "$1/scripts/build-qt-openwave.sh" all' _ "$ROOT"
+)
+
+build_qtwayland() (
+    source "$ROOT/env.sh" --build
+    run_dep qtwayland "$OPENWAVE_SYSROOT/usr/lib64/libQt6WaylandCompositor.so.6" bash "$ROOT/scripts/build-qtwayland-openwave.sh"
+)
+
+build_util_linux() (
+    source "$ROOT/env.sh" --build
+    run_dep util-linux "$ROOT/out/sdk-dependencies/$OPENWAVE_TARGET_TRIPLE/util-linux-openwave/stage" \
+        env OPENWAVE_REPO_ROOT="$ROOT" bash "$ROOT/scripts/build-util-linux-openwave.sh" build
+)
+
+build_busybox() (
+    source "$ROOT/env.sh" --build
+    run_dep busybox "$ROOT/out/sdk-dependencies/$OPENWAVE_TARGET_TRIPLE/busybox-openwave/stage/bin/busybox" \
+        bash "$ROOT/scripts/build-busybox.sh" build
+)
+
+build_wpe_qt_adapter() (
+    source "$ROOT/env.sh" --build
+    run_dep wpe-qt-adapter "$OPENWAVE_SYSROOT/usr/lib64/qt6/qml/org/wpewebkit/qtwpe/libqtwpe.so" \
+        bash "$ROOT/scripts/build-wpe-qt-adapter.sh"
+)
+
+build_check_deps() (
+    source "$ROOT/env.sh" --build
+    local missing=0 norecipe=0 name file producer found dir
+    while IFS='|' read -r name file producer; do
+        [[ -z "$name" ]] && continue
+        found=0
+        for dir in usr/lib64 usr/lib lib64 lib; do [[ -e "$OPENWAVE_SYSROOT/$dir/$file" ]] && found=1; done
+        if ((found)); then status=present; else status=MISSING; missing=$((missing + 1)); fi
+        [[ "$producer" == "no recipe"* ]] && norecipe=$((norecipe + 1))
+        printf '%-16s %-8s %s\n' "$name" "$status" "$producer"
+    done <<'DEPS'
+glibc|libc.so.6|./build-openwave sysroot
+libc++|libc++.so.1|./build-openwave llvm / sysroot
+glib|libglib-2.0.so|./build-openwave browser-engine deps (GStreamer's glib subproject)
+gstreamer|libgstreamer-1.0.so|./build-openwave browser-engine deps
+wpe-webkit|libWPEWebKit-2.0.so|./build-openwave browser-engine engine
+mesa (EGL/GLES/gbm)|libEGL.so|./build-openwave graphics
+wayland|libwayland-client.so|./build-openwave graphics (scripts/build-mesa.sh)
+libdrm|libdrm.so|./build-openwave graphics
+xkbcommon|libxkbcommon.so|./build-openwave qtwayland
+libdbus|libdbus-1.so|./build-openwave libdbus
+libudev / libgudev|libgudev-1.0.so|./build-openwave udev
+libmnl|libmnl.so|./build-openwave libmnl
+libselinux|libselinux.so|./build-openwave selinux
+libcap|libcap.so|./build-openwave bubblewrap
+Qt Core|libQt6Core.so.6|./build-openwave qt
+QtWayland|libQt6WaylandCompositor.so.6|./build-openwave qtwayland
+alsa|libasound.so|./build-openwave audio
+pipewire|libpipewire-0.3.so|./build-openwave audio
+openssl|libssl.so|./build-openwave base-libs
+libcrypto|libcrypto.so|./build-openwave base-libs
+pcre2|libpcre2-8.a|./build-openwave base-libs
+libxcrypt|libcrypt.so|./build-openwave base-libs
+libffi|libffi.so|./build-openwave base-libs
+libpng|libpng16.so|./build-openwave base-libs
+libjpeg|libjpeg.so|./build-openwave base-libs
+libxml2|libxml2.so|no recipe and no source in third_party
+sqlite3|libsqlite3.so|no recipe and no source in third_party
+libpsl|libpsl.so|no recipe and no source in third_party
+nghttp2|libnghttp2.so|no recipe and no source in third_party
+libsoup|libsoup-3.0.so|no recipe and no source in third_party
+DEPS
+    echo
+    echo "$missing missing; $norecipe libraries have no recipe in this repository"
+    (( missing == 0 ))
+)
+
+build_all() (
+    if (($#)); then
+        echo "Usage: ./build-openwave all" >&2
+        exit 2
+    fi
+    build_llvm
+    build_sysroot
+    source "$ROOT/env.sh" --build
+    build_graphics
+    build_base_libs
+    build_browser_engine deps
+    build_libdbus
+    build_udev
+    build_selinux
+    build_libmnl
+    build_qt
+    build_qtwayland
+    OPENWAVE_BUILD_ALL=1 build_audio
+    build_bluetooth_audio
+    build_mdns
+    build_bubblewrap
+    build_util_linux
+    build_busybox
+    build_packaging
+    build_browser_engine engine
+    build_wpe_qt_adapter
+    build_sdk
+    build_userspace "$@"
+)
+
+build_sysroot() (
+    "$ROOT/scripts/bootstrap-sysroot.sh"
+)
+
+build_graphics() (
+    "$ROOT/scripts/build-mesa.sh"
+)
+
+build_cross_files() (
+    source "$ROOT/env.sh" --bootstrap
+    python3 "$ROOT/cross/generate-meson.py" --target "$OPENWAVE_TARGET_TRIPLE"
+)
+
+build_kernel() (
+    source "$ROOT/env.sh" --build
+    prepare_llvm
+    local build="${OPENWAVE_KERNEL_BUILD:-$ROOT/out/linux}"
+    local arch image
+    case "$OPENWAVE_TARGET_TRIPLE" in
+        x86_64-*) arch=x86; image=bzImage ;;
+        aarch64-*) arch=arm64; image=Image ;;
+        *) echo "Unsupported kernel target: $OPENWAVE_TARGET_TRIPLE" >&2; exit 1 ;;
+    esac
+    [[ -f "$build/.config" ]] || { echo "Configure $build/.config first" >&2; exit 1; }
+    "$ROOT/linux/scripts/config" --file "$build/.config" -e SECURITY -e SECURITY_LANDLOCK \
+        -e SECURITY_SELINUX -e SECURITY_SELINUX_DEVELOP -e EXT4_FS_SECURITY -e AUDIT \
+        -e NET -e UNIX -e UNIX_DIAG -e SYSVIPC -e IPC_NS -e POSIX_MQUEUE \
+        -e RTC_CLASS -e RTC_DRV_CMOS \
+        -e CRYPTO -e CRYPTO_USER_API_HASH -e CRYPTO_USER_API_SKCIPHER -e CRYPTO_USER_API_AEAD \
+        -e CRYPTO_AES -e CRYPTO_CBC -e CRYPTO_ECB -e CRYPTO_CMAC -e CRYPTO_HMAC \
+        -e CRYPTO_SHA1 -e CRYPTO_SHA256 -e CRYPTO_SHA512 -e CRYPTO_MD4 -e CRYPTO_MD5 -e CRYPTO_DES \
+        -e KEYS -e KEY_DH_OPERATIONS \
+        -e WIRELESS -e CFG80211 -e MAC80211 -e RFKILL \
+        -e NETDEVICES -e WLAN -e WLAN_VENDOR_RALINK -e RT2X00 -e RT2800USB \
+        -e RT2800USB_RT33XX -e RT2800USB_RT35XX -e RT2800USB_RT53XX \
+        -e USB -e USB_XHCI_HCD -e PACKET -e CRYPTO_CCM -e CRYPTO_GCM -e CRYPTO_CTR \
+        -e INPUT -e INPUT_EVDEV -e VIRTIO -e VIRTIO_INPUT -e VIRTIO_NET \
+        --set-str EXTRA_FIRMWARE_DIR "$OPENWAVE_SYSROOT/lib/firmware"
+    local lsm
+    lsm="$("$ROOT/linux/scripts/config" --file "$build/.config" --state LSM)"
+    lsm="${lsm#\"}"; lsm="${lsm%\"}"
+    if [[ "$lsm" == undef || "$lsm" == n ]]; then lsm=landlock; fi
+    case ",$lsm," in
+        *,selinux,*) ;;
+        *) "$ROOT/linux/scripts/config" --file "$build/.config" --set-str LSM "${lsm:+$lsm,}selinux" ;;
+    esac
+    PATH="$OPENWAVE_SDK/bin:$PATH" make -C "$ROOT/linux" O="$build" ARCH="$arch" LLVM=1 olddefconfig
+    # Fail here if Kconfig dependencies silently discarded a boot/sandbox
+    # prerequisite; never publish a kernel which cannot create local IPC.
+    for required in UNIX SYSVIPC IPC_NS USER_NS PID_NS NET_NS CGROUPS SECCOMP_FILTER SECURITY_SELINUX SECURITY_LANDLOCK CFG80211 MAC80211 RFKILL RT2800USB INPUT_EVDEV VIRTIO_INPUT VIRTIO_NET; do
+        grep -qx "CONFIG_${required}=y" "$build/.config" || {
+            echo "Missing required kernel feature: CONFIG_${required}=y" >&2
+            exit 1
+        }
+    done
+    PATH="$OPENWAVE_SDK/bin:$PATH" make -C "$ROOT/linux" O="$build" ARCH="$arch" LLVM=1 -j "${OPENWAVE_BUILD_JOBS:-4}" "$image"
+)
+
+build_audio() (
+
+source "$ROOT/env.sh" --build
+prepare_llvm
+TARGET="$OPENWAVE_SYSROOT"
+# GStreamer GL requires target Mesa EGL/GLES2 development files.
+# Graphics is a separate stage and is never satisfied by host libraries.
+if [[ "${1:-all}" != engine ]]; then
+    "$ROOT/scripts/build-mesa.sh"
+fi
+JOBS="${OPENWAVE_BUILD_JOBS:-4}"
+mkdir -p "$ROOT/out" "$ROOT/third_party"
+
+fetch_tag() {
+    local directory="$1" repository="$2" tag="$3" commit="$4"
+    if [[ ! -d "$ROOT/third_party/$directory/.git" ]]; then
+        git clone --depth 1 --branch "$tag" "$repository" \
+            "$ROOT/third_party/$directory"
+    fi
+    if [[ "$(git -C "$ROOT/third_party/$directory" rev-parse HEAD)" != "$commit" ]]; then
+        echo "Unexpected source revision for $directory" >&2
+        exit 1
+    fi
+}
+
+fetch_tag alsa-lib https://github.com/alsa-project/alsa-lib.git v1.2.16 \
+    08b532cd3da9ac8f683bcb4e4beb9b74c39c1782
+fetch_tag pipewire https://gitlab.freedesktop.org/pipewire/pipewire.git 1.4.9 \
+    fd60e04525f3a04d90bf50085222e0cc9139b4a4
+fetch_tag wireplumber https://gitlab.freedesktop.org/pipewire/wireplumber.git 0.5.18 \
+    81606cbb32d29df20147d1b68b662c1082654d81
+
+PATCH="$ROOT/userspace/audio-patches/pipewire-1.4.9-clang-const.patch"
+if ! git -C "$ROOT/third_party/pipewire" apply --reverse --check "$PATCH" 2>/dev/null; then
+    git -C "$ROOT/third_party/pipewire" apply --check "$PATCH"
+    git -C "$ROOT/third_party/pipewire" apply "$PATCH"
+fi
+
+AUDIO_ACCESS_PATCH="$ROOT/userspace/audio-patches/pipewire-1.4.9-openwave-app-access.patch"
+if ! git -C "$ROOT/third_party/pipewire" apply --reverse --check "$AUDIO_ACCESS_PATCH" 2>/dev/null; then
+    git -C "$ROOT/third_party/pipewire" apply --check "$AUDIO_ACCESS_PATCH"
+    git -C "$ROOT/third_party/pipewire" apply "$AUDIO_ACCESS_PATCH"
+fi
+
+if [[ -x "$ROOT/out/host-tools/bin/gdbus-codegen" ]]; then
+    export PATH="$ROOT/out/host-tools/bin:$PATH"
+fi
+
+export PKG_CONFIG_LIBDIR="$TARGET/usr/lib64/pkgconfig:$TARGET/usr/share/pkgconfig"
+export PKG_CONFIG_SYSROOT_DIR="$TARGET"
+export CC="$OPENWAVE_SDK/bin/clang --target=$OPENWAVE_TARGET_TRIPLE --sysroot=$TARGET"
+export AR="$OPENWAVE_SDK/bin/llvm-ar"
+export RANLIB="$OPENWAVE_SDK/bin/llvm-ranlib"
+export STRIP="$OPENWAVE_SDK/bin/llvm-strip"
+
+if [[ ! -x "$ROOT/third_party/alsa-lib/configure" ]]; then
+    (cd "$ROOT/third_party/alsa-lib" && \
+        PATH="$ROOT/out/host-autotools/bin:$PATH" autoreconf -fi)
+fi
+mkdir -p "$OPENWAVE_DEPENDENCY_BUILD/alsa-lib"
+(
+    cd "$OPENWAVE_DEPENDENCY_BUILD/alsa-lib"
+    "$ROOT/third_party/alsa-lib/configure" \
+        --host="$OPENWAVE_AUTOTOOLS_HOST" --build=x86_64-pc-linux-gnu \
+        --prefix=/usr --libdir=/usr/lib64 --disable-static --enable-shared \
+        --with-configdir=/usr/share/alsa
+    make -j "$JOBS"
+    make DESTDIR="$TARGET" install
+)
+
+meson_setup() {
+    local build="$1" source="$2"
+    shift 2
+    if [[ -f "$build/build.ninja" ]]; then
+        meson setup --reconfigure "$build" "$source" "$@"
+    else
+        meson setup "$build" "$source" \
+            --cross-file "$OPENWAVE_MESON_TOOLCHAIN" \
+            --prefix=/usr --libdir=lib64 "$@"
+    fi
+}
+
+meson_setup "$OPENWAVE_DEPENDENCY_BUILD/pipewire" "$ROOT/third_party/pipewire" \
+    -Ddocs=disabled -Dman=disabled -Dexamples=disabled -Dtests=disabled \
+    -Dinstalled_tests=disabled -Dgstreamer=disabled -Dsystemd=disabled \
+    -Dlogind=disabled -Dspa-plugins=enabled -Dalsa=enabled -Ddbus=enabled \
+    -Dudev=enabled -Dpipewire-alsa=enabled \
+    -Dpipewire-jack=disabled -Djack=disabled -Dlibpulse=disabled \
+    -Dlibcamera=disabled -Dv4l2=disabled -Dgsettings=disabled \
+    -Dreadline=disabled -Dpw-cat=disabled -Dsession-managers=[]
+ninja -C "$OPENWAVE_DEPENDENCY_BUILD/pipewire" -j "$JOBS"
+DESTDIR="$TARGET" ninja -C "$OPENWAVE_DEPENDENCY_BUILD/pipewire" install
+
+meson_setup "$OPENWAVE_DEPENDENCY_BUILD/wireplumber" "$ROOT/third_party/wireplumber" \
+    -Dintrospection=disabled -Ddoc=disabled -Dtests=false \
+    -Ddbus-tests=false -Dsystem-lua=false -Dsystemd=disabled \
+    -Delogind=disabled -Dmodules=true -Ddaemon=true -Dtools=true
+ninja -C "$OPENWAVE_DEPENDENCY_BUILD/wireplumber" -j "$JOBS"
+DESTDIR="$TARGET" ninja -C "$OPENWAVE_DEPENDENCY_BUILD/wireplumber" install
+
+# User applications are built by the explicit userspace target.
+
+"$ROOT/linux/scripts/config" --file "$ROOT/out/linux/.config" -e SND_VIRTIO -e SECURITY -e SECURITY_LANDLOCK --set-str EXTRA_FIRMWARE_DIR "$TARGET/lib/firmware"
+PATH="$OPENWAVE_SDK/bin:$PATH" make -C "$ROOT/linux" \
+    O="$ROOT/out/linux" ARCH=x86 LLVM=1 olddefconfig
+PATH="$OPENWAVE_SDK/bin:$PATH" make -C "$ROOT/linux" \
+    O="$ROOT/out/linux" ARCH=x86 LLVM=1 -j "$JOBS" bzImage
+
+echo "Audio stack installed into $TARGET; pack OpenWave.img separately."
+
+)
+
+build_bluetooth_audio() (
+
+source "$ROOT/env.sh" --build
+prepare_llvm
+TOOLCHAIN="$OPENWAVE_SDK/bin"
+SYSROOT="$OPENWAVE_SYSROOT"
+SBC_SOURCE="$ROOT/third_party/sbc-2.2"
+BLUEZ_SOURCE="$ROOT/third_party/bluez"
+PIPEWIRE_SOURCE="$ROOT/third_party/pipewire"
+
+for source in "$SBC_SOURCE/configure" "$BLUEZ_SOURCE/configure" "$PIPEWIRE_SOURCE/meson.build"; do
+    if [[ ! -f "$source" ]]; then
+        echo "Missing source: $source" >&2
+        exit 1
+    fi
+done
+
+for patch in \
+    "$ROOT/userspace/audio-patches/pipewire-1.4.9-clang-const.patch" \
+    "$ROOT/userspace/audio-patches/pipewire-1.4.9-bluez5-clang-const.patch" \
+    "$ROOT/userspace/audio-patches/pipewire-1.4.9-bluez5-release.patch" \
+    "$ROOT/userspace/audio-patches/pipewire-1.4.9-openwave-app-access.patch"; do
+    if ! git -C "$PIPEWIRE_SOURCE" apply --reverse --check "$patch" 2>/dev/null; then
+        git -C "$PIPEWIRE_SOURCE" apply --check "$patch"
+        git -C "$PIPEWIRE_SOURCE" apply "$patch"
+    fi
+done
+
+export CC="$TOOLCHAIN/clang --target=$OPENWAVE_TARGET_TRIPLE --sysroot=$SYSROOT"
+export AR="$TOOLCHAIN/llvm-ar"
+export RANLIB="$TOOLCHAIN/llvm-ranlib"
+export STRIP="$TOOLCHAIN/llvm-strip"
+export PKG_CONFIG_PATH=""
+export PKG_CONFIG_SYSROOT_DIR="$SYSROOT"
+export PKG_CONFIG_LIBDIR="$SYSROOT/usr/lib64/pkgconfig:$SYSROOT/usr/share/pkgconfig"
+
+mkdir -p "$OPENWAVE_DEPENDENCY_BUILD/sbc-openwave" "$OPENWAVE_DEPENDENCY_BUILD/bluez-openwave"
+(
+    cd "$OPENWAVE_DEPENDENCY_BUILD/sbc-openwave"
+    "$SBC_SOURCE/configure" --host="$OPENWAVE_AUTOTOOLS_HOST" \
+        --build=x86_64-pc-linux-gnu --prefix=/usr --libdir=/usr/lib64 \
+        --disable-tools --disable-tester --disable-static
+    make -j "${OPENWAVE_BUILD_JOBS:-4}"
+    make DESTDIR="$SYSROOT" install
+)
+(
+    cd "$OPENWAVE_DEPENDENCY_BUILD/bluez-openwave"
+    "$BLUEZ_SOURCE/configure" --host="$OPENWAVE_AUTOTOOLS_HOST" \
+        --build=x86_64-pc-linux-gnu --prefix=/usr --libdir=/usr/lib64 \
+        --sysconfdir=/etc --localstatedir=/var --disable-cups --disable-midi \
+        --disable-obex --disable-client --disable-tools --disable-monitor \
+        --disable-systemd --disable-manpages --enable-external-ell \
+        --enable-library --with-dbusconfdir=/usr/share \
+        --with-dbussystembusdir=/usr/share/dbus-1/system-services \
+        --with-dbussessionbusdir=/usr/share/dbus-1/services \
+        --with-udevdir=/usr/lib64/udev
+    make -j "${OPENWAVE_BUILD_JOBS:-4}"
+    make DESTDIR="$SYSROOT" install
+)
+
+if [[ -x "$ROOT/out/host-tools/bin/gdbus-codegen" ]]; then
+    export PATH="$ROOT/out/host-tools/bin:$PATH"
+fi
+
+pipewire_options=(
+    -Dbluez5=enabled -Dlibusb=disabled
+    -Dbluez5-backend-hfp-native=disabled -Dbluez5-backend-hsp-native=disabled
+    -Dbluez5-backend-ofono=disabled -Dbluez5-backend-hsphfpd=disabled
+    -Dbluez5-codec-aac=disabled -Dbluez5-codec-aptx=disabled
+    -Dbluez5-codec-ldac=disabled -Dbluez5-codec-lc3=disabled
+    -Dbluez5-codec-lc3plus=disabled -Dbluez5-codec-opus=disabled
+    -Dbluez5-codec-g722=disabled
+)
+if [[ -f "$OPENWAVE_DEPENDENCY_BUILD/pipewire/build.ninja" ]]; then
+    meson configure "$OPENWAVE_DEPENDENCY_BUILD/pipewire" "${pipewire_options[@]}"
+else
+    meson setup "$OPENWAVE_DEPENDENCY_BUILD/pipewire" "$PIPEWIRE_SOURCE" \
+        --cross-file="$OPENWAVE_MESON_TOOLCHAIN" \
+        --prefix=/usr --libdir=lib64 \
+        -Ddocs=disabled -Dman=disabled -Dexamples=disabled -Dtests=disabled \
+        -Dinstalled_tests=disabled -Dgstreamer=disabled -Dsystemd=disabled \
+        -Dlogind=disabled -Dspa-plugins=enabled -Dalsa=enabled -Ddbus=enabled \
+        -Dudev=enabled -Dpipewire-alsa=enabled -Dpipewire-jack=disabled \
+        -Djack=disabled -Dlibpulse=disabled -Dlibcamera=disabled \
+        -Dv4l2=disabled -Dgsettings=disabled -Dreadline=disabled \
+        -Dpw-cat=disabled '-Dsession-managers=[]' "${pipewire_options[@]}"
+fi
+
+if ! command -v gdbus-codegen >/dev/null 2>&1; then
+    echo "The host gdbus-codegen build tool is required" >&2
+    exit 1
+fi
+meson compile -C "$OPENWAVE_DEPENDENCY_BUILD/pipewire" -j "${OPENWAVE_BUILD_JOBS:-4}"
+DESTDIR="$SYSROOT" meson install -C "$OPENWAVE_DEPENDENCY_BUILD/pipewire"
+install -m644 "$ROOT/userspace/config/10-openwave-wireplumber.conf" \
+    "$SYSROOT/etc/wireplumber/wireplumber.conf.d/10-openwave-wireplumber.conf"
+echo "Installed target BlueZ library, SBC, PipeWire BlueZ SPA and WirePlumber configuration."
+
+)
+
+build_browser_engine() (
+# Cross-build browser codecs and WPE; never writes an active disk image.
+source "$ROOT/env.sh" --build
+prepare_llvm
+TARGET="$OPENWAVE_SYSROOT"
+JOBS="${OPENWAVE_BUILD_JOBS:-3}"
+case "${1:-all}" in
+    all|deps|media|engine) ;;
+    *) echo "Usage: $0 browser-engine [all|deps|media|engine]" >&2; exit 2 ;;
+esac
+export PKG_CONFIG_LIBDIR="$TARGET/usr/lib64/pkgconfig:$TARGET/usr/share/pkgconfig"
+export PKG_CONFIG_SYSROOT_DIR="$TARGET"
+export PATH="$ROOT/out/browser-build-tools:$ROOT/out/host-nasm/bin:$PATH"
+
+# OpenWave uses glibc's x86_64 TLS stack guard. Older local LLVM builds
+# treated the new OS triple as needing a nonexistent global guard instead.
+mkdir -p "$ROOT/out"
+"$OPENWAVE_SDK/bin/clang" --target=$OPENWAVE_TARGET_TRIPLE --sysroot="$TARGET" \
+    -fstack-protector-strong -x c -S -o "$ROOT/out/browser-stack-guard.s" - <<'C'
+extern void use_buffer(char *);
+void check_guard(void) { char buffer[32]; use_buffer(buffer); }
+C
+if [[ ${OPENWAVE_TARGET_TRIPLE%%-*} == x86_64 ]] && ! rg -q '%fs:40' "$ROOT/out/browser-stack-guard.s"; then
+    echo "Rebuild LLVM with OpenWave TLS stack-guard support before building media libraries." >&2
+    exit 1
+fi
+
+fetch_tag() {
+    local name="$1" url="$2" tag="$3" commit="$4"
+    if [[ ! -d "$ROOT/third_party/$name/.git" ]]; then
+        git clone --depth 1 --branch "$tag" "$url" "$ROOT/third_party/$name"
+    fi
+    test "$(git -C "$ROOT/third_party/$name" rev-parse HEAD)" = "$commit"
+}
+fetch_tar() {
+    local name="$1" url="$2" sha="$3" archive="$ROOT/third_party/$1.tar.xz"
+    if [[ ! -f "$archive" ]]; then curl --fail --location "$url" -o "$archive"; fi
+    echo "$sha  $archive" | sha256sum --check
+    if [[ ! -d "$ROOT/third_party/$name" ]]; then tar -xf "$archive" -C "$ROOT/third_party"; fi
+}
+meson_setup() {
+    local name="$1" source="$2"
+    shift 2
+    local reconfigure=()
+    if [[ -f "$OPENWAVE_DEPENDENCY_BUILD/$name/build.ninja" ]]; then reconfigure=(--reconfigure); fi
+    meson setup "${reconfigure[@]}" "$OPENWAVE_DEPENDENCY_BUILD/$name" "$source" \
+        --cross-file "$OPENWAVE_MESON_TOOLCHAIN" --prefix=/usr \
+        --libdir=lib64 --buildtype=release "$@"
+}
+
+if [[ "${1:-all}" != engine ]]; then
+    mkdir -p "$ROOT/third_party" "$ROOT/out"
+    if [[ "${1:-all}" != media ]]; then
+    fetch_tar nasm-3.02 https://www.nasm.us/pub/nasm/releasebuilds/3.02/nasm-3.02.tar.xz \
+        87336eba53b4acfe917424ab5d500d2b0054d9f5148d35c2273ccf2cfb712f0d
+    # NASM runs on the build host and is never installed into the target sysroot.
+    if [[ ! -x "$ROOT/out/host-nasm/bin/nasm" ]]; then
+        (cd "$ROOT/third_party/nasm-3.02"; ./configure --prefix="$ROOT/out/host-nasm"; \
+            make -j "$JOBS"; make install)
+    fi
+    fetch_tar dav1d-1.5.4 https://download.videolan.org/pub/videolan/dav1d/1.5.4/dav1d-1.5.4.tar.xz \
+        686616b7c69eb88d44459391ab25cac13b6647a3b288835c5784e71c1514a5c5
+    meson_setup dav1d-openwave "$ROOT/third_party/dav1d-1.5.4" \
+        -Denable_tools=false -Denable_tests=false -Denable_docs=false
+    ninja -C "$OPENWAVE_DEPENDENCY_BUILD/dav1d-openwave" -j "$JOBS"
+    DESTDIR="$TARGET" meson install -C "$OPENWAVE_DEPENDENCY_BUILD/dav1d-openwave" --no-rebuild
+
+    fetch_tag libavif https://github.com/AOMediaCodec/libavif.git v1.4.2 c5240fc79fe5c2407e10afd35f5505ef6333ea49
+    openwave_cmake_configure -S "$ROOT/third_party/libavif" -B "$OPENWAVE_DEPENDENCY_BUILD/libavif-openwave" -G Ninja \
+        -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN" \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib64 \
+        -DBUILD_SHARED_LIBS=ON -DAVIF_CODEC_DAV1D=SYSTEM -DAVIF_LIBYUV=OFF \
+        -DAVIF_BUILD_APPS=OFF -DAVIF_BUILD_TESTS=OFF
+    cmake --build "$OPENWAVE_DEPENDENCY_BUILD/libavif-openwave" --parallel "$JOBS"
+    DESTDIR="$TARGET" cmake --install "$OPENWAVE_DEPENDENCY_BUILD/libavif-openwave"
+
+    fetch_tag libvpx https://github.com/webmproject/libvpx.git v1.15.2 d168454ecd099805c675d4a98c66f4891373302a
+    mkdir -p "$OPENWAVE_DEPENDENCY_BUILD/libvpx-openwave"
+    (cd "$OPENWAVE_DEPENDENCY_BUILD/libvpx-openwave"
+        CC="$OPENWAVE_SDK/bin/clang --target=$OPENWAVE_TARGET_TRIPLE --sysroot=$TARGET" \
+        CXX="$OPENWAVE_SDK/bin/clang++ --target=$OPENWAVE_TARGET_TRIPLE --sysroot=$TARGET" \
+        AR="$OPENWAVE_SDK/bin/llvm-ar" LD="$OPENWAVE_SDK/bin/clang --target=$OPENWAVE_TARGET_TRIPLE --sysroot=$TARGET" \
+        STRIP="$OPENWAVE_SDK/bin/llvm-strip" \
+        "$ROOT/third_party/libvpx/configure" --target=${OPENWAVE_TARGET_TRIPLE%%-*}-linux-gcc \
+            --prefix=/usr --libdir=/usr/lib64 --enable-shared --disable-static \
+            --disable-examples --disable-tools --disable-docs --disable-unit-tests
+        make -j "$JOBS"
+        make DESTDIR="$TARGET" install)
+
+    fi
+
+    fetch_tag gstreamer https://github.com/GStreamer/gstreamer.git 1.28.8 1b2a95a1b72787cda146b46df9605b168e5b683b
+    # GLib's enum/marshal generators are Python scripts that run on the host.
+    mkdir -p "$ROOT/out/browser-build-tools"
+    for tool in glib-mkenums glib-genmarshal; do
+        ln -sf "$TARGET/usr/bin/$tool" "$ROOT/out/browser-build-tools/$tool"
+    done
+    # Explicit plugin selection avoids pulling unrelated GUI stacks into OpenWave.
+    plugins=()
+    # Meson's auto_features is global. Disable unneeded GStreamer plugins
+    # explicitly so FFmpeg can resolve its internal decoder dependencies.
+    while IFS= read -r option; do plugins+=("$option"); done < <(python3 - "$ROOT/third_party/gstreamer" <<'PY'
+import pathlib, re, sys
+common = {'tools', 'tests', 'examples', 'introspection', 'nls', 'doc', 'gtk_doc', 'glib_debug'}
+for module in ('gst-plugins-base', 'gst-plugins-good', 'gst-plugins-bad'):
+    text = (pathlib.Path(sys.argv[1]) / 'subprojects' / module / 'meson.options').read_text()
+    for name in re.findall(r"option\('([^']+)',\s*type\s*:\s*'feature',\s*value\s*:\s*'auto'", text):
+        if name not in common:
+            print(f'-D{module}:{name}=disabled')
+PY
+    )
+    for option in app audioconvert audiomixer audiorate audioresample audiotestsrc \
+        encoding gio playback rawparse subparse tcp typefind videoconvertscale \
+        videorate videotestsrc volume alsa opus ogg vorbis gl; do
+        plugins+=("-Dgst-plugins-base:$option=enabled")
+    done
+    for option in audiofx audioparsers autodetect avi deinterlace dtmf flv \
+        icydemux id3demux imagefreeze interleave isomp4 law level matroska \
+        multifile multipart rtp rtpmanager rtsp udp videobox videocrop \
+        videofilter wavparse jpeg png vpx soup; do
+        plugins+=("-Dgst-plugins-good:$option=enabled")
+    done
+    for option in autoconvert codecalpha codectimestamper ivfparse jpegformat \
+        mpegtsdemux mpegtsmux proxy rtp sdp subenc videoparsers dtls srtp sctp webrtc hls dash opus; do
+        plugins+=("-Dgst-plugins-bad:$option=enabled")
+    done
+    meson_setup gstreamer-openwave "$ROOT/third_party/gstreamer" \
+        -Dauto_features=auto -Dc_args=-mstack-protector-guard=tls \
+        -Dbase=enabled -Dgood=enabled -Dbad=enabled \
+        -Dugly=disabled -Ddevtools=disabled -Dges=disabled -Drtsp_server=disabled \
+        -Dpython=disabled -Dgst-examples=disabled -Dtls=disabled -Dqt5=disabled -Dqt6=disabled \
+        -Dlibav=enabled -Dlibnice=enabled -Dwebrtc=enabled -Dorc=enabled \
+        -Dtools=enabled -Dtests=disabled -Dexamples=disabled -Dintrospection=disabled \
+        -Dgst-plugins-base:gl_api=gles2 -Dgst-plugins-base:gl_platform=egl \
+        -Dgst-plugins-base:gl_winsys=egl,surfaceless,gbm \
+        -Dgst-plugins-good:soup-version=3 -Dgst-plugins-good:soup-lookup-dep=true \
+        -Dgst-plugins-bad:hls-crypto=openssl "${plugins[@]}"
+    test "$(git -C "$ROOT/third_party/gstreamer/subprojects/FFmpeg" rev-parse HEAD)" = cde7209117ec2be9da087b9e5f96d48450fdecd2
+    test "$(git -C "$ROOT/third_party/gstreamer/subprojects/orc" rev-parse HEAD)" = 141218e37a1da2ffa1f3f1c996092f61782f3235
+    local_gudev="$ROOT/third_party/gstreamer/subprojects/libgudev-238"
+    if [[ -d "$local_gudev" ]] && ! rg -q -- '-Wl,--export-dynamic' "$local_gudev/gudev/meson.build"; then
+        patch -d "$local_gudev" -p1 < "$ROOT/userspace/browser-engine-patches/libgudev-clang-linker.patch"
+    fi
+    ninja -C "$OPENWAVE_DEPENDENCY_BUILD/gstreamer-openwave" -j "$JOBS"
+    DESTDIR="$TARGET" meson install -C "$OPENWAVE_DEPENDENCY_BUILD/gstreamer-openwave" --no-rebuild
+fi
+if [[ "${1:-all}" != deps && "${1:-all}" != media ]]; then
+    openwave_cmake_configure -S "$ROOT/OceanLauncher/OceanBrowser/WPEWebKit" \
+        -B "$OPENWAVE_DEPENDENCY_BUILD/wpe-webkit-openwave-release" -G Ninja \
+        -C "$ROOT/cross/openwave-wpe-options.cmake" \
+        -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN" \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib64 \
+        -DCMAKE_PREFIX_PATH="$TARGET/usr" -DQT_HOST_PATH="$OPENWAVE_QT_HOST"
+    cmake --build "$OPENWAVE_DEPENDENCY_BUILD/wpe-webkit-openwave-release" --parallel "$JOBS"
+    DESTDIR="$TARGET" cmake --install "$OPENWAVE_DEPENDENCY_BUILD/wpe-webkit-openwave-release"
+fi
+
+)
+
+build_mdns() (
+
+source "$ROOT/env.sh" --build
+prepare_llvm
+TARGET="$OPENWAVE_SYSROOT"
+BUILD="$OPENWAVE_DEPENDENCY_BUILD"
+mkdir -p "$BUILD" "$ROOT/third_party"
+
+fetch_source() {
+    local package="$1" url="$2" checksum="$3"
+    local archive="$BUILD/$package.tar.gz"
+    if [[ ! -f "$archive" ]]; then
+        curl -L --fail --silent --show-error "$url" -o "$archive"
+    fi
+    printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -
+    if [[ ! -d "$ROOT/third_party/$package" ]]; then
+        tar -xf "$archive" -C "$ROOT/third_party"
+    fi
+}
+
+fetch_source libdaemon-0.14 \
+    https://0pointer.de/lennart/projects/libdaemon/libdaemon-0.14.tar.gz \
+    fd23eb5f6f986dcc7e708307355ba3289abe03cc381fc47a80bca4a50aa6b834
+fetch_source avahi-0.9-rc5 \
+    https://github.com/avahi/avahi/archive/refs/tags/v0.9-rc5.tar.gz \
+    5b0a9d88110b0fc8aaafc5cc0a26e83e7d2a4aca3a36bc27c9b626db7ead27b0
+
+# GitHub's tag archive does not include the generated configure script.
+AVAHI_SOURCE="$ROOT/third_party/avahi-0.9-rc5"
+if [[ ! -f "$AVAHI_SOURCE/configure" ]]; then
+    export PATH="$ROOT/out/host-autopoint/usr/bin:$ROOT/out/host-autotools/bin:$PATH"
+    if [[ -f "$ROOT/out/host-autopoint/usr/share/gettext/archive.dir.tar.xz" ]]; then
+        export gettext_datadir="$ROOT/out/host-autopoint/usr/share/gettext"
+    fi
+    export ACLOCAL_PATH="/usr/share/aclocal${ACLOCAL_PATH:+:$ACLOCAL_PATH}"
+    command -v autoreconf >/dev/null && command -v autopoint >/dev/null || {
+        echo 'Avahi source generation requires host autoreconf and autopoint.' >&2
+        exit 1
+    }
+    python3 - "$AVAHI_SOURCE/configure.ac" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+source = path.read_text()
+source = source.replace(
+    'PKG_CHECK_MODULES([PYGOBJECT],[pygobject-3.0],,\n'
+    '            [AC_MSG_ERROR(Could not find Python GObject)])',
+    'PKG_CHECK_MODULES([PYGOBJECT],[pygobject-3.0])')
+path.write_text(source)
+PY
+    (cd "$AVAHI_SOURCE" && autoreconf -fi)
+fi
+
+export CC="$OPENWAVE_SDK/bin/clang --target=$OPENWAVE_TARGET_TRIPLE --sysroot=$TARGET"
+export AR="$OPENWAVE_SDK/bin/llvm-ar"
+export RANLIB="$OPENWAVE_SDK/bin/llvm-ranlib"
+export PKG_CONFIG_LIBDIR="$TARGET/usr/lib64/pkgconfig"
+export PKG_CONFIG_SYSROOT_DIR="$TARGET"
+
+# These release tarballs predate OpenWave's Autotools tuple. The compiler and
+# sysroot above determine the real target; the alias only satisfies config.sub.
+mkdir -p "$BUILD/libdaemon-openwave"
+cd "$BUILD/libdaemon-openwave"
+"$ROOT/third_party/libdaemon-0.14/configure" \
+    --host="$OPENWAVE_AUTOTOOLS_HOST" --prefix=/usr --libdir=/usr/lib64 \
+    --disable-lynx --disable-examples
+make -j "${OPENWAVE_BUILD_JOBS:-4}"
+make DESTDIR="$TARGET" install
+
+mkdir -p "$BUILD/avahi-openwave-0.9"
+cd "$BUILD/avahi-openwave-0.9"
+# The current OpenWave glibc does not export the global stack guard selected
+# by this toolchain for Avahi; disable that compiler feature for this package.
+export CFLAGS='-O2 -fno-stack-protector'
+"$AVAHI_SOURCE/configure" \
+    --host="$OPENWAVE_AUTOTOOLS_HOST" --prefix=/usr --libdir=/usr/lib64 \
+    --sysconfdir=/etc --localstatedir=/var --runstatedir=/run \
+    --with-distro=lfs --with-xml=expat \
+    --with-dbus-sys=/usr/share/dbus-1/system.d \
+    --with-dbus-system-address=unix:path=/run/dbus/system_bus_socket \
+    --with-avahi-priv-access-group=netdev \
+    --disable-nls --disable-gtk --disable-gtk3 --disable-qt3 --disable-qt4 \
+    --disable-qt5 --disable-gobject --disable-python --disable-pygobject \
+    --disable-python-dbus --disable-mono --disable-monodoc \
+    --disable-doxygen-doc --disable-manpages --disable-autoipd \
+    --disable-compat-libdns_sd --disable-compat-howl --disable-libevent \
+    --disable-gdbm --disable-libsystemd --disable-stack-protector
+make clean
+make -j "${OPENWAVE_BUILD_JOBS:-4}"
+make DESTDIR="$TARGET" install
+
+if ! grep -q '^avahi:' "$OPENWAVE_ROOTFS/etc/group"; then
+    printf 'avahi:x:84:\n' >> "$OPENWAVE_ROOTFS/etc/group"
+fi
+if ! grep -q '^avahi:' "$OPENWAVE_ROOTFS/etc/passwd"; then
+    printf 'avahi:x:84:84:Avahi mDNS:/run/avahi-daemon:/usr/sbin/nologin\n' \
+        >> "$OPENWAVE_ROOTFS/etc/passwd"
+fi
+rm -f "$TARGET/etc/avahi/services/ssh.service" \
+      "$TARGET/etc/avahi/services/sftp-ssh.service"
+install -m644 "$ROOT/userspace/config/avahi-daemon.conf" \
+    "$TARGET/etc/avahi/avahi-daemon.conf"
+
+)
+
+build_selinux() (
+source "$ROOT/env.sh" --build
+prepare_llvm
+local version=3.11 build="$OPENWAVE_DEPENDENCY_BUILD/selinux-3.11"
+local package checksum archive cc ar ranlib cflags
+mkdir -p "$build" "$ROOT/third_party"
+export PKG_CONFIG_SYSROOT_DIR="$OPENWAVE_SYSROOT"
+export PKG_CONFIG_LIBDIR="$OPENWAVE_SYSROOT/usr/lib64/pkgconfig:$OPENWAVE_SYSROOT/usr/lib/pkgconfig:$OPENWAVE_SYSROOT/usr/share/pkgconfig"
+unset PKG_CONFIG_PATH CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH
+pkg-config --exists libpcre2-8 || {
+    echo 'SELinux requires target PCRE2 in the exported SDK.' >&2
+    exit 1
+}
+command -v flex >/dev/null || { echo 'SELinux requires host flex.' >&2; exit 1; }
+# Make recipes execute these commands through a shell; quote SDK paths there.
+printf -v cc '%q --target=%q --sysroot=%q' "$OPENWAVE_SDK/bin/clang" "$OPENWAVE_TARGET_TRIPLE" "$OPENWAVE_SYSROOT"
+printf -v ar '%q' "$OPENWAVE_SDK/bin/llvm-ar"
+printf -v ranlib '%q' "$OPENWAVE_SDK/bin/llvm-ranlib"
+cflags='-O2 -std=gnu17 -fPIC -fstack-protector-strong'
+case "$OPENWAVE_TARGET_TRIPLE" in x86_64-*) cflags+=' -mstack-protector-guard=tls' ;; esac
+local options=("CC=$cc" "AR=$ar" "RANLIB=$ranlib" "CFLAGS=$cflags"
+               'CPPFLAGS=-I../../install/usr/include' 'LDFLAGS=-Wl,-z,relro,-z,now' OS=Linux
+               "ARCH=${OPENWAVE_TARGET_TRIPLE%%-*}" PREFIX=/usr
+               LIBDIR=/usr/lib64 SHLIBDIR=/usr/lib64)
+for package in libsepol libselinux; do
+    case "$package" in
+        libsepol) checksum=79f3d2c88f44b7eb5cf54d9792e03232297e17f97a179163f2750099a00f164d ;;
+        libselinux) checksum=73d419c6e20e874adaa4019372cbd097eecf4d276e13f27ec5e67d35c0bd203c ;;
+    esac
+    archive="$build/$package-$version.tar.gz"
+    if [[ ! -f "$archive" ]]; then
+        curl -L --fail --silent --show-error \
+            "https://github.com/SELinuxProject/selinux/releases/download/$version/$package-$version.tar.gz" \
+            -o "$archive.partial"
+        printf '%s  %s\n' "$checksum" "$archive.partial" | sha256sum -c -
+        mv "$archive.partial" "$archive"
+    fi
+    printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -
+    if [[ ! -d "$ROOT/third_party/$package-$version" ]]; then
+        tar -xf "$archive" -C "$ROOT/third_party"
+    fi
+    if [[ ! -d "$build/$package-$version" ]]; then
+        cp -a "$ROOT/third_party/$package-$version" "$build/"
+    fi
+    # Build just the C libraries, retaining CIL support without language bindings
+    # or policy utilities. Relative DESTDIR also works in paths containing spaces.
+    make -C "$build/$package-$version/src" "${options[@]}" clean
+    if [[ "$package" == libsepol ]]; then
+        make -C "$build/$package-$version/src" "${options[@]}" -j "${OPENWAVE_BUILD_JOBS:-4}"
+        make -C "$build/$package-$version/src" "${options[@]}" DESTDIR=../../install install
+        make -C "$build/$package-$version/include" "${options[@]}" DESTDIR=../../install install
+    else
+        # Its version map includes optional 32-bit compatibility symbols. LLD
+        # needs this upstream-supported flag when those aliases are not built.
+        make -C "$build/$package-$version" "${options[@]}" EXTRA_LD_FLAGS=--undefined-version \
+            SUBDIRS=src -j "${OPENWAVE_BUILD_JOBS:-4}"
+        make -C "$build/$package-$version" "${options[@]}" EXTRA_LD_FLAGS=--undefined-version \
+            SUBDIRS='src include' DESTDIR=../../install install
+    fi
+    install -Dm644 "$build/$package-$version/LICENSE" \
+        "$build/install/usr/share/licenses/$package/LICENSE"
+    if [[ "$package" == libsepol ]]; then
+        sed -n '1,/^ \*\//p' "$build/$package-$version/cil/include/cil/cil.h" \
+            > "$build/install/usr/share/licenses/$package/LICENSE.CIL"
+    fi
+done
+cp -a "$build/install/usr/." "$OPENWAVE_SYSROOT/usr/"
+python3 "$ROOT/scripts/build-openwave-selinux.py" --sdk "$OPENWAVE_SDK" \
+    --target "$OPENWAVE_TARGET_TRIPLE" --stage "$OPENWAVE_RUNTIME_STAGE" \
+    --output "$OPENWAVE_DEPENDENCY_BUILD/selinux-policy"
+)
+
+build_bubblewrap() (
+source "$ROOT/env.sh" --build
+local build="$OPENWAVE_DEPENDENCY_BUILD/bubblewrap" package checksum url archive cc cflags
+mkdir -p "$build" "$ROOT/third_party"
+for package in libcap-2.78 bubblewrap-0.11.1; do
+    case "$package" in
+        libcap-2.78)
+            checksum=0d621e562fd932ccf67b9660fb018e468a683d7b827541df27813228c996bb11
+            url="https://mirrors.edge.kernel.org/pub/linux/libs/security/linux-privs/libcap2/$package.tar.xz" ;;
+        bubblewrap-0.11.1)
+            checksum=c1b7455a1283b1295879a46d5f001dfd088c0bb0f238abb5e128b3583a246f71
+            url="https://github.com/containers/bubblewrap/releases/download/v0.11.1/$package.tar.xz" ;;
+    esac
+    archive="$ROOT/third_party/$package.tar.xz"
+    if [[ ! -f "$archive" ]]; then
+        curl -fL --retry 3 "$url" -o "$archive.partial"
+        printf '%s  %s\n' "$checksum" "$archive.partial" | sha256sum -c -
+        mv "$archive.partial" "$archive"
+    fi
+    printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -
+    if [[ ! -d "$ROOT/third_party/$package" ]]; then tar -xf "$archive" -C "$ROOT/third_party"; fi
+done
+# Apply the pinned-source fix idempotently; the initial root must honor the
+# same SELinux file label as tmpfs mounts requested inside that root.
+local root_label_patch="$ROOT/cross/bubblewrap/root-label.patch"
+if ! patch -d "$ROOT/third_party/bubblewrap-0.11.1" -p1 --dry-run -R <"$root_label_patch" >/dev/null 2>&1; then
+    patch -d "$ROOT/third_party/bubblewrap-0.11.1" -p1 --forward <"$root_label_patch"
+fi
+if [[ ! -d "$build/libcap-2.78" ]]; then cp -a "$ROOT/third_party/libcap-2.78" "$build/"; fi
+printf -v cc '%q --target=%q --sysroot=%q' "$OPENWAVE_SDK/bin/clang" "$OPENWAVE_TARGET_TRIPLE" "$OPENWAVE_SYSROOT"
+cflags='-O2 -fPIC -fstack-protector-strong'
+case "$OPENWAVE_TARGET_TRIPLE" in x86_64-*) cflags+=' -mstack-protector-guard=tls' ;; esac
+local options=("CC=$cc" "BUILD_CC=${OPENWAVE_HOST_CC:-/usr/bin/cc}"
+    "AR=$OPENWAVE_SDK/bin/llvm-ar" "RANLIB=$OPENWAVE_SDK/bin/llvm-ranlib"
+    "OBJCOPY=$OPENWAVE_SDK/bin/llvm-objcopy" "CFLAGS=$cflags" BUILD_CFLAGS=-O2
+    'LDFLAGS=-Wl,-z,relro,-z,now' GOLANG=no PAM_CAP=no PTHREADS=no USE_GPERF=no
+    prefix=/usr lib=lib64 "FAKEROOT=$OPENWAVE_SYSROOT")
+make -C "$build/libcap-2.78/libcap" "${options[@]}" -j "${OPENWAVE_BUILD_JOBS:-4}"
+make -C "$build/libcap-2.78/libcap" "${options[@]}" install
+local configure=()
+if [[ -f "$build/bwrap/meson-private/coredata.dat" ]]; then configure+=(--reconfigure); fi
+env -u CC -u CXX -u CFLAGS -u CXXFLAGS -u LDFLAGS -u PKG_CONFIG_PATH \
+    meson setup "${configure[@]}" "$build/bwrap" "$ROOT/third_party/bubblewrap-0.11.1" \
+        --cross-file "$OPENWAVE_MESON_TOOLCHAIN" --prefix=/usr --libdir=lib64 --buildtype=release \
+        -Dselinux=enabled -Dtests=false -Dman=disabled -Dbash_completion=disabled -Dzsh_completion=disabled \
+        -Dinstall_rpath=/usr/lib64
+meson compile -C "$build/bwrap" -j "${OPENWAVE_BUILD_JOBS:-4}"
+DESTDIR="$OPENWAVE_SYSROOT" meson install -C "$build/bwrap"
+for package in libcap-2.78 bubblewrap-0.11.1; do
+    install -Dm644 "$ROOT/third_party/$package/License" "$OPENWAVE_SYSROOT/usr/share/licenses/$package/LICENSE" 2>/dev/null \
+        || install -Dm644 "$ROOT/third_party/$package/COPYING" "$OPENWAVE_SYSROOT/usr/share/licenses/$package/LICENSE"
+done
+)
+
+build_packaging() (
+source "$ROOT/env.sh" --build
+local build="$OPENWAVE_DEPENDENCY_BUILD/packaging" jobs="${OPENWAVE_BUILD_JOBS:-4}"
+export LC_ALL=C
+local cc cxx
+mkdir -p "$build" "$ROOT/third_party"
+printf -v cc '%q --target=%q --sysroot=%q' "$OPENWAVE_SDK/bin/clang" "$OPENWAVE_TARGET_TRIPLE" "$OPENWAVE_SYSROOT"
+
+fetch() {
+    local name="$1" suffix="$2" url="$3" checksum="$4" directory="${5:-$1}"
+    local archive="$ROOT/third_party/$name.$suffix"
+    if [[ ! -f "$archive" ]]; then
+        curl -fL --retry 3 --silent --show-error "$url" -o "$archive.partial"
+        printf '%s  %s\n' "$checksum" "$archive.partial" | sha256sum -c - >/dev/null
+        mv "$archive.partial" "$archive"
+    fi
+    printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c - >/dev/null
+    if [[ ! -d "$ROOT/third_party/$directory" ]]; then tar -xf "$archive" -C "$ROOT/third_party"; fi
+}
+cmake_dep() {
+    local name="$1" source="$2"; shift 2
+    openwave_cmake_configure -S "$source" -B "$build/$name" -G "${CMAKE_DEP_GENERATOR:-Ninja}" \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN" \
+        -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib64 -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DCMAKE_INSTALL_RPATH=/usr/lib64 -DBUILD_TESTING=OFF "$@" >"$build/$name.configure.log" 2>&1 \
+        || { tail -n 40 "$build/$name.configure.log" >&2; return 1; }
+    cmake --build "$build/$name" --parallel "$jobs" >"$build/$name.build.log" 2>&1 \
+        || { tail -n 40 "$build/$name.build.log" >&2; return 1; }
+    DESTDIR="$OPENWAVE_SYSROOT" cmake --install "$build/$name" >"$build/$name.install.log" 2>&1
+    echo "built $name"
+}
+license() {
+    local name="$1" file; shift
+    for file in "$@"; do
+        if [[ -f "$ROOT/third_party/$name/$file" ]]; then
+            install -Dm644 "$ROOT/third_party/$name/$file" "$OPENWAVE_SYSROOT/usr/share/licenses/$name/$(basename "$file")"
+        fi
+    done
+}
+
+fetch zstd-1.5.7 tar.gz https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz \
+    eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
+fetch xz-5.8.4 tar.xz https://github.com/tukaani-project/xz/releases/download/v5.8.4/xz-5.8.4.tar.xz \
+    4ce24038fd4221e0d13bc1a2de7a4db56e90b92b3bf75321f6c14be73f65de4b
+fetch popt-1.19 tar.gz http://ftp.rpm.org/popt/releases/popt-1.x/popt-1.19.tar.gz \
+    c25a4838fc8e4c1c8aacb8bd620edb3084a3d63bf8987fdad3ca2758c63240f9
+fetch libarchive-3.8.11 tar.xz https://github.com/libarchive/libarchive/releases/download/v3.8.11/libarchive-3.8.11.tar.xz \
+    a3dc0872b1b39da34dc18ef1b944f0f11ffd37425d70ae04be679279f1cf43d2
+fetch lua-5.4.8 tar.gz https://www.lua.org/ftp/lua-5.4.8.tar.gz \
+    4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae
+fetch file-5.46 tar.gz https://astron.com/pub/file/file-5.46.tar.gz \
+    c9cc77c7c560c543135edc555af609d5619dbef011997e988ce40a3d75d86088
+fetch rpm-4.19.1.1 tar.bz2 https://ftp.osuosl.org/pub/rpm/releases/rpm-4.19.x/rpm-4.19.1.1.tar.bz2 \
+    874091b80efe66f9de8e3242ae2337162e2d7131e3aa4ac99ac22155e9c521e5
+fetch libsolv-0.7.41 tar.gz https://github.com/openSUSE/libsolv/archive/refs/tags/0.7.41.tar.gz \
+    38b4ee1924f8bd1ec0f6b2ec147e4c54c6deac132db5f90b4214b43ccd32fdd6
+fetch curl-8.23.0 tar.xz https://curl.se/download/curl-8.23.0.tar.xz \
+    8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5
+fetch fmt-12.2.1 tar.gz https://github.com/fmtlib/fmt/archive/refs/tags/12.2.1.tar.gz \
+    449374d74f31b67796dece454d59b93e6f1538efcce0e9ac78000c98142c139e
+fetch json-c-json-c-0.19-20260627 tar.gz https://github.com/json-c/json-c/archive/refs/tags/json-c-0.19-20260627.tar.gz \
+    f17a6d7d265cf840dfd8f0f46a606d98c6b5b26dc7cfe27275d1546a213086c8
+fetch toml11-4.4.0 tar.gz https://github.com/ToruNiina/toml11/archive/refs/tags/v4.4.0.tar.gz \
+    815bfe6792aa11a13a133b86e7f0f45edc5d71eb78f5fb6686c49c7f792b9049
+fetch librepo-1.20.0 tar.gz https://github.com/rpm-software-management/librepo/archive/refs/tags/1.20.0.tar.gz \
+    c21dd3caefe97ea58bc865f92095a9d2db2ec8aab49d0c714d4742094db930b6
+fetch dnf5-5.4.8.0 tar.gz https://github.com/rpm-software-management/dnf5/archive/refs/tags/5.4.8.0.tar.gz \
+    09f279af798d01073873affb61d7d0ed999f0297e6491b7ffb84c6d755680292
+echo "sources verified"
+
+local only="${PACKAGING_ONLY:-}"
+step() { [[ -z "$only" || " $only " == *" $1 "* ]]; }
+
+if step zstd; then cmake_dep zstd "$ROOT/third_party/zstd-1.5.7/build/cmake" \
+    -DZSTD_BUILD_PROGRAMS=OFF -DZSTD_BUILD_TESTS=OFF -DZSTD_BUILD_CONTRIB=OFF \
+    -DZSTD_BUILD_STATIC=OFF -DZSTD_BUILD_SHARED=ON -DZSTD_LEGACY_SUPPORT=OFF; license zstd-1.5.7 LICENSE COPYING; fi
+if step xz; then cmake_dep xz "$ROOT/third_party/xz-5.8.4" -DBUILD_SHARED_LIBS=ON \
+    -DXZ_TOOL_XZ=OFF -DXZ_TOOL_XZDEC=OFF -DXZ_TOOL_LZMADEC=OFF -DXZ_TOOL_LZMAINFO=OFF \
+    -DXZ_TOOL_SCRIPTS=OFF -DXZ_NLS=OFF -DXZ_DOXYGEN=OFF; license xz-5.8.4 COPYING; fi
+if step popt; then
+    mkdir -p "$build/popt" && cd "$build/popt"
+    env CC="$cc" AR="$OPENWAVE_SDK/bin/llvm-ar" RANLIB="$OPENWAVE_SDK/bin/llvm-ranlib" CFLAGS='-O2 -fPIC' \
+        "$ROOT/third_party/popt-1.19/configure" --host="$OPENWAVE_AUTOTOOLS_HOST" --prefix=/usr --libdir=/usr/lib64 \
+        --disable-static --disable-nls >"$build/popt.configure.log" 2>&1
+    make -j "$jobs" >"$build/popt.build.log" 2>&1
+    make DESTDIR="$OPENWAVE_SYSROOT" install >"$build/popt.install.log" 2>&1
+    echo "built popt"; license popt-1.19 COPYING; cd "$ROOT"; fi
+if step libarchive; then cmake_dep libarchive "$ROOT/third_party/libarchive-3.8.11" \
+    -DENABLE_TAR=OFF -DENABLE_CPIO=OFF -DENABLE_CAT=OFF -DENABLE_UNZIP=OFF -DENABLE_TEST=OFF \
+    -DENABLE_OPENSSL=OFF -DENABLE_BZip2=OFF -DENABLE_LZMA=ON -DENABLE_ZSTD=ON -DENABLE_ZLIB=ON \
+    -DENABLE_LZ4=OFF -DENABLE_LIBXML2=OFF -DENABLE_EXPAT=OFF -DENABLE_PCREPOSIX=OFF -DENABLE_PCRE2POSIX=OFF \
+    -DENABLE_ACL=OFF -DENABLE_XATTR=OFF -DENABLE_ICONV=OFF -DENABLE_LIBB2=OFF -DENABLE_CNG=OFF \
+    -DENABLE_MBEDTLS=OFF -DENABLE_NETTLE=OFF -DBUILD_SHARED_LIBS=ON; license libarchive-3.8.11 COPYING; fi
+if step lua; then
+    local lua="$build/lua-5.4.8"
+    rm -rf "$lua"; cp -a "$ROOT/third_party/lua-5.4.8" "$lua"
+    make -C "$lua/src" -j "$jobs" liblua.a CC="$cc -std=gnu99" AR="$OPENWAVE_SDK/bin/llvm-ar rcu" \
+        RANLIB="$OPENWAVE_SDK/bin/llvm-ranlib" MYCFLAGS='-fPIC -O2' MYLIBS= SYSCFLAGS='-DLUA_USE_POSIX' \
+        >"$build/lua.build.log" 2>&1
+    install -Dm644 "$lua/src/liblua.a" "$OPENWAVE_SYSROOT/usr/lib64/liblua5.4.a"
+    install -dm755 "$OPENWAVE_SYSROOT/usr/include/lua5.4"
+    install -m644 "$lua/src/lua.h" "$lua/src/luaconf.h" "$lua/src/lualib.h" "$lua/src/lauxlib.h" "$lua/src/lua.hpp" \
+        "$OPENWAVE_SYSROOT/usr/include/lua5.4/"
+    install -Dm644 /dev/stdin "$OPENWAVE_SYSROOT/usr/lib64/pkgconfig/lua5.4.pc" <<'LUAPC'
+prefix=/usr
+libdir=${prefix}/lib64
+includedir=${prefix}/include/lua5.4
+Name: Lua
+Description: Lua 5.4 (static, no dynamic module loading)
+Version: 5.4.8
+Libs: -L${libdir} -llua5.4 -lm
+Cflags: -I${includedir}
+LUAPC
+    echo "built lua"; license lua-5.4.8 doc/readme.html; fi
+if step file; then
+    local host="$build/file-host"
+    if [[ ! -x "$host/bin/file" ]]; then
+        mkdir -p "$host/obj"; (cd "$host/obj" && env -u CC -u CFLAGS "$ROOT/third_party/file-5.46/configure" \
+            --prefix="$host" --disable-shared --disable-libseccomp --disable-zlib --disable-bzlib \
+            --disable-xzlib --disable-zstdlib --disable-lzlib >"$build/file-host.configure.log" 2>&1 \
+            && make -j "$jobs" >"$build/file-host.build.log" 2>&1 && make install >/dev/null 2>&1)
+    fi
+    mkdir -p "$build/file" && cd "$build/file"
+    env CC="$cc" AR="$OPENWAVE_SDK/bin/llvm-ar" RANLIB="$OPENWAVE_SDK/bin/llvm-ranlib" CFLAGS='-O2 -fPIC' \
+        "$ROOT/third_party/file-5.46/configure" --host="$OPENWAVE_AUTOTOOLS_HOST" --prefix=/usr --libdir=/usr/lib64 \
+        --disable-static --disable-libseccomp --disable-bzlib --disable-xzlib --disable-zstdlib --disable-lzlib \
+        >"$build/file.configure.log" 2>&1
+    make -j "$jobs" FILE_COMPILE="$host/bin/file" >"$build/file.build.log" 2>&1
+    make DESTDIR="$OPENWAVE_SYSROOT" install FILE_COMPILE="$host/bin/file" >"$build/file.install.log" 2>&1
+    rm -f "$OPENWAVE_SYSROOT/usr/bin/file"
+    echo "built file/libmagic"; license file-5.46 COPYING; cd "$ROOT"; fi
+if step rpm; then
+    local patch="$ROOT/cross/rpm/cmake-fixes.patch"
+    if ! patch -d "$ROOT/third_party/rpm-4.19.1.1" -p1 --dry-run -R <"$patch" >/dev/null 2>&1; then
+        patch -d "$ROOT/third_party/rpm-4.19.1.1" -p1 --forward <"$patch" >/dev/null
+    fi
+    CMAKE_DEP_GENERATOR="Unix Makefiles" cmake_dep rpm "$ROOT/third_party/rpm-4.19.1.1" \
+    -DCMAKE_INSTALL_SYSCONFDIR=/etc -DCMAKE_INSTALL_LOCALSTATEDIR=/var \
+    -DENABLE_PYTHON=OFF -DENABLE_NLS=OFF -DENABLE_OPENMP=OFF -DENABLE_TESTSUITE=OFF -DENABLE_PLUGINS=ON \
+    -DENABLE_CUTF8=OFF -DENABLE_WERROR=OFF -DENABLE_BDB_RO=OFF -DENABLE_NDB=ON -DENABLE_SQLITE=ON \
+    -DWITH_INTERNAL_OPENPGP=ON -DWITH_OPENSSL=ON -DWITH_ARCHIVE=ON \
+    -DWITH_CAP=ON -DWITH_ACL=OFF -DWITH_SELINUX=ON -DWITH_DBUS=OFF -DWITH_AUDIT=OFF -DWITH_FSVERITY=OFF \
+    -DWITH_IMAEVM=OFF -DWITH_FAPOLICYD=OFF -DWITH_READLINE=OFF \
+    -DLUA_INCLUDE_DIR="$OPENWAVE_SYSROOT/usr/include/lua5.4" -DLUA_LIBRARY="$OPENWAVE_SYSROOT/usr/lib64/liblua5.4.a"
+    license rpm-4.19.1.1 COPYING; fi
+if step libsolv; then cmake_dep libsolv "$ROOT/third_party/libsolv-0.7.41" \
+    -DENABLE_STATIC=OFF -DDISABLE_SHARED=OFF -DENABLE_RPMDB=ON -DENABLE_RPMDB_LIBRPM=ON -DENABLE_RPMMD=ON \
+    -DENABLE_COMPS=ON -DENABLE_COMPLEX_DEPS=ON -DENABLE_ZSTD_COMPRESSION=ON -DENABLE_LZMA_COMPRESSION=ON \
+    -DENABLE_BZIP2_COMPRESSION=OFF -DENABLE_ZCHUNK_COMPRESSION=OFF -DENABLE_HELIXREPO=OFF -DENABLE_SUSEREPO=OFF \
+    -DENABLE_DEBIAN=OFF -DENABLE_ARCHREPO=OFF -DENABLE_CUDFREPO=OFF -DENABLE_APPDATA=OFF -DENABLE_PYTHON=OFF \
+    -DENABLE_PERL=OFF -DENABLE_RUBY=OFF -DENABLE_TCL=OFF -DWITH_LIBXML2=ON -DWITHOUT_COOKIEOPEN=OFF \
+    -DUSE_VENDORDIRS=OFF -DMULTI_SEMANTICS=OFF -DFEDORA=ON -DENABLE_CONDA=OFF; license libsolv-0.7.41 LICENSE.BSD; fi
+if step curl; then cmake_dep curl "$ROOT/third_party/curl-8.23.0" -DBUILD_SHARED_LIBS=ON -DBUILD_STATIC_LIBS=OFF \
+    -DBUILD_CURL_EXE=OFF -DCURL_USE_OPENSSL=ON -DCURL_USE_LIBPSL=OFF -DCURL_USE_LIBSSH2=OFF -DCURL_USE_LIBSSH=OFF \
+    -DUSE_NGHTTP2=OFF -DCURL_BROTLI=OFF -DCURL_ZSTD=OFF -DCURL_ZLIB=ON -DCURL_DISABLE_LDAP=ON -DCURL_DISABLE_LDAPS=ON \
+     -DCURL_DISABLE_TFTP=ON -DCURL_DISABLE_TELNET=ON -DCURL_DISABLE_DICT=ON -DCURL_DISABLE_GOPHER=ON \
+    -DCURL_DISABLE_IMAP=ON -DCURL_DISABLE_POP3=ON -DCURL_DISABLE_SMTP=ON -DCURL_DISABLE_RTSP=ON -DCURL_DISABLE_MQTT=ON \
+    -DCURL_DISABLE_SMB=ON -DENABLE_CURL_MANUAL=OFF -DENABLE_UNIX_SOCKETS=ON -DCURL_CA_BUNDLE=/etc/ssl/cert.pem; \
+    license curl-8.23.0 COPYING; fi
+if step fmt; then cmake_dep fmt "$ROOT/third_party/fmt-12.2.1" -DBUILD_SHARED_LIBS=ON -DFMT_TEST=OFF -DFMT_DOC=OFF \
+    -DFMT_INSTALL=ON; license fmt-12.2.1 LICENSE; fi
+if step json-c; then cmake_dep json-c "$ROOT/third_party/json-c-json-c-0.19-20260627" -DBUILD_SHARED_LIBS=ON \
+    -DBUILD_STATIC_LIBS=OFF -DBUILD_APPS=OFF -DDISABLE_WERROR=ON; license json-c-json-c-0.19-20260627 COPYING; fi
+if step toml11; then cmake_dep toml11 "$ROOT/third_party/toml11-4.4.0" -Dtoml11_BUILD_TEST=OFF; license toml11-4.4.0 LICENSE; fi
+if step librepo; then
+    cmake_dep librepo "$ROOT/third_party/librepo-1.20.0" -DUSE_GPGME=OFF -DWITH_ZCHUNK=OFF \
+    -DCURL_LIBRARY="$OPENWAVE_SYSROOT/usr/lib64/libcurl.so" -DCURL_INCLUDE_DIR="$OPENWAVE_SYSROOT/usr/include" \
+    -DCMAKE_SHARED_LINKER_FLAGS=-Wl,--no-undefined \
+    -DENABLE_TESTS=OFF -DENABLE_DOCS=OFF -DENABLE_EXAMPLES=OFF -DENABLE_PYTHON=OFF -DENABLE_SELINUX=OFF; \
+    license librepo-1.20.0 COPYING; fi
+if step libdnf5; then
+    local patch="$ROOT/cross/libdnf5/libcxx-compat.patch"
+    if ! patch -d "$ROOT/third_party/dnf5-5.4.8.0" -p1 --dry-run -R <"$patch" >/dev/null 2>&1; then
+        patch -d "$ROOT/third_party/dnf5-5.4.8.0" -p1 --forward <"$patch" >/dev/null
+    fi
+    cmake_dep libdnf5 "$ROOT/third_party/dnf5-5.4.8.0" --compile-no-warning-as-error \
+    -DWITH_DNF5=OFF -DWITH_DNF5DAEMON_CLIENT=OFF -DWITH_DNF5DAEMON_SERVER=OFF -DWITH_LIBDNF5_CLI=OFF \
+    -DWITH_DNF5_PLUGINS=OFF -DWITH_PLUGIN_ACTIONS=OFF -DWITH_PLUGIN_APPSTREAM=OFF -DWITH_PLUGIN_EXPIRED_PGP_KEYS=OFF \
+    -DWITH_PLUGIN_MANIFEST=OFF -DWITH_PLUGIN_LOCAL=OFF -DWITH_PLUGIN_SYSTEMD_INHIBIT=OFF -DWITH_PYTHON_PLUGINS_LOADER=OFF \
+    -DWITH_DNF5_OBSOLETES_DNF=OFF -DWITH_ACL=OFF -DWITH_COMPS=ON -DWITH_MODULEMD=OFF -DWITH_SYSTEMD=OFF \
+    -DWITH_HTML=OFF -DWITH_MAN=OFF -DWITH_TRANSLATIONS=OFF -DWITH_TESTS=OFF -DWITH_PERL5=OFF -DWITH_PYTHON3=OFF \
+    -DWITH_RUBY=OFF -DWITH_GO=OFF -DWITH_SANITIZERS=OFF; license dnf5-5.4.8.0 COPYING.md; fi
+echo "packaging stack built into $OPENWAVE_SYSROOT"
+)
+
+build_sdk() (
+source "$ROOT/env.sh" --build
+prepare_llvm
+BUILD="$ROOT/out/sdk-$OPENWAVE_TARGET_TRIPLE"
+openwave_cmake_configure -S "$ROOT/userspace/sdk" -B "$BUILD" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN" \
+    -DCMAKE_INSTALL_PREFIX="$OPENWAVE_SDK"
+cmake --build "$BUILD" --parallel "${OPENWAVE_BUILD_JOBS:-4}"
+cmake --install "$BUILD"
+if [[ -d "$ROOT/out/os-sdk/sysroot" && "$OPENWAVE_SDK" == "$ROOT/out/os-sdk" ]]; then
+    python3 "$ROOT/scripts/sync-sdk-sysroot.py" --target "$OPENWAVE_TARGET_TRIPLE"
+fi
+)
+
+build_tzdata() (
+
+source "$ROOT/env.sh" --build
+TZDATA="$ROOT/third_party/tzdata-2026e"
+ZONEINFO="$OPENWAVE_RUNTIME_STAGE/usr/share/zoneinfo"
+ETC="$OPENWAVE_RUNTIME_STAGE/etc"
+TIMEZONE="${OPENWAVE_TIMEZONE:-Europe/Istanbul}"
+
+if [[ ! -f "$TZDATA/version" || "$(<"$TZDATA/version")" != 2026e ]]; then
+    echo "Expected bundled IANA tzdata 2026e at $TZDATA" >&2
+    exit 1
+fi
+if ! command -v zic >/dev/null 2>&1; then
+    echo "The host zic build tool is required to compile portable TZif data" >&2
+    exit 1
+fi
+
+install -d -m755 "$ZONEINFO" "$ETC" "$OPENWAVE_RUNTIME_STAGE/usr/share/licenses/tzdata"
+(
+    cd "$TZDATA"
+    zic -d "$ZONEINFO" \
+        africa antarctica asia australasia europe northamerica southamerica \
+        etcetera factory backward
+)
+
+if [[ ! -f "$ZONEINFO/$TIMEZONE" ]]; then
+    echo "Unknown timezone: $TIMEZONE" >&2
+    exit 1
+fi
+
+install -m644 "$TZDATA"/{zone.tab,zone1970.tab,zonenow.tab,iso3166.tab} "$ZONEINFO/"
+install -m644 "$TZDATA/LICENSE" "$OPENWAVE_RUNTIME_STAGE/usr/share/licenses/tzdata/LICENSE"
+printf '%s\n' "$TIMEZONE" > "$ETC/timezone"
+chmod 644 "$ETC/timezone"
+ln -sfn "../usr/share/zoneinfo/$TIMEZONE" "$ETC/localtime"
+echo "Installed IANA tzdata $(<"$TZDATA/version") with timezone $TIMEZONE"
+)
+
+build_waydroid_bindings() (
+    bash "$ROOT/scripts/build-waydroid-bindings.sh"
+)
+
+build_waydroid_host_deps() (
+    source "$ROOT/env.sh" --build
+    bash "$ROOT/scripts/build-waydroid-bindings.sh"
+    local build="$OPENWAVE_DEPENDENCY_BUILD/waydroid-host"
+    local version=7.3.0
+    local archive="$build/iproute2-$version.tar.xz"
+    local checksum=5c1789d290bba048a6135ed1ab81b0402dd0fb528d1f1421765c42b1fc3d6289
+    local source="$build/iproute2-$version"
+    local iptables_version=1.8.13
+    local iptables_archive="$build/iptables-$iptables_version.tar.xz"
+    local iptables_checksum=1afcd33da9e8f913ace6a2126788162e207e26f5d5e29c6573c0e581ffc58b99
+    local iptables_source="$build/iptables-$iptables_version"
+    local waydroid_source="$ROOT/third_party/waydroid"
+    local package="$build/waydroid-package"
+    local cc
+    mkdir -p "$build"
+
+    if [[ ! -f "$archive" ]]; then
+        curl -fL --retry 3 \
+            "https://www.kernel.org/pub/linux/utils/net/iproute2/iproute2-$version.tar.xz" \
+            -o "$archive.partial"
+        printf '%s  %s\n' "$checksum" "$archive.partial" | sha256sum -c -
+        mv "$archive.partial" "$archive"
+    fi
+    printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -
+    if [[ ! -d "$source" ]]; then
+        mkdir -p "$source"
+        tar -xf "$archive" --strip-components=1 -C "$source"
+    fi
+    printf -v cc '%q --target=%q --sysroot=%q' \
+        "$OPENWAVE_SDK/bin/clang" "$OPENWAVE_TARGET_TRIPLE" "$OPENWAVE_SYSROOT"
+    rm -f "$source/config.mk"
+    (cd "$source" && \
+        CC="$cc" AR="$OPENWAVE_SDK/bin/llvm-ar" \
+        RANLIB="$OPENWAVE_SDK/bin/llvm-ranlib" \
+        PKG_CONFIG=/usr/bin/pkg-config \
+        PKG_CONFIG_SYSROOT_DIR="$OPENWAVE_SYSROOT" \
+        PKG_CONFIG_LIBDIR="$OPENWAVE_SYSROOT/usr/lib64/pkgconfig:$OPENWAVE_SYSROOT/usr/lib/pkgconfig:$OPENWAVE_SYSROOT/usr/share/pkgconfig" \
+        ./configure)
+    make -C "$source/lib" CC="$cc" AR="$OPENWAVE_SDK/bin/llvm-ar" \
+        RANLIB="$OPENWAVE_SDK/bin/llvm-ranlib" \
+        ADDLIB="mpls_ntop.o mpls_pton.o" \
+        CFLAGS="--target=$OPENWAVE_TARGET_TRIPLE --sysroot=$OPENWAVE_SYSROOT -O2 -fPIC -I../include -I../include/uapi -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -DHAVE_SETNS -DHAVE_HANDLE_AT -DRESOLVE_HOSTNAMES -DLIBDIR=\\\"/usr/lib/iproute2\\\" -DCONF_USR_DIR=\\\"/usr/share/iproute2\\\" -DCONF_ETC_DIR=\\\"/etc/iproute2\\\" -DNETNS_RUN_DIR=\\\"/var/run/netns\\\" -DNETNS_ETC_DIR=\\\"/etc/netns\\\" -DARPDDIR=\\\"/var/lib/arpd\\\" -DCONF_COLOR=COLOR_OPT_NEVER" \
+        -j"${OPENWAVE_BUILD_JOBS:-4}"
+    make -C "$source/ip" CC="$cc" AR="$OPENWAVE_SDK/bin/llvm-ar" \
+        RANLIB="$OPENWAVE_SDK/bin/llvm-ranlib" \
+        LIBNETLINK="../lib/libutil.a ../lib/libnetlink.a" \
+        LDLIBS="../lib/libutil.a ../lib/libnetlink.a -L$OPENWAVE_SYSROOT/usr/lib64 -lmnl -lselinux -lcap -ldl" \
+        CFLAGS="--target=$OPENWAVE_TARGET_TRIPLE --sysroot=$OPENWAVE_SYSROOT -O2 -fPIC -I../include -I../include/uapi -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE -DHAVE_SETNS -DHAVE_HANDLE_AT -DRESOLVE_HOSTNAMES -DLIBDIR=\\\"/usr/lib/iproute2\\\" -DCONF_USR_DIR=\\\"/usr/share/iproute2\\\" -DCONF_ETC_DIR=\\\"/etc/iproute2\\\" -DNETNS_RUN_DIR=\\\"/var/run/netns\\\" -DNETNS_ETC_DIR=\\\"/etc/netns\\\" -DARPDDIR=\\\"/var/lib/arpd\\\" -DCONF_COLOR=COLOR_OPT_NEVER" \
+        -j"${OPENWAVE_BUILD_JOBS:-4}" ip
+    install -Dm755 "$source/ip/ip" "$OPENWAVE_RUNTIME_STAGE/sbin/ip"
+    install -d "$OPENWAVE_RUNTIME_STAGE/usr/share/iproute2"
+    find "$source/etc/iproute2" -maxdepth 1 -type f -exec \
+        install -m644 -t "$OPENWAVE_RUNTIME_STAGE/usr/share/iproute2" {} +
+    if [[ ! -f "$iptables_archive" ]]; then
+        curl -fL --retry 3 \
+            "https://www.netfilter.org/pub/iptables/iptables-$iptables_version.tar.xz" \
+            -o "$iptables_archive.partial"
+        printf '%s  %s\n' "$iptables_checksum" "$iptables_archive.partial" | sha256sum -c -
+        mv "$iptables_archive.partial" "$iptables_archive"
+    fi
+    printf '%s  %s\n' "$iptables_checksum" "$iptables_archive" | sha256sum -c -
+    if [[ ! -d "$iptables_source" ]]; then
+        mkdir -p "$iptables_source"
+        tar -xf "$iptables_archive" --strip-components=1 -C "$iptables_source"
+    fi
+    if [[ ! -x "$iptables_source/configure" ]]; then
+        (cd "$iptables_source" && ./autogen.sh)
+    fi
+    if [[ ! -f "$iptables_source/Makefile" ]]; then
+        (cd "$iptables_source" && \
+            CC="$cc" CFLAGS="--target=$OPENWAVE_TARGET_TRIPLE --sysroot=$OPENWAVE_SYSROOT -O2 -fPIC" \
+            LDFLAGS="--target=$OPENWAVE_TARGET_TRIPLE --sysroot=$OPENWAVE_SYSROOT -L$OPENWAVE_SYSROOT/usr/lib64" \
+            ./configure --host=x86_64-unknown-linux-gnu --prefix=/usr \
+                --sbindir=/usr/sbin --libdir=/usr/lib64 \
+                --disable-nftables --disable-devel --disable-bpf-compiler)
+    fi
+    make -C "$iptables_source" CC="$cc" \
+        CFLAGS="--target=$OPENWAVE_TARGET_TRIPLE --sysroot=$OPENWAVE_SYSROOT -O2 -fPIC" \
+        LDFLAGS="--target=$OPENWAVE_TARGET_TRIPLE --sysroot=$OPENWAVE_SYSROOT -L$OPENWAVE_SYSROOT/usr/lib64" \
+        -j"${OPENWAVE_BUILD_JOBS:-4}"
+    make -C "$iptables_source" DESTDIR="$OPENWAVE_RUNTIME_STAGE" install
+
+    local commit=5b7e2e71be3f6bfaaaab3b461251dacaf1ce4991
+    if [[ "$(git -C "$waydroid_source" rev-parse HEAD)" != "$commit" ]] \
+        || [[ -n "$(git -C "$waydroid_source" status --porcelain)" ]]; then
+        echo "Refusing to package Waydroid: source is not clean at $commit" >&2
+        exit 1
+    fi
+    rm -rf "$package"
+    mkdir -p "$package"
+    git -C "$waydroid_source" archive "$commit" | tar -x -C "$package"
+    make -C "$package" install DESTDIR="$OPENWAVE_RUNTIME_STAGE" \
+        USE_SYSTEMD=0 USE_DBUS_ACTIVATION=0 USE_NFTABLES=0
+    python3 "$ROOT/userspace/waydroid/prepare_apparmor_free.py" \
+        --package "$OPENWAVE_RUNTIME_STAGE"
+    python3 "$ROOT/userspace/waydroid/verify_upstream_package.py" \
+        --source "$waydroid_source" --package "$OPENWAVE_RUNTIME_STAGE" \
+        --no-dbus-activation \
+        > "$build/upstream-integrity.json"
+)
+
+# Compile the image-mount helper without configuring the native GUI. This is
+# intentionally a separate acceptance gate: missing WaterRouge UI libraries
+# must not prevent us from testing an unrelated staged SELinux helper.
+build_waydroid_mount() (
+source "$ROOT/env.sh" --build
+if (($#)); then
+    echo "Usage: ./build-openwave waydroid-mount" >&2
+    exit 2
+fi
+BUILD="$ROOT/out/waydroid-mount-$OPENWAVE_TARGET_TRIPLE"
+openwave_cmake_configure -S "$ROOT/userspace/waydroid/mount-helper" -B "$BUILD" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN" \
+    -DCMAKE_INSTALL_PREFIX=/usr
+cmake --build "$BUILD" --target waydroid-mount --parallel "${OPENWAVE_BUILD_JOBS:-4}"
+DESTDIR="$OPENWAVE_RUNTIME_STAGE" cmake --install "$BUILD"
+[[ -x "$OPENWAVE_RUNTIME_STAGE/usr/libexec/openwave-waydroid/waydroid-mount" ]] || {
+    echo "Stage 2A helper did not install to the runtime staging tree" >&2
+    exit 1
+}
+)
+
+build_userspace() (
+
+source "$ROOT/env.sh" --build
+BUILD="$ROOT/out/userspace-$OPENWAVE_TARGET_TRIPLE"
+MPG123_BUILD="$OPENWAVE_DEPENDENCY_BUILD/mpg123"
+if (($#)); then
+    echo "Usage: ./build-openwave userspace" >&2
+    exit 2
+fi
+
+build_waydroid_host_deps
+
+prepare_llvm
+
+openwave_cmake_configure -S "$ROOT/third_party/mpg123-1.33.7/ports/cmake" -B "$MPG123_BUILD" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN" \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DCMAKE_INSTALL_LIBDIR=lib64 \
+    -DBUILD_SHARED_LIBS=ON \
+    -DBUILD_LIBOUT123=OFF \
+    -DBUILD_PROGRAMS=OFF \
+    -DNETWORK=OFF \
+    -DNO_LAYER1=ON \
+    -DNO_LAYER2=ON
+cmake --build "$MPG123_BUILD" --parallel "${OPENWAVE_BUILD_JOBS:-4}"
+DESTDIR="$OPENWAVE_SYSROOT" cmake --install "$MPG123_BUILD"
+
+"$ROOT/build-openwave" sdk
+if [[ ! -x "$OPENWAVE_SYSROOT/usr/bin/bwrap" ]]; then build_bubblewrap; fi
+
+openwave_cmake_configure -S "$ROOT/userspace" -B "$BUILD" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN" \
+    -DQT_HOST_PATH="$OPENWAVE_QT_HOST" \
+    -DQT_HOST_PATH_CMAKE_DIR="$OPENWAVE_QT_HOST/lib/cmake" \
+    -DCMAKE_INSTALL_PREFIX=/usr
+cmake --build "$BUILD" --parallel "${OPENWAVE_BUILD_JOBS:-4}"
+DESTDIR="$OPENWAVE_RUNTIME_STAGE" cmake --install "$BUILD"
+
+if [[ -f "$ROOT/Marisa Stole Her Precious Thing.mp3" ]]; then
+    install -d -m755 "$OPENWAVE_RUNTIME_STAGE/Data/Users/root/Musics"
+    install -m644 "$ROOT/Marisa Stole Her Precious Thing.mp3" \
+        "$OPENWAVE_RUNTIME_STAGE/Data/Users/root/Musics/Marisa Stole her Precious Thing.mp3"
+fi
+
+"$ROOT/build-openwave" tzdata
+
+)
+
+build_rootfs() (
+    if (($#)); then
+        echo "Usage: ./build-openwave rootfs" >&2
+        exit 2
+    fi
+    source "$ROOT/env.sh" --build
+    python3 "$ROOT/scripts/assemble-openwave-rootfs.py"
+)
+
+build_image() (
+# fakeroot is only a metadata tool here, never the deployable staging directory.
+RUNTIME_INPUT="${1:?Usage: ./build-openwave image ROOTFS NEW_IMAGE}"
+while [[ "$RUNTIME_INPUT" != / && "$RUNTIME_INPUT" == */ ]]; do
+    RUNTIME_INPUT="${RUNTIME_INPUT%/}"
+done
+if [[ -L "$RUNTIME_INPUT" ]]; then
+    echo "Refusing symlinked runtime root: $RUNTIME_INPUT" >&2
+    exit 1
+fi
+RUNTIME="$(realpath -- "$RUNTIME_INPUT")"
+IMAGE="${2:?Specify a new image path}"
+[[ -f "$RUNTIME/init" && -f "$RUNTIME/System/Applications/com.openwave.shell/bin/ocean-launcher" ]]
+if [[ -e "$IMAGE" || -L "$IMAGE" ]]; then
+    echo "Refusing to overwrite existing image: $IMAGE" >&2
+    exit 1
+fi
+python3 "$ROOT/scripts/prepare-openwave-boot.py" --rootfs "$RUNTIME" \
+    --sdk "${OPENWAVE_SDK:-$ROOT/toolchain}" \
+    --target "${OPENWAVE_TARGET_TRIPLE:-x86_64-unknown-openwave}"
+OPENWAVE_OPENRC_ROOT="$RUNTIME" python3 "$ROOT/userspace/openrc/validate_openrc.py"
+mkdir -p -- "$(dirname -- "$IMAGE")"
+TEMP_IMAGE="$(mktemp "${IMAGE}.tmp.XXXXXX")"
+LABELED_IMAGE="${TEMP_IMAGE}.labeled"
+trap 'rm -f -- "$TEMP_IMAGE" "$LABELED_IMAGE"' EXIT
+truncate -s "${OPENWAVE_IMAGE_SIZE:-2G}" "$TEMP_IMAGE"
+OPENWAVE_IMAGE_BUILDER_UID="$(id -u)" OPENWAVE_IMAGE_BUILDER_GID="$(id -g)" fakeroot -- bash -Eeuo pipefail -c '
+    python3 "$3" "$1"
+    if [[ -x "$1/usr/libexec/dbus-daemon-launch-helper" ]]; then
+        messagebus_gid="$(awk -F: '\''$1 == "messagebus" { print $3; exit }'\'' "$1/etc/group")"
+        [[ "$messagebus_gid" =~ ^[0-9]+$ ]]
+        chown 0:"$messagebus_gid" "$1/usr/libexec/dbus-daemon-launch-helper"
+        chmod 4750 "$1/usr/libexec/dbus-daemon-launch-helper"
+    fi
+    mke2fs -q -t ext4 -L OpenWave -d "$1" "$2"
+' _ "$RUNTIME" "$TEMP_IMAGE" "$ROOT/scripts/image-owners.py"
+debugfs -w -R 'sif <2> mode 040755' "$TEMP_IMAGE" >/dev/null
+e2fsck -fn "$TEMP_IMAGE"
+python3 "$ROOT/scripts/build-openwave-selinux.py" --verify-only \
+    --sdk "${OPENWAVE_SDK:-$ROOT/toolchain}" \
+    --target "${OPENWAVE_TARGET_TRIPLE:-x86_64-unknown-openwave}" --stage "$RUNTIME"
+python3 "$ROOT/scripts/openwave-label-ext4.py" --rootfs "$RUNTIME" \
+    --image "$TEMP_IMAGE" --output "$LABELED_IMAGE"
+python3 "$ROOT/scripts/build-openwave-selinux.py" --verify-only \
+    --sdk "${OPENWAVE_SDK:-$ROOT/toolchain}" \
+    --target "${OPENWAVE_TARGET_TRIPLE:-x86_64-unknown-openwave}" --stage "$RUNTIME"
+ln -- "$LABELED_IMAGE" "$IMAGE"
+mv -- "${LABELED_IMAGE}.label.log" "${IMAGE}.label.log"
+echo "Created runtime image: $IMAGE"
+)
+
+build_test_permissions() (
+    source "$ROOT/env.sh" --build
+    python3 "$ROOT/userspace/permissiond/tests/run-qemu.py" "$1"
+)
+
+build_test_selinux() (
+    source "$ROOT/env.sh" --build
+    python3 "$ROOT/userspace/security/selinux/tests/run-qemu.py" "$1"
+)
+
+build_test_appd() (
+TASK_ROOT="$ROOT"
+cd "$TASK_ROOT"
+source "$ROOT/env.sh" --build
+QA_IMAGE="${1:?Usage: ./build-openwave test-appd NEW_TEST_IMAGE}"
+[[ ! -e "$QA_IMAGE" ]] || { echo "Refusing to overwrite $QA_IMAGE" >&2; exit 1; }
+QA_OUTPUT="$TASK_ROOT/out/appd-validation"
+mkdir -p "$QA_OUTPUT"
+./build-openwave userspace > "$QA_OUTPUT/build.log" 2>&1
+for project in appd/tests application-client/tests; do
+    build="$QA_OUTPUT/$(basename "$(dirname "$project")")-tests"
+    openwave_cmake_configure -S "userspace/$project" -B "$build" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN"
+    cmake --build "$build" --parallel "${OPENWAVE_BUILD_JOBS:-4}"
+done
+./build-openwave rootfs
+./build-openwave image "$OPENWAVE_ROOTFS" "$QA_IMAGE"
+python3 "$ROOT/userspace/appd/tests/prepare.py" "$OPENWAVE_ROOTFS" "$QA_OUTPUT"
+QA_COMMANDS="$(mktemp "$QA_OUTPUT/install.XXXXXX")"
+trap 'rm -f -- "$QA_COMMANDS"' EXIT
+cat > "$QA_COMMANDS" <<EOF
+write "$OPENWAVE_ROOTFS/init" /init.openwave
+rm /init
+write "$QA_OUTPUT/appd-tests/appd-qa-init" /init
+write "$QA_OUTPUT/appd-tests/appd-qa" /usr/libexec/appd-qa
+sif /usr/libexec/appd-qa mode 0100755
+write "$QA_OUTPUT/appd-tests/appd-folder-tests" /usr/libexec/appd-folder-tests
+sif /usr/libexec/appd-folder-tests mode 0100755
+write "$QA_OUTPUT/application-client-tests/application-channel-tests" /usr/libexec/application-channel-tests
+write "$QA_OUTPUT/application-client-tests/application-layout-tests" /usr/libexec/application-layout-tests
+write "$OPENWAVE_SYSROOT/usr/lib/libQt6Test.so.6" /usr/lib/libQt6Test.so.6
+rm /System/Applications/com.openwave.settings/manifest.json
+write "$QA_OUTPUT/settings-manifest.json" /System/Applications/com.openwave.settings/manifest.json
+sif /System/Applications/com.openwave.settings/manifest.json mode 0100644
+write "$QA_OUTPUT/settings-icon.png" /System/Applications/com.openwave.settings/share/icons/icon.png
+sif /System/Applications/com.openwave.settings/share/icons/icon.png mode 0100644
+EOF
+debugfs -w -f "$QA_COMMANDS" "$QA_IMAGE"
+./run-openwave --image "$QA_IMAGE" --usb-wifi none --usb-bluetooth none \
+    --audio-backend none --vnc-host 127.0.0.1 --vnc-port "${APPD_QA_VNC_PORT:-5909}" run \
+    > "$QA_OUTPUT/qemu.log" 2>&1
+rg -q 'APPD_QA_RESULT failures=0' "$QA_OUTPUT/qemu.log"
+rg -q 'APPD_QA_EXIT=0' "$QA_OUTPUT/qemu.log"
+echo "appd QEMU validation passed: $QA_OUTPUT/qemu.log"
+)
+
+build_test_browser_input() (
+TASK_ROOT="$ROOT"
+cd "$TASK_ROOT"
+source "$ROOT/env.sh" --build
+QA_IMAGE="${1:?Usage: ./build-openwave test-browser-input NEW_TEST_IMAGE}"
+[[ ! -e "$QA_IMAGE" ]] || { echo "Refusing to overwrite $QA_IMAGE" >&2; exit 1; }
+QA_OUTPUT="$TASK_ROOT/out/browser-touch-validation"
+mkdir -p "$QA_OUTPUT"
+./build-openwave userspace > "$QA_OUTPUT/build.log" 2>&1
+openwave_cmake_configure -S OceanLauncher/OceanBrowser/tests -B "$QA_OUTPUT/tests" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$OPENWAVE_CMAKE_TOOLCHAIN"
+cmake --build "$QA_OUTPUT/tests" --target browser-input-tests browser-input-init --parallel "${OPENWAVE_BUILD_JOBS:-4}"
+./build-openwave rootfs
+./build-openwave image "$OPENWAVE_ROOTFS" "$QA_IMAGE"
+cat > "$QA_OUTPUT/input-test.json" <<'EOF'
+{"schemaVersion":1,"id":"org.openwave.qa.browser-input","name":"Browser input tests","version":"1","executable":"bin/browser-input-tests","runtime":"openwave-qt","sandbox":{"enabled":true,"profile":"standard"},"permissions":[]}
+EOF
+QA_COMMANDS="$(mktemp "$QA_OUTPUT/install.XXXXXX")"
+trap 'rm -f -- "$QA_COMMANDS"' EXIT
+cat > "$QA_COMMANDS" <<EOF
+write "$OPENWAVE_ROOTFS/init" /init.openwave
+rm /init
+write "$QA_OUTPUT/tests/browser-input-init" /init
+sif /init mode 0100755
+mkdir /Applications/org.openwave.qa.browser-input
+sif /Applications/org.openwave.qa.browser-input mode 040755
+mkdir /Applications/org.openwave.qa.browser-input/bin
+sif /Applications/org.openwave.qa.browser-input/bin mode 040755
+write "$QA_OUTPUT/tests/browser-input-tests" /Applications/org.openwave.qa.browser-input/bin/browser-input-tests
+sif /Applications/org.openwave.qa.browser-input/bin/browser-input-tests mode 0100755
+write "$QA_OUTPUT/input-test.json" /Applications/org.openwave.qa.browser-input/manifest.json
+sif /Applications/org.openwave.qa.browser-input/manifest.json mode 0100644
+write "$OPENWAVE_SYSROOT/usr/lib/libQt6Test.so.6" /usr/lib/libQt6Test.so.6
+EOF
+debugfs -w -f "$QA_COMMANDS" "$QA_IMAGE"
+./run-openwave --image "$QA_IMAGE" --usb-wifi none --usb-bluetooth none \
+    --audio-backend none --vnc-host 127.0.0.1 --vnc-port "${BROWSER_INPUT_VNC_PORT:-5910}" run \
+    > "$QA_OUTPUT/qemu.log" 2>&1
+rg -q 'BROWSER_INPUT_QA_EXIT=0' "$QA_OUTPUT/qemu.log"
+echo "Browser input QEMU validation passed: $QA_OUTPUT/qemu.log"
+)
+
+COMMAND="${1:-help}"
+if (($#)); then shift; fi
+if [[ "$COMMAND" == help || "$COMMAND" == --help || "$COMMAND" == -h || "${1:-}" == --help || "${1:-}" == -h ]]; then
+    usage
+    exit 0
+fi
+# Standalone OpenRC cross-build; never builds or assembles an image/rootfs.
+if [[ "$COMMAND" == openrc ]]; then
+    if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != --clean ]]; }; then
+        usage >&2
+        exit 2
+    fi
+    exec bash "$ROOT/userspace/openrc/build-openrc.sh" "$@"
+fi
+
+case "$COMMAND" in
+    libdbus|udev|libmnl|qt|qtwayland|util-linux|busybox|wpe-qt-adapter|check-deps|audio|bluetooth-audio|mdns|selinux|bubblewrap|packaging|sdk|tzdata|llvm-patch|llvm|kernel|sysroot|cross-files|graphics)
+        if (($# != 0)); then usage >&2; exit 2; fi
+        ;;
+    base-libs)
+        if (($# > 1)); then usage >&2; exit 2; fi
+        case "${1:-}" in ''|openssl|pcre2|libxcrypt|libffi|libpng|libjpeg-turbo) ;; *) usage >&2; exit 2 ;; esac
+        ;;
+    browser-engine)
+        if (($# > 1)); then usage >&2; exit 2; fi
+        case "${1:-all}" in all|deps|media|engine) ;; *) usage >&2; exit 2 ;; esac
+        ;;
+    waydroid-host-deps|waydroid-bindings|waydroid-mount)
+        if (($# != 0)); then usage >&2; exit 2; fi
+        ;;
+    userspace|all)
+        if (($# != 0)); then usage >&2; exit 2; fi
+        ;;
+    rootfs)
+        if (($# != 0)); then usage >&2; exit 2; fi
+        ;;
+    image)
+        if (($# != 2)); then usage >&2; exit 2; fi
+        ;;
+    test-appd|test-browser-input|test-permissions|test-selinux)
+        if (($# != 1)); then usage >&2; exit 2; fi
+        ;;
+    *) usage >&2; exit 2 ;;
+esac
+"build_${COMMAND//-/_}" "$@"

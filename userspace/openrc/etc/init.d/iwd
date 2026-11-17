@@ -1,0 +1,16 @@
+#!/sbin/openrc-run
+description="Wireless daemon"
+command="/usr/libexec/iwd"
+command_background="yes"
+pidfile="/run/openwave/iwd.pid"
+output_log="/run/openwave/iwd.stdout.log"
+error_log="/run/openwave/iwd.stderr.log"
+export DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
+
+start_post() {
+    /System/Services/openwave-wait-dbus system net.connman.iwd
+}
+
+depend() {
+	need dbus udevd openwave-runtime
+}
