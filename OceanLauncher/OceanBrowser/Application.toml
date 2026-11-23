@@ -1,0 +1,16 @@
+schema = 1
+id = "com.openwave.ocean"
+name = "Browser"
+version = "0.1.0"
+kind = "application"
+executable = "bin/ocean"
+runtime = "openwave-qt"
+icon = "share/icons/Icon.svg"
+single_instance = true
+accepts_paths = false
+
+[sandbox]
+profile = "standard"
+
+[permissions]
+request = []

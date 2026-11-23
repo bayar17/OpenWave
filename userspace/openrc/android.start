@@ -1,0 +1,52 @@
+#!/bin/sh
+case " $(cat /proc/cmdline) " in *' openwave.qa=waydroid '*) exit 0 ;; esac
+case " $(cat /proc/cmdline) " in *' openwave.android=1 '*) ;; *) exit 0 ;; esac
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+export PYTHONDONTWRITEBYTECODE=1
+LOG=/run/openwave/android-start.log
+exec >>"$LOG" 2>&1
+say() { printf 'openwave-android: %s\n' "$*"; printf 'openwave-android: %s\n' "$*" >/dev/console; }
+fail() { say "FAILED: $*"; exit 1; }
+
+/sbin/rc-service waydroid-runtime start || fail "runtime provisioning"
+if [ ! -f /var/lib/waydroid/waydroid.cfg ]; then
+    [ -s /usr/share/waydroid-extra/images/system.img ] && [ -s /usr/share/waydroid-extra/images/vendor.img ] \
+        || fail "no preinstalled Android images"
+    say "first start: initializing Waydroid from the preinstalled images"
+    /usr/bin/waydroid init -i /usr/share/waydroid-extra/images \
+        -c https://ota.waydro.id/system \
+        -v https://ota.waydro.id/vendor \
+        -r lineage -s VANILLA || fail "waydroid init"
+    /usr/bin/umount /dev/binderfs
+    /usr/bin/python3.14 -I /usr/libexec/openwave-waydroid-binder.py || fail "binder devices"
+fi
+/sbin/rc-service pipewire-pulse start || fail "pipewire-pulse"
+/sbin/rc-service waydroid start || fail "Waydroid manager"
+/System/Services/openwave-wait-dbus system id.waydro.Container || fail "Waydroid manager is not on the bus"
+/lib/rc/bin/checkpath -d -o waydroid:waydroid -m 0700 /var/lib/waydroid-user/data || fail "Android data directory"
+tries=0
+while [ ! -S /run/user/1000/wayland-0 ] && [ "$tries" -lt 60 ]; do
+    /bin/busybox sleep 1; tries=$((tries + 1))
+done
+[ -S /run/user/1000/wayland-0 ] || fail "Ocean's Wayland socket did not appear"
+/usr/bin/python3.14 - <<'PY' || fail "container start"
+import os
+import dbus
+
+assert os.getuid() == os.geteuid() == 0
+session = {
+    'user_name': 'waydroid', 'user_id': '990', 'group_id': '990',
+    'host_user': '/var/lib/waydroid-user', 'pid': str(os.getpid()),
+    'xdg_data_home': '/var/lib/waydroid-user',
+    'xdg_runtime_dir': '/run/waydroid',
+    'wayland_display': '/run/user/1000/wayland-0',
+    'pulse_runtime_path': '/run/user/1000/pulse',
+    'waydroid_user_state': '/var/lib/waydroid-user',
+    'waydroid_data': '/var/lib/waydroid-user/data',
+    'state': 'STOPPED', 'lcd_density': '0', 'background_start': 'true',
+}
+manager = dbus.Interface(dbus.SystemBus().get_object(
+    'id.waydro.Container', '/ContainerManager'), 'id.waydro.ContainerManager')
+manager.Start(dbus.Dictionary(session, signature='ss'), timeout=120)
+PY
+say "Android container started; applications appear in Ocean once Android has booted"

@@ -1,0 +1,16 @@
+schema = 1
+id = "com.openwave.files"
+name = "Files"
+version = "0.1.0"
+kind = "application"
+executable = "bin/ocean-files"
+runtime = "openwave-qt"
+icon = "share/icons/icon.svg"
+single_instance = true
+accepts_paths = true
+
+[sandbox]
+profile = "standard"
+
+[permissions]
+request = ["openwave.android-storage"]

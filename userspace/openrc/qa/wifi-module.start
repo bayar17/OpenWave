@@ -1,0 +1,56 @@
+#!/bin/sh
+case " $(cat /proc/cmdline) " in *' openwave.qa=wifi-module '*) ;; *) exit 0 ;; esac
+exec >/dev/console 2>&1
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+printf 'WIFI_MODULE_QA BEGIN enforcing=%s\n' "$(cat /sys/fs/selinux/enforce)"
+app_log=/run/openwave/appd.stderr.log
+shot_seq=0
+shot() {
+    shot_seq=$((shot_seq + 1))
+    log=/run/user/1000/openwave-logs/ocean.stderr.log
+    pid=$(/bin/busybox pidof ocean-launcher | /bin/busybox cut -d' ' -f1)
+    [ -n "$pid" ] || return 0
+    kill -USR1 "$pid"
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        /bin/busybox grep -q "OCEAN_QA_SHOT_END seq=$shot_seq\$" "$log" && break
+        /bin/busybox sleep 0.5
+    done
+    /bin/busybox awk -v name="$1" -v seq="$shot_seq" '
+        $0 ~ "^OCEAN_QA_SHOT_BEGIN seq=" seq " " { on = 1; print "WAYDROID_QA_SHOT_BEGIN name=" name " " $0; next }
+        on && $0 ~ "^OCEAN_QA_SHOT_DATA " { line = "WAYDROID_QA_SHOT_DATA " substr($0, 20); print line; print line; next }
+        on && $0 ~ "^OCEAN_QA_SHOT_END seq=" seq "$" { print "WAYDROID_QA_SHOT_END name=" name; exit }
+        $0 ~ "^OCEAN_QA_SHOT_FAILED seq=" seq "$" { print "WAYDROID_QA_SHOT_FAILED name=" name; exit }' "$log"
+}
+attempt=0
+until /System/Services/openwave-launch com.openwave.settings >/dev/null 2>&1; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 60 ]; then
+        printf 'WIFI_MODULE_QA_FAIL could not launch Settings\n'
+        exit 1
+    fi
+    sleep 1
+done
+printf 'WIFI_MODULE_QA launched after %s attempts\n' "$attempt"
+sleep 38
+printf 'WIFI_MODULE_QA SCREEN\n'
+dmesg -n 1
+shot wifi-module-a
+sleep 1
+shot wifi-module-b
+sleep 1
+shot wifi-module-c
+sleep 1
+/usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Applications --object-path /org/openwave/Applications --method org.openwave.Applications1.Terminate com.openwave.settings >/dev/null 2>&1
+attempt=0
+while ! grep -q 'WIFI_MODULE_QA PASS\|WIFI_MODULE_QA_FAIL' "$app_log" 2>/dev/null; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 120 ]; then
+        printf 'WIFI_MODULE_QA_FAIL no result from Settings\n'
+        grep -a 'ocean-settings\|qml' "$app_log" | tail -20
+        break
+    fi
+    sleep 0.5
+done
+grep -a 'appId=com.openwave.settings' "$app_log" | sed 's/\\n/\n/g' | grep -a 'WIFI_MODULE_QA'
+dmesg | grep -a -i 'avc.*ocean-settings'
+printf 'WIFI_MODULE_QA END enforcing=%s\n' "$(cat /sys/fs/selinux/enforce)"

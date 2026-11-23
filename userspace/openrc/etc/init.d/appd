@@ -1,0 +1,42 @@
+#!/sbin/openrc-run
+description="OpenWave application catalog and launcher service"
+command="/System/Services/appd"
+command_background="yes"
+pidfile="/run/openwave/appd.pid"
+output_log="/run/openwave/appd.stdout.log"
+error_log="/run/openwave/appd.stderr.log"
+export XDG_CONFIG_HOME="/var/lib/openwave"
+export XDG_STATE_HOME="/var/lib/openwave/state"
+export XDG_RUNTIME_DIR="/run/user/1000"
+export DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/bus"
+
+depend() {
+	need dbus openwave-session-bus openwave-portal
+}
+
+start_pre() {
+	/System/Services/openwave-register-service-identity --invalidate appd || return 1
+}
+
+start_post() {
+	/System/Services/openwave-register-service-identity appd || return 1
+	/System/Services/openwave-wait-dbus system org.openwave.Applications || return 1
+	# Name ownership can precede the end of initialization. An RPC reply is
+	# delivered by appd's main loop after it publishes its readiness marker.
+	/usr/bin/gdbus call --system --timeout 3 \
+		--dest org.openwave.Applications --object-path /org/openwave/Applications \
+		--method org.openwave.Applications1.ListApplications >/dev/null || return 1
+	[ -s /run/openwave/appd/ready ] || {
+		eerror "appd owns its D-Bus name but has no readiness marker"
+		return 1
+	}
+	[ "$(cat /run/openwave/appd/ready)" = "$(cat "$pidfile")" ] || {
+		eerror "appd readiness marker does not match its supervised process"
+		return 1
+	}
+}
+
+stop_post() {
+	/System/Services/openwave-register-service-identity --invalidate appd
+}

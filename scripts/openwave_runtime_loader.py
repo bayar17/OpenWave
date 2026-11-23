@@ -1,0 +1,183 @@
+"""Make staged x86_64 libraries visible to the target loader's default search."""
+import hashlib
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+
+TARGET = 'x86_64-unknown-openwave'
+
+
+def guest_path(root, path):
+    pending = str(path).lstrip('/').split('/')
+    parts, links = [], 0
+    while pending:
+        part = pending.pop(0)
+        if part in ('', '.'):
+            continue
+        if part == '..':
+            if parts:
+                parts.pop()
+            continue
+        candidate = root.joinpath(*parts, part)
+        if candidate.is_symlink():
+            links += 1
+            if links > 40:
+                raise RuntimeError(f'Guest symlink loop: {path}')
+            target = os.readlink(candidate)
+            if target.startswith('/'):
+                parts = []
+            pending = target.split('/') + pending
+        else:
+            parts.append(part)
+    return root.joinpath(*parts)
+
+
+def directory_path(root, relative):
+    if root.is_symlink() or not root.is_dir():
+        raise RuntimeError(f'Invalid runtime root: {root}')
+    current = root
+    for part in Path(relative).parts:
+        current /= part
+        if current.is_symlink() or (current.exists() and not current.is_dir()):
+            raise RuntimeError(f'Unsafe runtime library directory: {current}')
+    return current
+
+
+def elf_header(path):
+    if not path.is_file():
+        return b''
+    with path.open('rb') as stream:
+        return stream.read(20)
+
+
+def x86_64_elf(path):
+    header = elf_header(path)
+    return header[:6] == b'\x7fELF\x02\x01' and header[18:20] == b'\x3e\x00'
+
+
+def library_aliases(root, target=TARGET):
+    if target != TARGET:
+        raise RuntimeError('Default loader aliases currently support x86_64 only')
+    root = Path(root).absolute()
+    for relative in ('lib', 'lib64', 'usr/lib', 'usr/lib64'):
+        directory_path(root, relative)
+    candidates = {}
+    for relative in ('lib', 'usr/lib'):
+        directory = root / relative
+        if not directory.exists():
+            continue
+        for entry in sorted(directory.iterdir()):
+            if '.so' not in entry.name:
+                continue
+            resolved = guest_path(root, '/' + entry.relative_to(root).as_posix())
+            if not resolved.is_file():
+                raise RuntimeError(f'Broken runtime library: {entry}')
+            header = elf_header(resolved)
+            if header[:4] != b'\x7fELF':
+                continue  # Linker scripts are not runtime DSOs.
+            if not x86_64_elf(resolved) or header[16:18] != b'\x03\x00':
+                raise RuntimeError(f'Expected an x86_64 shared library: {entry}')
+            digest = hashlib.sha256(resolved.read_bytes()).digest()
+            if entry.name in candidates and candidates[entry.name][1] != digest:
+                raise RuntimeError(f'Conflicting runtime library: {entry.name}')
+            candidates[entry.name] = (resolved, digest)
+    additions = []
+    for name, (source, digest) in candidates.items():
+        for relative in ('lib64', 'usr/lib64'):
+            destination = root / relative / name
+            if destination.exists() or destination.is_symlink():
+                resolved = guest_path(root, '/' + destination.relative_to(root).as_posix())
+                if not resolved.is_file() or hashlib.sha256(resolved.read_bytes()).digest() != digest:
+                    raise RuntimeError(f'Conflicting loader default library: {destination}')
+        destination = root / 'usr/lib64' / name
+        if not (destination.exists() or destination.is_symlink()):
+            additions.append((destination, os.path.relpath(source, destination.parent)))
+    # Validate every collision before changing the staging tree.
+    (root / 'usr/lib64').mkdir(parents=True, exist_ok=True)
+    for destination, target_path in additions:
+        destination.symlink_to(target_path)
+    return [str(path.relative_to(root)) for path, _ in additions]
+
+
+def guest_runner(root):
+    """Determine the command prefix to execute a command inside the guest root."""
+    root = Path(root).absolute()
+    bwrap = shutil.which('bwrap')
+    if bwrap:
+        return [bwrap, '--ro-bind', str(root), '/']
+
+    use_sudo = os.environ.get('OPENWAVE_LOADER_USE_SUDO') == '1'
+    chroot = shutil.which('chroot')
+    if use_sudo:
+        sudo = shutil.which('sudo')
+        if not sudo or not chroot:
+            raise RuntimeError('sudo and chroot are required for privileged loader verification')
+        return [sudo, '-n', chroot, str(root)]
+
+    unshare = shutil.which('unshare')
+    if unshare and chroot:
+        return [unshare, '-Ur', chroot, str(root)]
+    raise RuntimeError('Loader verification requires host bwrap, unshare/chroot, or sudo/chroot')
+
+
+def loader_list(root, program):
+    """Run the target loader inside the guest root, with no environment override."""
+    root = Path(root).absolute()
+    loader = guest_path(root, '/lib64/ld-linux-x86-64.so.2')
+    executable = guest_path(root, program)
+    if not x86_64_elf(loader) or not x86_64_elf(executable):
+        raise RuntimeError(f'Missing x86_64 loader or executable: {program}')
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith('LD_') and key != 'GLIBC_TUNABLES'}
+    # Set LD_* only inside the guest, after the host tools have started. glibc
+    # elf/rtld.c trace mode with LD_WARN and LD_BIND_NOW checks lazy relocations
+    # using __RTLD_NOIFUNC, then exits before application constructors/main.
+    # --list alone skips that check and can miss stale client-library symbols.
+    prefix = guest_runner(root)
+    command = prefix + [
+        '/bin/busybox',
+        'env',
+        'LD_TRACE_LOADED_OBJECTS=1',
+        'LD_WARN=1',
+        'LD_BIND_NOW=1',
+        '/lib64/ld-linux-x86-64.so.2',
+        '--inhibit-cache',
+        program,
+    ]
+
+    result = subprocess.run(
+        command,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    # glibc trace mode may return zero even for undefined symbols or missing
+    # symbol versions. Unversioned providers produce a distinct warning; keep
+    # that visible while requiring every relocation to resolve successfully.
+    errors = [line for line in result.stderr.splitlines()
+              if line.strip() and not re.fullmatch(
+                  r'.+: no version information available \(required by .+\)', line)]
+    fatal = re.search(r'not found|undefined symbol:|symbol lookup error:|error while loading',
+                      result.stdout)
+    if result.returncode or errors or fatal:
+        raise RuntimeError(f'Target loader dependency check failed: {program}\n'
+                           f'{result.stdout}{result.stderr}')
+    return result.stdout + result.stderr
+
+
+def verify_core_loader(root):
+    programs = {'/init', '/sbin/openrc-init', '/sbin/openrc-run', '/bin/busybox',
+                '/usr/bin/dbus-daemon', '/usr/bin/gdbus', '/usr/bin/udevadm',
+                '/usr/sbin/udevd', '/usr/sbin/acpid', '/usr/bin/mount', '/usr/bin/umount'}
+    for relative in ('System/Services', 'System/Applications'):
+        for path in (root / relative).rglob('*'):
+            if os.access(path, os.X_OK) and x86_64_elf(path):
+                programs.add('/' + path.relative_to(root).as_posix())
+    for program in sorted(programs):
+        trace = loader_list(root, program)
+        for line in trace.splitlines():
+            if 'no version information available' in line:
+                print(f'Loader warning: {line}')
+    return len(programs)

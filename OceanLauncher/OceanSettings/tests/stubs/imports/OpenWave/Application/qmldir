@@ -1,0 +1,2 @@
+module OpenWave.Application
+WRApplicationWindow 1.0 WRApplicationWindow.qml

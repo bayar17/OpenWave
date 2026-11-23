@@ -1,0 +1,26 @@
+#!/sbin/openrc-run
+description="OpenWave permission broker"
+command="/System/Services/permissiond"
+command_background="yes"
+pidfile="/run/openwave/permissiond.pid"
+output_log="/run/openwave/permissiond.stdout.log"
+error_log="/run/openwave/permissiond.stderr.log"
+export DBUS_SYSTEM_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/bus"
+
+depend() {
+	need dbus openwave-session-bus appd
+}
+
+start_pre() {
+	/System/Services/openwave-register-service-identity --invalidate permissiond || return 1
+}
+
+start_post() {
+	/System/Services/openwave-register-service-identity permissiond || return 1
+	/System/Services/openwave-wait-dbus system org.openwave.Permissions
+}
+
+stop_post() {
+	/System/Services/openwave-register-service-identity --invalidate permissiond
+}

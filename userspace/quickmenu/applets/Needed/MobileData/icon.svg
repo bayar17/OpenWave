@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80">
+  <g fill="white">
+    <circle cx="8" cy="40" r="7"/><circle cx="24" cy="40" r="7"/>
+    <circle cx="40" cy="40" r="7"/><circle cx="56" cy="40" r="7"/>
+    <circle cx="72" cy="40" r="7"/>
+  </g>
+</svg>

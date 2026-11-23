@@ -1,0 +1,16 @@
+<node>
+  <interface name="org.openwave.ApplicationServices1">
+    <method name="Subscribe">
+      <arg name="correlation" type="s" direction="in"/>
+      <arg name="sequence" type="t" direction="out"/>
+      <arg name="user" type="u" direction="out"/>
+      <arg name="session" type="s" direction="out"/>
+      <arg name="applications" type="aa{sv}" direction="out"/>
+      <arg name="instances" type="aa{sv}" direction="out"/>
+    </method>
+    <signal name="LifecycleEvent">
+      <arg name="correlation" type="s"/><arg name="sequence" type="t"/>
+      <arg name="event" type="s"/><arg name="identity" type="a{sv}"/>
+    </signal>
+  </interface>
+</node>

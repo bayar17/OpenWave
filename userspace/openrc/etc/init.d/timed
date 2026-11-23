@@ -1,0 +1,9 @@
+#!/sbin/openrc-run
+description="OpenWave time service"
+command="/System/Services/timed"
+command_background="yes"
+pidfile="/run/openwave/timed.pid"
+
+depend() {
+	need dbus
+}

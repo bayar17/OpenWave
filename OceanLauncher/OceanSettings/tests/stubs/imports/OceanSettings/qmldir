@@ -1,0 +1,3 @@
+module OceanSettings
+SettingsSymbol 1.0 SettingsSymbol.qml
+SettingsRow 1.0 SettingsRow.qml

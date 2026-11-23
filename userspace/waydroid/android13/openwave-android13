@@ -1,0 +1,135 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+TREE=${OPENWAVE_ANDROID13_TREE:-/mnt/aosp17/lineage20}
+BRANCH=lineage-20.0
+PATCHSET=base-patches-33
+LUNCH=openwave_waydroid_arm64-userdebug
+JOBS=${OPENWAVE_ANDROID13_JOBS:-4}
+
+usage() {
+    cat <<USAGE
+usage: openwave-android13 init|sync|patches|product|status|build-commands
+TREE=$TREE
+USAGE
+}
+
+need_tree() {
+    [ -d "$TREE/.repo" ] || { echo "no repo checkout at $TREE, run init first" >&2; exit 1; }
+}
+
+do_init() {
+    mkdir -p "$TREE"
+    cd "$TREE"
+    if [ ! -d .repo ]; then
+        repo init -u https://github.com/LineageOS/android.git -b "$BRANCH" --git-lfs
+    fi
+    mkdir -p .repo/local_manifests
+    cp -p "$HERE/manifests/00-remotes.xml" "$HERE/manifests/02-waydroid.xml" .repo/local_manifests/
+    python3 - "$TREE" "$HERE/manifests/01-removes.xml" <<'PY'
+import re, subprocess, sys
+tree, src = sys.argv[1], sys.argv[2]
+manifest = subprocess.run(["repo", "manifest"], cwd=tree, capture_output=True, text=True, check=True).stdout
+known = set(re.findall(r'<project[^>]*\sname="([^"]+)"', manifest))
+kept = []
+for line in open(src).read().splitlines():
+    m = re.search(r'<remove-project\s+name="([^"]+)"', line)
+    if m and m.group(1) not in known:
+        continue
+    kept.append(line)
+open(tree + "/.repo/local_manifests/01-removes.xml", "w").write("\n".join(kept) + "\n")
+PY
+    echo "local manifests placed in $TREE/.repo/local_manifests"
+}
+
+do_sync() {
+    need_tree
+    cd "$TREE"
+    repo sync -c --no-clone-bundle --no-tags -j"$JOBS"
+}
+
+do_product() {
+    need_tree
+    mkdir -p "$TREE/device/openwave"
+    cp -a "$HERE/device/openwave/waydroid" "$TREE/device/openwave/"
+    echo "product copied to $TREE/device/openwave/waydroid"
+}
+
+excluded() {
+    grep -Fxq "$1" "$HERE/patches-excluded.txt"
+}
+
+do_patches() {
+    need_tree
+    local base="$TREE/vendor/extra/waydroid-patches/$PATCHSET"
+    [ -d "$base" ] || { echo "missing $base, run sync first" >&2; exit 1; }
+    local state="$TREE/.openwave-patch-state"
+    mkdir -p "$state"
+    cd "$base"
+    local applied=0 skipped=0 projects
+    projects=$(find . -name '*.patch' -printf '%h\n' | sort -u | sed 's|^\./||')
+    for proj in $projects; do
+        local dir="$TREE/$proj"
+        if [ ! -d "$dir/.git" ] && [ ! -e "$dir/.git" ]; then
+            echo "missing project $proj" >&2
+            exit 1
+        fi
+        if git -C "$dir" rev-parse -q --verify "refs/tags/autopatch/$PATCHSET" >/dev/null; then
+            continue
+        fi
+        local key="${proj//\//_}"
+        git -C "$dir" rev-parse HEAD > "$state/$key.start"
+        for p in "$base/$proj"/*.patch; do
+            local rel="$proj/$(basename "$p")"
+            if excluded "$rel"; then
+                skipped=$((skipped + 1))
+                continue
+            fi
+            if ! git -C "$dir" am --3way --keep-cr "$p" >/dev/null 2>&1; then
+                git -C "$dir" am --abort >/dev/null 2>&1 || true
+                git -C "$dir" reset --hard "$(cat "$state/$key.start")" >/dev/null
+                echo "FAILED $rel, project $proj restored to its starting commit" >&2
+                exit 1
+            fi
+            applied=$((applied + 1))
+        done
+        git -C "$dir" tag -f "autopatch/$PATCHSET" >/dev/null
+    done
+    echo "patches applied $applied, deliberately skipped $skipped"
+}
+
+do_status() {
+    need_tree
+    cd "$TREE"
+    echo "tree: $TREE"
+    [ -f build/make/core/version_defaults.mk ] && grep -E "PLATFORM_SDK_VERSION :=|PLATFORM_VERSION_LAST_STABLE" build/make/core/version_defaults.mk || echo "build/make not synced"
+    ls .repo/local_manifests 2>/dev/null || true
+    [ -d device/openwave/waydroid ] && echo "product present" || echo "product missing"
+    local n=0
+    for d in $(find . -maxdepth 4 -name .git -prune -printf '%h\n' 2>/dev/null); do
+        if git -C "$d" rev-parse -q --verify "refs/tags/autopatch/$PATCHSET" >/dev/null 2>&1; then
+            n=$((n + 1))
+        fi
+    done
+    echo "projects tagged autopatch/$PATCHSET: $n"
+}
+
+do_build_commands() {
+    cat <<CMDS
+cd $TREE
+source build/envsetup.sh
+lunch $LUNCH
+m -j$JOBS systemimage vendorimage
+CMDS
+}
+
+case "${1:-}" in
+    init) do_init ;;
+    sync) do_sync ;;
+    patches) do_patches ;;
+    product) do_product ;;
+    status) do_status ;;
+    build-commands) do_build_commands ;;
+    *) usage; exit 2 ;;
+esac

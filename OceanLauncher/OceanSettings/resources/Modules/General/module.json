@@ -1,0 +1,18 @@
+{
+  "id": "com.openwave.settings.general",
+  "name": "General",
+  "description": "Device information, time zone and power",
+  "icon": "preferences-system",
+  "category": "System",
+  "order": 30,
+  "apiVersion": 1,
+  "entry": "MainModule.qml",
+  "search": [
+    {"key": "about", "title": "About", "detail": "Operating system, architecture, kernel and processors"},
+    {"key": "name", "title": "Device name", "detail": "Name of this device"},
+    {"key": "timezone", "title": "Time zone", "detail": "Current time zone"},
+    {"key": "storage", "title": "Storage", "detail": "Available space"},
+    {"key": "locale", "title": "Locale & Languages", "detail": "Time zone"},
+    {"key": "power", "title": "Power options", "detail": "Restart or shut down"}
+  ]
+}

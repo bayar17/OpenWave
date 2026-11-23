@@ -1,0 +1,68 @@
+diff -ruN a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt	2026-11-11 13:24:38.000000000 +0300
++++ b/CMakeLists.txt	2026-11-16 14:11:02.831807617 +0300
+@@ -93,7 +93,7 @@
+ # warnings
+ add_compile_options(-Wall -Wextra)
+ add_compile_options(-Wcast-align -Wformat-nonliteral -Wmissing-format-attribute -Wredundant-decls -Wsign-compare -Wsign-conversion -Wtype-limits -Wuninitialized -Wwrite-strings)
+-add_compile_options(-Werror=unused-result -Wodr)
++add_compile_options(-Wno-error=unused-result -Wodr)
+ 
+ # not sure about the conversion warnings being errors; review later
+ add_compile_options(-Wconversion)
+diff -ruN a/include/libdnf5/common/exception.hpp b/include/libdnf5/common/exception.hpp
+--- a/include/libdnf5/common/exception.hpp	2026-11-11 13:24:38.000000000 +0300
++++ b/include/libdnf5/common/exception.hpp	2026-11-16 14:11:02.831202931 +0300
+@@ -27,6 +27,7 @@
+ #include <fmt/args.h>
+ #include <fmt/format.h>
+ 
++#include <exception>
+ #include <filesystem>
+ #include <functional>
+ #include <stdexcept>
+diff -ruN a/include/libdnf5/common/set.hpp b/include/libdnf5/common/set.hpp
+--- a/include/libdnf5/common/set.hpp	2026-11-11 13:24:38.000000000 +0300
++++ b/include/libdnf5/common/set.hpp	2026-11-16 14:11:02.831355395 +0300
+@@ -21,6 +21,7 @@
+ #define LIBDNF5_COMMON_SET_HPP
+ 
+ #include <algorithm>
++#include <iterator>
+ #include <set>
+ 
+ 
+diff -ruN a/libdnf5/conf/config_utils.cpp b/libdnf5/conf/config_utils.cpp
+--- a/libdnf5/conf/config_utils.cpp	2026-11-11 13:24:38.000000000 +0300
++++ b/libdnf5/conf/config_utils.cpp	2026-11-16 14:11:02.831529859 +0300
+@@ -24,6 +24,8 @@
+ #include <glob.h>
+ 
+ #include <cstring>
++#include <ostream>
++#include <sstream>
+ 
+ 
+ namespace libdnf5 {
+diff -ruN a/libdnf5/logger/memory_buffer_logger.cpp b/libdnf5/logger/memory_buffer_logger.cpp
+--- a/libdnf5/logger/memory_buffer_logger.cpp	2026-11-11 13:24:38.000000000 +0300
++++ b/libdnf5/logger/memory_buffer_logger.cpp	2026-11-16 14:11:02.831457922 +0300
+@@ -20,6 +20,7 @@
+ #include "libdnf5/logger/memory_buffer_logger.hpp"
+ 
+ #include <mutex>
++#include <vector>
+ 
+ namespace libdnf5 {
+ 
+diff -ruN a/libdnf5/system/state.cpp b/libdnf5/system/state.cpp
+--- a/libdnf5/system/state.cpp	2026-11-11 13:24:38.000000000 +0300
++++ b/libdnf5/system/state.cpp	2026-11-16 14:11:02.831684557 +0300
+@@ -31,6 +31,7 @@
+ 
+ #include <fcntl.h>
+ #include <libdnf5/comps/group/package.hpp>
++#include <rpm/rpmcrypto.h>
+ #include <rpm/rpmdb.h>
+ #include <rpm/rpmtag.h>
+ #include <rpm/rpmts.h>

@@ -1,0 +1,24 @@
+diff --git a/Makeconfig b/Makeconfig
+index e7dbd9fb9e..2f5a04c5e8 100644
+--- a/Makeconfig
++++ b/Makeconfig
+@@ -753,6 +753,19 @@ else
+ +prectorT = $(static-prector)
+ +postctorT =$(static-postctor)
+ endif
++
++
++ifneq ($(findstring clang,$(CC)),)
++ifneq ($(findstring x86_64-unknown-openwave,$(CC)),)
+++prector = `$(CC) $(sysdep-LDFLAGS) --print-file-name=clang_rt.crtbegin.o`
+++postctor = `$(CC) $(sysdep-LDFLAGS) --print-file-name=clang_rt.crtend.o`
+++prectorS = $(+prector)
+++postctorS = $(+postctor)
++static-prector = $(+prector)
++static-postctor = $(+postctor)
++endif
++endif
++
+ csu-objpfx = $(common-objpfx)csu/
+ elf-objpfx = $(common-objpfx)elf/
+ 

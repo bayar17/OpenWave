@@ -1,0 +1,52 @@
+cmake_minimum_required(VERSION 3.21)
+project(AppDeploy LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(RPM IMPORTED_TARGET rpm)
+pkg_check_modules(DNF5 IMPORTED_TARGET libdnf5)
+pkg_check_modules(SELINUX IMPORTED_TARGET libselinux)
+find_package(toml11 CONFIG)
+if(NOT RPM_FOUND OR NOT DNF5_FOUND OR NOT SELINUX_FOUND OR NOT toml11_FOUND)
+    message(STATUS "appdeploy skipped: run ./build-openwave packaging for RPM, libdnf5 and toml11")
+    return()
+endif()
+
+add_library(appdeploy SHARED
+    src/application.cpp src/deployer.cpp src/policy.cpp src/registry.cpp src/rpm_package.cpp src/util.cpp)
+target_include_directories(appdeploy PUBLIC include)
+target_compile_options(appdeploy PRIVATE -Wall -Wextra)
+target_link_libraries(appdeploy PUBLIC PkgConfig::DNF5 PRIVATE PkgConfig::RPM PkgConfig::SELINUX toml11::toml11)
+set_target_properties(appdeploy PROPERTIES VERSION 0.1.0 SOVERSION 0
+    BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "/usr/lib64;/usr/lib")
+install(TARGETS appdeploy LIBRARY DESTINATION /usr/lib64)
+install(FILES include/appdeploy/appdeploy.hpp DESTINATION /usr/include/appdeploy)
+
+add_executable(appdeploy-helper tools/helper.cpp)
+target_compile_options(appdeploy-helper PRIVATE -Wall -Wextra)
+target_link_libraries(appdeploy-helper PRIVATE appdeploy)
+set_target_properties(appdeploy-helper PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "/usr/lib64;/usr/lib")
+install(TARGETS appdeploy-helper RUNTIME DESTINATION /usr/libexec/openwave-appdeploy)
+
+pkg_check_modules(GIO IMPORTED_TARGET gio-unix-2.0)
+if(GIO_FOUND)
+    add_executable(appdeploy-cli tools/appdeploy.cpp)
+    set_target_properties(appdeploy-cli PROPERTIES OUTPUT_NAME appdeploy
+        BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "/usr/lib64;/usr/lib")
+    target_compile_options(appdeploy-cli PRIVATE -Wall -Wextra)
+    target_link_libraries(appdeploy-cli PRIVATE PkgConfig::GIO)
+    install(TARGETS appdeploy-cli RUNTIME DESTINATION /usr/bin)
+endif()
+
+add_executable(appdeploy-check EXCLUDE_FROM_ALL tools/check.cpp)
+target_link_libraries(appdeploy-check PRIVATE appdeploy)
+set_target_properties(appdeploy-check PROPERTIES INSTALL_RPATH "$ORIGIN/../lib64")
+install(TARGETS appdeploy-check RUNTIME DESTINATION bin COMPONENT sdk-tools EXCLUDE_FROM_ALL)
+install(TARGETS appdeploy LIBRARY DESTINATION lib64 COMPONENT sdk-tools EXCLUDE_FROM_ALL)
+add_executable(appdeploy-policy-test EXCLUDE_FROM_ALL tests/policy_test.cpp)
+target_link_libraries(appdeploy-policy-test PRIVATE appdeploy)
+add_executable(appdeploy-plan-test EXCLUDE_FROM_ALL tests/plan_test.cpp)
+target_link_libraries(appdeploy-plan-test PRIVATE appdeploy)
+
+install(FILES config/rpm-macros.appdeploy DESTINATION /etc/rpm RENAME macros.appdeploy)

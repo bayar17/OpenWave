@@ -1,0 +1,10 @@
+%_dbpath /var/lib/appdeploy/rpmdb
+%_db_backend sqlite
+%_pkgverify_level digest
+%__transaction_selinux %{nil}
+%__transaction_syslog %{nil}
+%__transaction_prioreset %{nil}
+%__transaction_ima %{nil}
+%__transaction_audit %{nil}
+%__transaction_dbus_announce %{nil}
+%__transaction_fapolicyd %{nil}

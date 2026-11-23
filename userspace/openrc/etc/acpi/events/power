@@ -1,0 +1,3 @@
+# OpenRC handles the orderly shutdown; do not power off directly from acpid.
+event=button/power
+action=/sbin/openrc-shutdown -p now

@@ -1,0 +1,4 @@
+module OpenWave.Controls
+WRSwitch 1.0 WRSwitch.qml
+WRButton 1.0 WRButton.qml
+WRTextField 1.0 WRTextField.qml

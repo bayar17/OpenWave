@@ -1,0 +1,102 @@
+import QtQuick
+import QtQuick.Controls
+import OpenWave.Theme 1.0
+import OpenWave.Fonts 1.0
+import OceanSettings 1.0
+
+AbstractButton {
+    id: root
+    required property var network
+    property string displayName: ""
+    property bool longPressTriggered: false
+    signal longPressed()
+
+    readonly property bool connected: !!network.connected
+    readonly property bool connecting: !!network.connecting
+    readonly property bool openNetwork: network.security === "Open"
+                                       || network.security === "Enhanced Open"
+    readonly property real strength: Math.max(0, Math.min(100, Number(network.strength) || 0))
+    x: 47
+    width: parent ? parent.width - 94 : 580
+    height: connected || connecting ? 94 : 66
+    Accessible.name: displayName + ", " + (connected ? qsTr("Connected")
+                                         : connecting ? qsTr("Connecting")
+                                         : (network.security || qsTr("Unknown")))
+                     + ", " + qsTr("signal %1%").arg(Math.round(strength))
+    Accessible.role: Accessible.Button
+
+    onPressedChanged: {
+        if (pressed && network.saved) {
+            longPressTriggered = false
+            holdTimer.restart()
+        } else {
+            holdTimer.stop()
+        }
+    }
+    Timer {
+        id: holdTimer
+        interval: 700
+        onTriggered: {
+            if (root.pressed && root.network.saved) {
+                root.longPressTriggered = true
+                root.longPressed()
+            }
+        }
+    }
+    background: Item {
+        Rectangle {
+            anchors.fill: parent
+            color: root.down ? "#18ffffff" : "transparent"
+        }
+        Rectangle {
+            anchors.fill: parent
+            visible: root.visualFocus
+            color: "transparent"
+            border.color: Theme.focusColor
+            border.width: 2
+        }
+    }
+    contentItem: Item {
+        Text {
+            objectName: "wifiRowName"
+            x: 8
+            y: 11
+            width: parent.width - 150
+            text: root.displayName
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            font.family: Fonts.family
+            font.weight: Font.DemiBold
+            font.pixelSize: 32
+            color: "white"
+        }
+        Text {
+            objectName: "wifiRowDetail"
+            visible: root.connected || root.connecting
+            x: 8
+            y: 49
+            width: parent.width - 150
+            text: root.connected ? qsTr("Connected") : qsTr("Connecting…")
+            font.family: Fonts.family
+            font.weight: Font.Light
+            font.pixelSize: 30
+            color: "white"
+        }
+        SettingsSymbol {
+            objectName: "wifiRowLock"
+            x: parent.width - 119
+            y: root.connected || root.connecting ? 31 : 7
+            width: 48
+            height: 48
+            kind: root.openNetwork ? "unlock" : "lock"
+        }
+        SettingsSymbol {
+            objectName: "wifiRowSignal"
+            x: parent.width - 59
+            y: root.connected || root.connecting ? 31 : 7
+            width: 48
+            height: 48
+            kind: "wifi"
+        }
+    }
+}

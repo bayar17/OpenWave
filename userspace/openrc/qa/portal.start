@@ -1,0 +1,45 @@
+#!/bin/sh
+case " $(cat /proc/cmdline) " in *' openwave.qa=portal '*) ;; *) exit 0 ;; esac
+exec >/dev/console 2>&1
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+printf 'PORTAL_SMOKE BEGIN Settings Wallpaper\n'
+# Seed an imported image through the actual confined Photos process. Its UID
+# and storage ownership come from appd, rather than pre-chowning app profiles.
+attempt=0
+while ! /System/Services/openwave-launch com.openwave.photos; do
+    attempt=$((attempt + 1)); [ "$attempt" -lt 40 ] || break
+    sleep 0.25
+done
+sleep 2
+/usr/bin/gdbus call --system --timeout 3 --dest org.openwave.Applications \
+    --object-path /org/openwave/Applications --method org.openwave.Applications1.Terminate com.openwave.photos
+sleep 1
+attempt=0
+while ! /System/Services/openwave-launch com.openwave.settings; do
+    attempt=$((attempt + 1)); [ "$attempt" -lt 40 ] || break
+    sleep 0.25
+done
+# Both test drivers invoke the real Settings/picker handlers and keep every
+# broker identity, permission lease and descriptor check in the path.
+sleep 25
+/usr/bin/gdbus call --system --timeout 3 --dest org.openwave.Applications \
+    --object-path /org/openwave/Applications --method org.openwave.Applications1.Terminate com.openwave.settings
+sleep 3
+for file in /run/openwave/appd.stderr.log /run/openwave/portal.stderr.log \
+    /run/openwave/permissiond.stderr.log /run/openwave/wallpaper.stderr.log \
+    /run/user/1000/openwave-logs/ocean.stderr.log; do
+    [ -f "$file" ] || continue
+    printf '\nPORTAL_LOG %s\n' "$file"
+    tail -120 "$file"
+done
+if grep -q 'PORTAL_QA_PASS Settings Wallpaper:' /run/openwave/appd.stderr.log \
+    && ! grep -q 'PORTAL_QA_FAIL' /run/openwave/appd.stderr.log \
+    && ! grep -q 'PORTAL_QA_FAIL' /run/user/1000/openwave-logs/ocean.stderr.log \
+    && [ "$(cat /sys/fs/selinux/enforce)" = 1 ]; then
+    # Settings has verified the saved image through GetCurrent/GetImage. The
+    # service's private marker must remain inaccessible to this QA script.
+    printf 'PORTAL_SMOKE PASS Settings wallpaper end-to-end\n'
+else
+    printf 'PORTAL_SMOKE FAIL Settings wallpaper end-to-end\n'
+fi
+printf 'PORTAL_SMOKE END\n'

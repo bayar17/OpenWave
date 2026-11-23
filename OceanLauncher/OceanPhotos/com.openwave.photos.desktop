@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Gallery
+Exec=/System/Services/openwave-launch com.openwave.photos
+Icon=com.openwave.photos
+Categories=Graphics;Photography;Viewer;
+Terminal=false
+X-OpenWave-AppId=com.openwave.photos

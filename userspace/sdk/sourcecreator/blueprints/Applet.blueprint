@@ -1,0 +1,86 @@
+[blueprint]
+format = 1
+name = "Applet"
+description = "Ocean Quick Menu applet: MainApplet.qml, applet.desktop and an icon"
+
+[[file]]
+path = "MainApplet.qml"
+content = '''
+import QtQuick
+import OpenWave.QuickMenu as Applets
+
+Applets.Applet {
+    id: root
+    property bool enabledState: false
+
+    title: qsTr("@project_name@")
+    icon: Qt.resolvedUrl("icon.svg")
+    available: true
+    active: enabledState
+    statusText: active ? qsTr("On") : qsTr("Off")
+    onTriggered: enabledState = !enabledState
+}
+'''
+
+[[file]]
+path = "applet.desktop"
+content = '''
+[Desktop Entry]
+Type=X-OpenWave-Applet
+Name=@project_name@
+Comment=@project_name@ quick menu applet
+Icon=icon.svg
+X-OpenWave-Applet-Order=500
+X-OpenWave-Applet-ApiVersion=1
+'''
+
+[[file]]
+path = "icon.svg"
+content = '''
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="24" cy="24" r="15"/>
+  <path d="M24 15v9l6 4"/>
+</svg>
+'''
+
+[[file]]
+path = "README.md"
+content = '''
+# @project_name@
+
+An Ocean Quick Menu applet. The directory is the whole applet: `MainApplet.qml` is the only mandatory file,
+`applet.desktop` and `icon.svg` are optional.
+
+## Install
+
+Copy this directory to your user applet location. The directory name is the applet id and must match
+`[A-Za-z][A-Za-z0-9_]{0,63}`:
+
+```sh
+mkdir -p /Data/Users/$USER/.DataLocation/QuickMenu/Applets
+cp -r . /Data/Users/$USER/.DataLocation/QuickMenu/Applets/@applet_name@
+```
+
+User applets are hidden until you enable them in Settings under Appearance, Quick Menu. System applets live in
+`/System/QuickMenu/Applets/` and `/System/QuickMenu/Applets/Needed/` and are part of the system image.
+
+## What an applet can use
+
+`Applets.Applet` provides `title`, `icon`, `available`, `active`, `busy`, `statusText`, `interactive`, the
+`triggered()` signal and the appearance colours. `Applets.System` exposes the narrow system operations the launcher
+allows (Wi-Fi, Bluetooth, flight mode, mobile data, lock and so on) and reports failure instead of pretending to
+succeed. Applets run inside the launcher process, so keep them small and never block.
+
+## applet.desktop
+
+| key | meaning |
+| --- | --- |
+| `Name`, `Name[xx]` | display name and translations |
+| `Comment` | description shown in Settings |
+| `Icon` | svg or png path inside this directory |
+| `X-OpenWave-Applet-Order` | position among applets, lower first |
+| `X-OpenWave-Applet-ApiVersion` | must not exceed the version the launcher supports (1) |
+
+Paths must be plain relative paths inside this directory without symbolic links. The `X-OpenWave-Applet-Settings`
+key (a settings page under the applet in Settings) is honoured for system applets only.
+'''

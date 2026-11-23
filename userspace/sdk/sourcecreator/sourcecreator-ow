@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+import importlib.machinery
+import importlib.util
+from pathlib import Path
+import sys
+
+SOURCE = Path(__file__).resolve().parent / 'sourcecreator'
+loader = importlib.machinery.SourceFileLoader('sourcecreator', str(SOURCE))
+spec = importlib.util.spec_from_loader('sourcecreator', loader)
+sourcecreator = importlib.util.module_from_spec(spec)
+loader.exec_module(sourcecreator)
+
+if __name__ == '__main__':
+    sys.exit(sourcecreator.main(team=True))

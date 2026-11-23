@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- See MainActivity.returnToRunningApp. REAL_GET_TASKS is granted only
+         to privileged apps: OpenWave installs TINH under /system/priv-app
+         with a matching privapp-permissions entry. -->
+    <uses-permission
+        android:name="android.permission.REAL_GET_TASKS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.REORDER_TASKS" />
+    <uses-permission
+        android:name="android.permission.DELETE_PACKAGES"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+    <!-- See CloseAppsActivity. Privileged; listed in OpenWave's
+         privapp-permissions file. -->
+    <uses-permission
+        android:name="android.permission.FORCE_STOP_PACKAGES"
+        tools:ignore="ProtectedPermissions" />
+    <!-- See MainActivity.reportIdle: one Settings.Global value tells OpenWave
+         that no Android app is in front. Privileged; listed in OpenWave's
+         privapp-permissions file. -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- persistent: TinhApplication reports the running apps to OpenWave for
+         as long as Android runs (honoured for system apps only). -->
+    <application
+        android:name=".TinhApplication"
+        android:persistent="true"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.TINH">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.TINH"
+            android:windowSoftInputMode="adjustResize">
+
+            <!-- Register as the system Home launcher. The priority (honoured
+                 for privileged apps) makes Android pick TINH over Trebuchet
+                 at first boot instead of opening its "select a home app"
+                 chooser, which otherwise stays behind as a task that Back
+                 can reach (run 8zm). -->
+            <intent-filter android:priority="1000">
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+
+        </activity>
+
+        <!-- Closing the Android card in Ocean: OpenWave asks Android's
+             Waydroid platform service to start this. Only callers that hold
+             FORCE_STOP_PACKAGES (Android's system) can start it; other apps
+             cannot use it to close each other. -->
+        <activity
+            android:name=".CloseAppsActivity"
+            android:exported="true"
+            android:permission="android.permission.FORCE_STOP_PACKAGES"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="com.openwave.tinh.action.CLOSE_APPS" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <!-- One app: data is "package:<name>" (closing its card in Ocean). -->
+            <intent-filter>
+                <action android:name="com.openwave.tinh.action.CLOSE_APPS" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="package" />
+            </intent-filter>
+        </activity>
+
+        <receiver
+            android:name=".RemoveResultReceiver"
+            android:exported="false" />
+
+        <activity
+            android:name=".RemoveAppActivity"
+            android:exported="true"
+            android:permission="android.permission.FORCE_STOP_PACKAGES"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="com.openwave.tinh.action.REMOVE_APP" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="package" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".ViewInActivity"
+            android:exported="true"
+            android:permission="android.permission.FORCE_STOP_PACKAGES"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="com.openwave.tinh.action.VIEW_IN" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="openwave-view" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

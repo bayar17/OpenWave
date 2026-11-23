@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+description="System D-Bus message bus"
+command="/usr/bin/dbus-daemon"
+command_args_foreground="--system --nofork"
+supervisor=supervise-daemon
+
+start_post() {
+    /System/Services/openwave-wait-dbus system org.freedesktop.DBus
+}
+
+depend() {
+	need openwave-runtime
+	after udevd
+}

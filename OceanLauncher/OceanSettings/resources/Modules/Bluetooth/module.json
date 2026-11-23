@@ -1,0 +1,10 @@
+{
+  "id": "com.openwave.settings.bluetooth",
+  "name": "Bluetooth",
+  "description": "Nearby devices",
+  "icon": "bluetooth",
+  "category": "Connectivity",
+  "order": 20,
+  "apiVersion": 1,
+  "entry": "MainModule.qml"
+}

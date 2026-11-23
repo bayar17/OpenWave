@@ -1,0 +1,50 @@
+# Generated SDK, runtime staging, and compatibility paths.
+/out/
+/rootfs/
+/fakeroot/
+!/toolchain/README.md
+/sysroot/
+/qt-host
+/toolchain-*.tar.*
+
+# Imported upstream sources; keep OpenWave changes as patches.
+/third_party/
+/OceanLauncher/OceanBrowser/WPEWebKit/
+
+# Deployable images.
+/*.img
+/*.qcow2
+OpenWave.img.-*
+
+# Build directories and generated CMake files.
+build/
+build-*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+/toolchain/
+
+# Local IDE settings and Python caches.
+.qtcreator/
+*.user
+*.user.*
+__pycache__/
+*.py[cod]
+
+# Editor and macOS metadata.
+*.swp
+*.swo
+*~
+.DS_Store
+*.ds_store
+._*
+
+# Local reference-search tooling.
+/.xerjignore
+/AGENTS.md
+/references/xerj/
+/scripts/reference-code.py
+/fedora-contributor/
+host/
+docs/

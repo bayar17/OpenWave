@@ -1,0 +1,3 @@
+# OpenWave QEMU candidate: the root filesystem is mounted by the kernel.
+# The ext4 image label is OpenWave; this entry lets OpenRC inspect/remount it.
+LABEL=OpenWave / ext4 defaults 0 0

@@ -1,0 +1,26 @@
+#!/sbin/openrc-run
+description="Ocean user PulseAudio-protocol server (PipeWire) for the Android compatibility container"
+command="/usr/bin/pipewire"
+command_args="-c pipewire-pulse.conf"
+command_user="ocean:ocean"
+command_background="yes"
+pidfile="/run/user/1000/pipewire-pulse.pid"
+export XDG_RUNTIME_DIR="/run/user/1000"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/1000/bus"
+
+depend() {
+	need pipewire
+}
+
+start_post() {
+	# Upstream Waydroid bind-mounts this socket unconditionally; a missing
+	# socket aborts LXC mount setup, so report it here, not as a container error.
+	attempts=0
+	while [ "$attempts" -lt 50 ]; do
+		[ -S /run/user/1000/pulse/native ] && return 0
+		attempts=$((attempts + 1))
+		/bin/busybox sleep 0.1
+	done
+	eerror "PipeWire did not publish /run/user/1000/pulse/native"
+	return 1
+}

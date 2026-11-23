@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=X-OpenWave-Applet
+Name=Wi-Fi
+Comment=Turn Wi-Fi on or off
+Icon=icon.svg
+X-OpenWave-Applet-Order=10
+X-OpenWave-Applet-ApiVersion=1

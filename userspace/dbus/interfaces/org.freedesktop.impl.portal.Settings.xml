@@ -1,0 +1,8 @@
+<node>
+  <interface name="org.freedesktop.impl.portal.Settings">
+    <method name="ReadAll"><arg name="namespaces" type="as" direction="in"/><arg name="value" type="a{sa{sv}}" direction="out"/></method>
+    <method name="Read"><arg name="namespace" type="s" direction="in"/><arg name="key" type="s" direction="in"/><arg name="value" type="v" direction="out"/></method>
+    <signal name="SettingChanged"><arg name="namespace" type="s"/><arg name="key" type="s"/><arg name="value" type="v"/></signal>
+    <property name="version" type="u" access="read"/>
+  </interface>
+</node>

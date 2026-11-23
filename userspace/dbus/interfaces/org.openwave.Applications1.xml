@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<node>
+  <interface name="org.openwave.Applications1">
+    <method name="CreateWebApp"><arg name="name" type="s" direction="in"/><arg name="url" type="s" direction="in"/><arg name="appId" type="s" direction="out"/></method>
+    <method name="CreateWebAppWithIcon"><arg name="name" type="s" direction="in"/><arg name="url" type="s" direction="in"/><arg name="icon" type="ay" direction="in"/><arg name="appId" type="s" direction="out"/></method>
+    <method name="UpdateWebAppIcon"><arg name="icon" type="ay" direction="in"/></method>
+    <method name="UninstallWebApp"><arg name="appId" type="s" direction="in"/></method>
+    <method name="UninstallApplication"><arg name="appId" type="s" direction="in"/></method>
+    <method name="ShowApplicationDetails"><arg name="appId" type="s" direction="in"/></method>
+    <method name="TakeApplicationDetailsRequest"><arg name="appId" type="s" direction="out"/></method>
+    <method name="GetSessionIdentity"><arg name="userId" type="u" direction="out"/><arg name="session" type="s" direction="out"/></method>
+    <method name="GetOwnIdentity"><arg name="identity" type="a{sv}" direction="out"/></method>
+    <method name="ResolveCaller"><arg name="connection" type="s" direction="in"/><arg name="identity" type="a{sv}" direction="out"/></method>
+    <method name="ResolveProcess"><arg name="uid" type="u" direction="in"/><arg name="pid" type="u" direction="in"/><arg name="identity" type="a{sv}" direction="out"/></method>
+    <method name="RevokeAccess"><arg name="appId" type="s" direction="in"/></method>
+    <method name="ListApplications"><arg name="applications" type="aa{sv}" direction="out"/></method>
+    <method name="GetApplicationInfo"><arg name="appId" type="s" direction="in"/><arg name="info" type="a{sv}" direction="out"/></method>
+    <method name="ResolveFile"><arg name="path" type="s" direction="in"/><arg name="type" type="s" direction="out"/><arg name="default" type="s" direction="out"/><arg name="handlers" type="as" direction="out"/></method>
+    <method name="OpenFile"><arg name="path" type="s" direction="in"/><arg name="handler" type="s" direction="in"/><arg name="always" type="b" direction="in"/></method>
+    <method name="ClearFileDefaults"><arg name="application" type="s" direction="in"/></method>
+    <method name="GetApplicationStorage"><arg name="application" type="s" direction="in"/><arg name="bytes" type="t" direction="out"/><arg name="complete" type="b" direction="out"/></method>
+    <method name="GetFileAssociations"><arg name="defaults" type="a{ss}" direction="out"/><arg name="handlers" type="a{sas}" direction="out"/></method>
+    <method name="SetPreferenceBool"><arg name="key" type="s" direction="in"/><arg name="value" type="b" direction="in"/></method>
+    <method name="SetPreferenceString"><arg name="key" type="s" direction="in"/><arg name="value" type="s" direction="in"/></method>
+    <method name="SetPreferenceList"><arg name="key" type="s" direction="in"/><arg name="values" type="as" direction="in"/></method>
+    <method name="ResetPreferenceGroup"><arg name="group" type="s" direction="in"/></method>
+    <method name="ListDefaultCategories"><arg name="categories" type="aa{sv}" direction="out"/></method>
+    <method name="GetDefaultApplication"><arg name="category" type="s" direction="in"/><arg name="appId" type="s" direction="out"/><arg name="state" type="s" direction="out"/></method>
+    <method name="SetDefaultApplication"><arg name="category" type="s" direction="in"/><arg name="appId" type="s" direction="in"/></method>
+    <method name="GetDefaultFileHandler"><arg name="type" type="s" direction="in"/><arg name="appId" type="s" direction="out"/><arg name="state" type="s" direction="out"/></method>
+    <method name="SetDefaultFileHandler"><arg name="type" type="s" direction="in"/><arg name="appId" type="s" direction="in"/></method>
+    <method name="ClearDefaultFileHandler"><arg name="type" type="s" direction="in"/></method>
+    <method name="GetSupportedFileTypes"><arg name="appId" type="s" direction="in"/><arg name="types" type="as" direction="out"/><arg name="schemes" type="as" direction="out"/></method>
+    <method name="ResolveUri"><arg name="uri" type="s" direction="in"/><arg name="type" type="s" direction="out"/><arg name="default" type="s" direction="out"/><arg name="handlers" type="as" direction="out"/></method>
+    <method name="ClearApplicationDefaults"><arg name="appId" type="s" direction="in"/></method>
+    <method name="SetFileDefault"><arg name="extension" type="s" direction="in"/><arg name="appId" type="s" direction="in"/></method>
+    <method name="Launch"><arg name="appId" type="s" direction="in"/><arg name="arguments" type="as" direction="in"/><arg name="pid" type="u" direction="out"/></method>
+    <method name="Activate"><arg name="appId" type="s" direction="in"/></method>
+    <method name="Terminate"><arg name="appId" type="s" direction="in"/></method>
+    <method name="GetRunningApplications"><arg name="applications" type="aa{sv}" direction="out"/></method>
+    <method name="RegisterShell"/>
+    <method name="SetSessionReady"><arg name="ready" type="b" direction="in"/><arg name="ready" type="b" direction="out"/></method>
+    <method name="CommitLaunch"><arg name="ticket" type="s" direction="in"/><arg name="pid" type="u" direction="out"/></method>
+    <method name="CancelLaunch"><arg name="ticket" type="s" direction="in"/></method>
+    <signal name="ApplicationStarted"><arg name="appId" type="s"/><arg name="pid" type="u"/></signal>
+    <signal name="ApplicationStopped"><arg name="appId" type="s"/><arg name="status" type="i"/></signal>
+    <signal name="ApplicationCrashed"><arg name="appId" type="s"/><arg name="status" type="i"/></signal>
+    <signal name="ApplicationStateChanged"><arg name="appId" type="s"/><arg name="state" type="s"/><arg name="pid" type="u"/><arg name="error" type="s"/></signal>
+    <signal name="ApplicationDetailsRequested"><arg name="appId" type="s"/></signal>
+    <signal name="ActivationRequested"><arg name="appId" type="s"/><arg name="pid" type="u"/></signal>
+    <signal name="LaunchRequested"><arg name="ticket" type="s"/><arg name="appId" type="s"/><arg name="arguments" type="as"/></signal>
+    <signal name="OperationFailed"><arg name="appId" type="s"/><arg name="error" type="s"/></signal>
+    <signal name="RegistryChanged"/>
+    <signal name="FileDefaultsChanged"/>
+  </interface>
+</node>

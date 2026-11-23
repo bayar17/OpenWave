@@ -1,0 +1,76 @@
+#!/bin/sh
+case " $(cat /proc/cmdline) " in *' openwave.qa=quickmenu '*) ;; *) exit 0 ;; esac
+exec >/dev/console 2>&1
+printf 'QUICKMENU_QA BEGIN enforcing=%s\n' "$(cat /sys/fs/selinux/enforce)"
+log=/run/user/1000/openwave-logs/ocean.stderr.log
+shot_seq=0
+shot() {
+    shot_seq=$((shot_seq + 1))
+    pid=$(/bin/busybox pidof ocean-launcher | /bin/busybox cut -d' ' -f1)
+    [ -n "$pid" ] || return 0
+    kill -USR1 "$pid"
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        /bin/busybox grep -q "OCEAN_QA_SHOT_END seq=$shot_seq\$" "$log" && break
+        /bin/busybox sleep 0.5
+    done
+    /bin/busybox awk -v name="$1" -v seq="$shot_seq" '
+        $0 ~ "^OCEAN_QA_SHOT_BEGIN seq=" seq " " { on = 1; print "WAYDROID_QA_SHOT_BEGIN name=" name " " $0; next }
+        on && $0 ~ "^OCEAN_QA_SHOT_DATA " { line = "WAYDROID_QA_SHOT_DATA " substr($0, 20); print line; print line; next }
+        on && $0 ~ "^OCEAN_QA_SHOT_END seq=" seq "$" { print "WAYDROID_QA_SHOT_END name=" name; exit }
+        $0 ~ "^OCEAN_QA_SHOT_FAILED seq=" seq "$" { print "WAYDROID_QA_SHOT_FAILED name=" name; exit }' "$log"
+}
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+app_log=/run/openwave/appd.stderr.log
+rm -f /run/openwave/qa-quickmenu-next /run/openwave/qa-quickmenu-done
+attempt=0
+until grep -aq 'QUICKMENU_QA OPEN' "$log" 2>/dev/null || grep -aq 'QUICKMENU_QA_FAIL' "$log" 2>/dev/null; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 240 ]; then
+        printf 'QUICKMENU_QA_FAIL Quick Menu did not open\n'
+        break
+    fi
+    sleep 1
+done
+grep -a 'QUICKMENU_QA' "$log" | sed 's/^/LAUNCHER: /'
+printf 'QUICKMENU_QA SCREEN\n'
+dmesg -n 1
+sleep 2
+shot quickmenu-before
+touch /run/openwave/qa-quickmenu-next
+sleep 1
+shot quickmenu-transition
+sleep 4
+shot quickmenu-after
+touch /run/openwave/qa-quickmenu-done
+sleep 3
+attempt=0
+until /System/Services/openwave-launch com.openwave.settings >/dev/null 2>&1; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 60 ]; then
+        printf 'QUICKMENU_QA_FAIL could not launch Settings\n'
+        break
+    fi
+    sleep 1
+done
+sleep 22
+shot quickmenu-page
+sleep 38
+shot quickmenu-settings
+/usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Applications --object-path /org/openwave/Applications --method org.openwave.Applications1.Terminate com.openwave.settings >/dev/null 2>&1
+attempt=0
+while ! grep -aq 'QUICKMENU_QA SETTINGS APPEARANCE PASS\|QUICKMENU_QA_FAIL settings' "$app_log" 2>/dev/null; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 120 ]; then
+        printf 'QUICKMENU_QA_FAIL no result from Settings\n'
+        break
+    fi
+    sleep 0.5
+done
+grep -a -o 'QUICKMENU_QA SETTINGS[^\\"]*\|QUICKMENU_QA_FAIL settings[^\\"]*\|PreferenceBroker:[^\\"]*' "$app_log"
+grep -a -c '' "$app_log" | sed 's/^/APPLOGLINES: /'
+grep -a 'QUICKMENU_QA' "$log" | sed 's/^/LAUNCHER: /'
+grep -a 'Ocean appearance\|Ocean wallpaper crossfade' "$log" | sed 's/^/LAUNCHER: /'
+grep -a -i 'qml\|quickmenu\|applet' "$log" | grep -a -v 'QUICKMENU_QA' | tail -30 | sed 's/^/LAUNCHERLOG: /'
+dmesg | grep -a -i 'avc' | grep -a -i 'ocean\|QuickMenu' | tail -30
+dmesg | grep -a -i 'avc' | grep -a 'comm="appd"\|comm="ocean-settings"' | grep -a -v 'watch\|execmem\|fsetid' | tail -20 | sed 's/^/APPDAVC: /'
+printf 'QUICKMENU_QA END enforcing=%s\n' "$(cat /sys/fs/selinux/enforce)"

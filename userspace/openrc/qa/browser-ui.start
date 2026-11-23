@@ -1,0 +1,53 @@
+#!/bin/sh
+case " $(cat /proc/cmdline) " in *' openwave.qa=browser-ui '*) ;; *) exit 0 ;; esac
+exec >/dev/console 2>&1
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+log=/run/user/1000/openwave-logs/ocean.stderr.log
+app_log=/run/openwave/appd.stderr.log
+printf 'BROWSER_UI_QA BEGIN enforcing=%s\n' "$(cat /sys/fs/selinux/enforce)"
+for interface in /sys/class/net/*; do
+    [ "$(cat "$interface/type")" = 1 ] && [ -e "$interface/device" ] || continue
+    name=${interface##*/}
+    /bin/busybox ip link set dev "$name" up || exit 1
+    /bin/busybox ip addr add 10.0.2.15/24 dev "$name" 2>/dev/null || true
+done
+shot_seq=0
+shot() {
+    shot_seq=$((shot_seq + 1))
+    pid=$(/bin/busybox pidof ocean-launcher | /bin/busybox cut -d' ' -f1)
+    [ -n "$pid" ] || return 0
+    kill -USR1 "$pid"
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        /bin/busybox grep -q "OCEAN_QA_SHOT_END seq=$shot_seq\$" "$log" && break
+        /bin/busybox sleep 0.5
+    done
+    /bin/busybox awk -v name="$1" -v seq="$shot_seq" '
+        $0 ~ "^OCEAN_QA_SHOT_BEGIN seq=" seq " " { on = 1; print "WAYDROID_QA_SHOT_BEGIN name=" name " " $0; next }
+        on && $0 ~ "^OCEAN_QA_SHOT_DATA " { line = "WAYDROID_QA_SHOT_DATA " substr($0, 20); print line; print line; next }
+        on && $0 ~ "^OCEAN_QA_SHOT_END seq=" seq "$" { print "WAYDROID_QA_SHOT_END name=" name; exit }
+        $0 ~ "^OCEAN_QA_SHOT_FAILED seq=" seq "$" { print "WAYDROID_QA_SHOT_FAILED name=" name; exit }' "$log"
+}
+dmesg -n 1
+attempt=0
+until /System/Services/openwave-launch com.openwave.ocean; do
+    attempt=$((attempt + 1)); [ "$attempt" -lt 60 ] || { printf 'BROWSER_UI_QA_FAIL could not launch the browser\n'; break; }
+    sleep 0.5
+done
+start=$(/bin/busybox date +%s)
+count=0
+for name in s00-start s01-mobile-page s02-menu s03-find s04-bookmarked-menu s05-bookmarks s06-history s07-downloads s08-two-tabs s09-private-page s10-overview-private s11-overview-tabs s12-overview-menu s13-back-on-page; do
+    target=$((start + 16 + 14 * count))
+    while [ "$(/bin/busybox date +%s)" -lt "$target" ]; do sleep 0.5; done
+    shot "$name"
+    count=$((count + 1))
+done
+/usr/bin/gdbus call --system --timeout 5 --dest org.openwave.Applications --object-path /org/openwave/Applications --method org.openwave.Applications1.Terminate com.openwave.ocean >/dev/null 2>&1
+attempt=0
+while ! grep -aq 'BROWSER_UI_QA PASS walkthrough complete\|BROWSER_UI_QA_FAIL' "$app_log" 2>/dev/null; do
+    attempt=$((attempt + 1))
+    [ "$attempt" -ge 60 ] && break
+    sleep 0.5
+done
+grep -a -o 'BROWSER_UI_QA[A-Z_]* [^\\"]*' "$app_log" | sed 's/^/APP: /'
+printf 'BROWSER_UI_QA shots=%s\n' "$count"
+printf 'BROWSER_UI_QA END\n'

@@ -1,0 +1,26 @@
+#!/bin/sh
+case " $(cat /proc/cmdline) " in *' openwave.qa=dns '*) ;; *) exit 0 ;; esac
+exec >/dev/console 2>&1
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+# The app suite has no NIC. Ask the real daemon to publish a documentation-only
+# resolver fixture so the isolated app can exercise its live DNS path. This
+# changes only the disposable snapshot and performs no network connection.
+if ! /System/Services/openwave-wait-dbus system org.freedesktop.NetworkManager \
+    || ! /usr/bin/gdbus call --system --timeout 5 --dest org.freedesktop.NetworkManager \
+        --object-path /org/freedesktop/NetworkManager --method org.freedesktop.DBus.Properties.Set \
+        org.freedesktop.NetworkManager GlobalDnsConfiguration \
+        "<{'domains': <{'*': <{'servers': <['192.0.2.53']>}>}>}>"; then
+    printf 'DNS_QA_FAIL daemon could not publish resolver fixture\n'
+    exit 1
+fi
+attempt=0
+while [ "$attempt" -lt 30 ]; do
+    if [ -r /run/NetworkManager/resolv.conf ]; then
+        printf 'DNS_QA fixture published through NetworkManager\n'
+        ls -lZ /etc/resolv.conf /run/NetworkManager/resolv.conf
+        exit 0
+    fi
+    attempt=$((attempt + 1)); sleep 0.1
+done
+printf 'DNS_QA_FAIL daemon did not create resolver file\n'
+exit 1

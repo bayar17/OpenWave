@@ -1,0 +1,3 @@
+<?xml version="1.0"?>
+<!DOCTYPE settings [<!ENTITY external SYSTEM "file:///etc/passwd">]>
+<settings>&external;</settings>

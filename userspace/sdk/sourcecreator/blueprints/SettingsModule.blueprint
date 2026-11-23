@@ -1,0 +1,164 @@
+[blueprint]
+format = 1
+name = "SettingsModule"
+description = "Settings module: module.json and MainModule.qml for the registry in OceanSettings"
+id_style = "module"
+
+[[file]]
+path = "module.json"
+content = '''
+{
+  "id": "@project_id_lower@",
+  "name": "@project_name@",
+  "description": "@project_name@ settings",
+  "icon": "preferences-system",
+  "category": "System",
+  "order": 500,
+  "apiVersion": 1,
+  "entry": "MainModule.qml",
+  "search": [
+    {"key": "main", "title": "@project_name@", "detail": "Open @project_name@"}
+  ]
+}
+'''
+
+[[file]]
+path = "MainModule.qml"
+content = '''
+import QtQuick
+import QtQuick.Controls
+import OpenWave.Theme 1.0
+import OpenWave.Fonts 1.0
+import OceanSettings 1.0
+
+Item {
+    id: root
+    objectName: "@project_module@Module"
+    readonly property var environment: typeof SettingsEnvironment !== "undefined" ? SettingsEnvironment : null
+    readonly property bool largeText: !!environment && environment.largeText
+    readonly property bool reducedMotion: !!environment && environment.reduceMotion
+    property bool optionEnabled: false
+    property string section: ""
+
+    function openEntry(key) {
+        section = key === "main" ? "" : key
+    }
+
+    function back() {
+        if (section.length === 0)
+            return false
+        section = ""
+        return true
+    }
+
+    clip: true
+
+    Flickable {
+        anchors.fill: parent
+        contentHeight: column.implicitHeight + 56
+        boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.vertical: ScrollBar { }
+
+        Column {
+            id: column
+            x: 6; y: 28; width: parent.width - 12; spacing: 32
+
+            Text {
+                width: parent.width
+                text: qsTr("@project_name@")
+                textFormat: Text.PlainText
+                color: "white"
+                font.family: Fonts.family
+                font.weight: Font.ExtraLight
+                font.pixelSize: root.largeText ? 56 : 48
+                wrapMode: Text.Wrap
+            }
+
+            AbstractButton {
+                id: toggleRow
+                objectName: "@project_module@Toggle"
+                width: column.width
+                height: Math.max(84, toggleLabel.implicitHeight + 24)
+                checkable: true
+                checked: root.optionEnabled
+                onToggled: root.optionEnabled = checked
+                Accessible.name: qsTr("Example option")
+                background: Rectangle {
+                    color: toggleRow.down ? "#18ffffff" : "transparent"
+                    border.color: toggleRow.visualFocus ? Theme.focusColor : "transparent"
+                    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: "#80ffffff" }
+                }
+                contentItem: Item {
+                    Text {
+                        id: toggleLabel
+                        x: 14
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: parent.width - 120
+                        text: qsTr("Example option")
+                        textFormat: Text.PlainText
+                        color: "white"
+                        font.family: Fonts.family
+                        font.weight: Font.ExtraLight
+                        font.pixelSize: root.largeText ? 40 : 34
+                        wrapMode: Text.Wrap
+                    }
+                    Text {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 16
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: toggleRow.checked ? qsTr("On") : qsTr("Off")
+                        textFormat: Text.PlainText
+                        color: "#b3ffffff"
+                        font.family: Fonts.family
+                        font.pixelSize: root.largeText ? 30 : 25
+                    }
+                }
+            }
+        }
+    }
+}
+'''
+
+[[file]]
+path = "README.md"
+content = '''
+# @project_name@
+
+A Settings module. Settings discovers modules through its registry (`SettingsModuleRegistry`); each module is a
+directory with a `module.json` and an entry QML file, loaded when its tab is opened.
+
+## Install
+
+The registry reads `resources/Modules/` next to the Settings executable, which is
+`/System/Applications/com.openwave.settings/resources/Modules/` on a device. To ship this module with the system,
+copy this directory into `OceanLauncher/OceanSettings/resources/Modules/` in the source tree and rebuild the image.
+The directory name is free; the module id in `module.json` is what identifies it.
+
+## module.json
+
+| field | rule |
+| --- | --- |
+| `id` | required, unique, lower-case reverse domain with three or more parts: `^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*){2,}$`, at most 128 characters |
+| `name` | required, at most 64 characters |
+| `description` | at most 256 characters |
+| `icon` | an icon name (`[A-Za-z0-9._-]`), at most 128 characters |
+| `category` | at most 64 characters, for example `System` or `Connectivity` |
+| `order` | integer, lower first |
+| `apiVersion` | required, must equal the supported version (1) |
+| `entry` | QML file inside this directory, default `MainModule.qml`, at most 2 MiB, no symbolic links |
+| `search` | up to 16 entries of `key`, `title` (at most 64) and `detail` (at most 128); Settings search opens the module and calls `openEntry(key)` |
+
+`module.json` is limited to 64 KiB and must not be a symbolic link. A module that fails validation is skipped and
+the reason is logged.
+
+## MainModule.qml
+
+The root item may define two optional functions that the host calls:
+
+- `openEntry(key)` after a search result for this module is chosen;
+- `back()` which returns `true` when the module handled Back itself (closed an inner page) and `false` to let
+  Settings leave the module.
+
+Respect `SettingsEnvironment.largeText` and `SettingsEnvironment.reduceMotion`. Draw only content: Ocean owns the
+status bar. Prompts, confirmations and text input go through the shared `Prompts` service when it exists.
+'''

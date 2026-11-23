@@ -1,0 +1,32 @@
+<?xml version='1.0' encoding='utf-8'?>
+<node>
+  <interface name="org.openwave.Wallpaper1">
+    <method name="GetImage"><arg type="ay" direction="out"/></method>
+    <method name="GetCurrent">
+      <arg type="s" direction="out" />
+      <arg type="s" direction="out" />
+    </method>
+    <method name="SetWallpaper">
+      <arg type="ay" direction="in" />
+      <arg type="s" direction="out" />
+    </method>
+    <method name="ApplyAppearance">
+      <arg type="s" direction="in" />
+      <arg type="s" direction="out" />
+    </method>
+    <method name="SaveAppearance">
+      <arg type="s" direction="in" />
+      <arg type="s" direction="in" />
+      <arg type="d" direction="in" />
+      <arg type="ay" direction="in" />
+      <arg type="s" direction="out" />
+    </method>
+    <method name="DeleteAppearance">
+      <arg type="s" direction="in" />
+    </method>
+    <signal name="Changed">
+      <arg type="s" />
+      <arg type="s" />
+    </signal>
+  </interface>
+</node>

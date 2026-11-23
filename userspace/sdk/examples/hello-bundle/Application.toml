@@ -1,0 +1,16 @@
+schema = 1
+id = "org.example.hello"
+name = "Hello"
+version = "1.0.0"
+kind = "application"
+executable = "bin/hello"
+runtime = "openwave-qt"
+icon = "share/icons/icon.svg"
+single_instance = true
+accepts_paths = false
+
+[sandbox]
+profile = "standard"
+
+[permissions]
+request = []

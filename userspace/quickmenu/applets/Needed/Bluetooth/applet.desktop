@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=X-OpenWave-Applet
+Name=Bluetooth
+Comment=Turn Bluetooth on or off
+Icon=icon.svg
+X-OpenWave-Applet-Order=20
+X-OpenWave-Applet-ApiVersion=1

@@ -1,0 +1,5 @@
+system/security/0001-keystore2-Ignore-selinux-checks.patch
+bionic/0006-seccomp-Allow-SYS_kcmp-for-mesa.patch
+packages/modules/adb/0001-adb-Disable-selinux-when-root.patch
+packages/modules/adb/0002-Patching-ADBD-in-order-to-drop-privileges-unconditio.patch
+vendor/lineage/0003-lineage-Disable-adb-secure.patch
